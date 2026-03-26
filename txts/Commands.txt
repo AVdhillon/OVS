@@ -1,0 +1,5 @@
+npx prisma db pull
+npx prisma generate
+cd voting-backend
+npm run start:dev  
+npx prisma studio

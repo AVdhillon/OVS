@@ -1,0 +1,68 @@
+
+Online Voting Platform
+
+->Registration/Login:-
+
+>Register
+ create unified Account:-
+                        Input (Mobile NO. or Email)*,Name(First Middle Last)*,State,Country
+			Then Register button upon all * are filled
+			OTP verification then registered
+	pid id binded to the account
+
+
+>Login 
+Organization Type input with options:Government,Other ORG,Unified Account
+           based on selection in Org type display:-(* means required)
+                        if Government :- Input EPIC ID*
+                        if Other ORG :- Input ORG ID*,ORG Personal ID*
+			if Unified Account :- Input Mobile/email
+OTP will be sent on the binded mobile or email ,then login can proceed by inputing otp.
+Logic: Unified Account option may also be used when a organization is yet to be registered,thus a person from org register with MObile or email in None Option,and proceed to register the org in His Dashboard.
+
+if using ORG or GOV option the respective ids will be checked in the already existing db for that registered GOV or ORG Entity.
+
+
+backend logic:- if a ORG or GOV id is used OTP will be sent on provided Mobile or Email for that respective person,provided by who registered the organization.
+if using phone or email otp will be sent upon that.
+
+#DB info:- pid is used for unified identity mapping
+a person is given pid only when they register via none option or register via others but add mobile/email later in manage account.
+
+->User Dashboard:-
+SIDE MENU OPTIONS:Manage Account,Manage Organzations,Events,Manage My Events,Identity Wallet
+Events is Displayed By Default;
+
+>Manage Account :Ability to Edit Name,add mobile number,
+>Manage Organizations :View & Manage Organization if the identity user has has type organizer
+	Ability to Register Organization:-
+		Input Organization Name
+		Input his own organization id
+		Input Participant List:
+			Give option to input in a Table,or in a CSV format import file or paste CSV text
+			the list will include organization ids of each participant,email/mobile
+		ORG ID will be generated using 3 Letters from organization Name and 4 numbers generated(a input can also be given for preferred ORG id 3letter 4digits)
+		participant list will be populated(personal ids,email/mobile,role(default v(voter),scope(default same as the organizer creating i.e for first time org register it would be 0)))
+		The person Submitting the ORG register gets vo(voter,organizer) role and scope level 0.
+		the organization id of the one submitting gets binded to his account. 
+	Ability to Manage Organization:-
+		Can see all the organizations user has a organizer role in.
+		Ability to manage Participant list
+		Ability to assign roles
+		Ability to Manage Scope Within The Organization
+			Scope acts as a Visibility control within the org, A tree like Structure where a organizer can create event at his own level which will become visible according to the tree stucture(default not visible up the tree but visible down the tree,can be changed slightly in event creation)
+			Scope management screen will include a interactive workspace with a tree structure add node,delete, rename,reattach node(i.e pick and move the node)the nodes acts as level which can be assigned to participants.The whole participant list is diplayed on the left  as a list with a search and filter ability accorfing to scope role and operations can be peroformed by selecting them to change role scope or correct id.Addparticipant option at the bottom with csv or table option with id email/mobile role scope
+			##Organizer can only see participant within his scope or down the tree not up,and can only edit those participant and nodes so a bottom level organizer can not tamper with something at the higher level.
+		
+>Events : events within the scope(searching recursively up the tree) of user's different ids will be visible to the user ,divided into active-yet to vote,voted and completed
+	Vote button opens up the details of the event:-
+		event description
+		Candidate infos
+		voter ticks a candidate and clicks confirm then submit
+>Manage My Events :ability to create events within the org-scope user has organizer role in.
+			firstly will choose using which identity want to create event i.e specifies org and scope
+			inputs candidate data,event start,event end and other description details
+			other advanced options:- enable/disable live vote data,only visible to current scope
+>Identity Wallet :display all identities belonging to the account,only one(org or gov that user logged with) if mobile/email not linked
+			 show create unified account using mobile/email to make use of identity wallet
+			for a user with unified identity enabled,show option to add identity which popups similar to login and upon otp verification identity gets binded

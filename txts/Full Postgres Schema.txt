@@ -1,0 +1,907 @@
+-- =========================
+-- DATABASE: ONLINE VOTING PLATFORM
+-- =========================
+
+-- =========================
+-- EXTENSIONS
+-- =========================
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- =========================
+-- 1. UNIFIED ACCOUNT
+-- =========================
+CREATE TABLE uaccount (
+    pid BIGSERIAL PRIMARY KEY,
+    first_name VARCHAR(50) NOT NULL,
+    middle_name VARCHAR(50),
+    last_name VARCHAR(50) NOT NULL,
+    mobile VARCHAR(10) UNIQUE CHECK (mobile ~ '^[0-9]{10}$'),
+    email VARCHAR(100) UNIQUE,
+    country VARCHAR(32),
+    state VARCHAR(32),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- =========================
+-- 2. ORGANIZATION
+-- =========================
+CREATE TABLE organization (
+    orgid VARCHAR(20) PRIMARY KEY,
+    org_name VARCHAR(100) NOT NULL,
+    org_email VARCHAR(100) UNIQUE,
+    is_active BOOLEAN DEFAULT FALSE,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- =========================
+-- 3. ORG MEMBERS (MASTER)
+-- =========================
+CREATE TABLE org_members (
+    orgid VARCHAR(20),
+    uid VARCHAR(20),
+    pid BIGINT, -- link to unified account
+
+    mobile VARCHAR(10),
+    email VARCHAR(100),
+    is_deleted BOOLEAN DEFAULT FALSE,
+
+    PRIMARY KEY (orgid, uid),
+
+    FOREIGN KEY (orgid) REFERENCES organization(orgid),
+    FOREIGN KEY (pid) REFERENCES uaccount(pid) ON DELETE SET NULL,
+
+    CONSTRAINT chk_uid_format CHECK (uid ~ '^[A-Z0-9]{4,20}$'),
+    CONSTRAINT unique_org_mobile UNIQUE (orgid, mobile),
+    CONSTRAINT unique_org_email UNIQUE (orgid, email),
+    CONSTRAINT chk_member_identity
+CHECK (
+    pid IS NOT NULL
+    OR mobile IS NOT NULL
+    OR email IS NOT NULL
+)
+);
+
+-- =========================
+-- 4. USER ↔ ORG LINK (STRICT)
+-- =========================
+CREATE TABLE user_org (
+    pid BIGINT,
+    orgid VARCHAR(20),
+    uid VARCHAR(20),
+
+    PRIMARY KEY (pid, orgid, uid),
+
+    FOREIGN KEY (pid) REFERENCES uaccount(pid),
+    FOREIGN KEY (orgid, uid)
+        REFERENCES org_members(orgid, uid)
+        ON DELETE CASCADE
+);
+
+-- =========================
+-- 5. SCOPE TREE (SAFE)
+-- =========================
+CREATE TABLE org_scope (
+    scope_id SERIAL PRIMARY KEY,
+    orgid VARCHAR(20) NOT NULL,
+    scope_name VARCHAR(100) NOT NULL,
+    parent_scope_id INT,
+
+    FOREIGN KEY (orgid) REFERENCES organization(orgid),
+    FOREIGN KEY (parent_scope_id) REFERENCES org_scope(scope_id),
+
+    CONSTRAINT unique_scope_name UNIQUE (orgid, parent_scope_id, scope_name)
+);
+
+-- Prevent cycles in scope tree
+CREATE OR REPLACE FUNCTION prevent_scope_cycle()
+RETURNS TRIGGER AS $$
+DECLARE
+    current_id INT;
+BEGIN
+    current_id := NEW.parent_scope_id;
+
+    WHILE current_id IS NOT NULL LOOP
+        IF current_id = NEW.scope_id THEN
+            RAISE EXCEPTION 'Cycle detected in scope tree';
+        END IF;
+
+        SELECT parent_scope_id INTO current_id
+        FROM org_scope
+        WHERE scope_id = current_id;
+    END LOOP;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_scope_cycle
+BEFORE INSERT OR UPDATE ON org_scope
+FOR EACH ROW
+EXECUTE FUNCTION prevent_scope_cycle();
+
+-- =========================
+-- 6. MEMBER ROLES
+-- =========================
+CREATE TABLE member_roles (
+    orgid VARCHAR(20),
+    uid VARCHAR(20),
+
+    is_voter BOOLEAN DEFAULT TRUE,
+    is_organizer BOOLEAN DEFAULT FALSE,
+    scope_id INT NOT NULL,
+
+    PRIMARY KEY (orgid, uid),
+
+    FOREIGN KEY (orgid, uid)
+        REFERENCES org_members(orgid, uid)
+        ON DELETE CASCADE,
+
+    FOREIGN KEY (scope_id)
+        REFERENCES org_scope(scope_id)
+);
+
+-- =========================
+-- 7. GOVERNMENT IDENTITY
+-- =========================
+CREATE TABLE gov_identity (
+    epic_id VARCHAR(20) PRIMARY KEY,
+    name VARCHAR(100),
+    mobile VARCHAR(10),
+    email VARCHAR(100),
+    state VARCHAR(50),
+    is_active BOOLEAN DEFAULT TRUE
+);
+
+-- =========================
+-- 8. IDENTITY WALLET (FIXED)
+-- =========================
+CREATE TABLE identity_wallet (
+    pid BIGINT,
+    identity_type VARCHAR(10),
+    identity_id VARCHAR(20),
+    uid VARCHAR(20),
+
+    PRIMARY KEY (pid, identity_type, identity_id),
+
+    FOREIGN KEY (pid) REFERENCES uaccount(pid),
+    CONSTRAINT chk_wallet_uid_required
+CHECK (
+    (identity_type = 'ORG' AND uid IS NOT NULL)
+    OR
+    (identity_type = 'GOV' AND uid IS NULL)
+)
+);
+ALTER TABLE identity_wallet
+ADD CONSTRAINT chk_identity_type
+CHECK (identity_type IN ('ORG', 'GOV'));
+
+-- Enforce identity validity
+CREATE OR REPLACE FUNCTION validate_identity_wallet()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.identity_type = 'ORG' THEN
+        -- org must exist
+        IF NOT EXISTS (
+            SELECT 1 FROM organization 
+            WHERE orgid = NEW.identity_id
+        ) THEN
+            RAISE EXCEPTION 'Invalid organization identity';
+        END IF;
+
+        -- uid must belong to org
+        IF NOT EXISTS (
+            SELECT 1 FROM org_members
+            WHERE orgid = NEW.identity_id
+              AND uid = NEW.uid
+        ) THEN
+            RAISE EXCEPTION 'UID does not belong to organization';
+        END IF;
+
+    ELSIF NEW.identity_type = 'GOV' THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM gov_identity 
+            WHERE epic_id = NEW.identity_id
+        ) THEN
+            RAISE EXCEPTION 'Invalid government identity';
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_validate_identity_wallet
+BEFORE INSERT OR UPDATE ON identity_wallet
+FOR EACH ROW
+EXECUTE FUNCTION validate_identity_wallet();
+
+-- =========================
+-- 9. OTP (SECURE)
+-- =========================
+CREATE TABLE otp_verification (
+    otp_id SERIAL PRIMARY KEY,
+    identifier VARCHAR(100) NOT NULL,
+    otp_code TEXT NOT NULL,
+    attempts INT DEFAULT 0,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ,
+    expires_at TIMESTAMP NOT NULL,
+    is_verified BOOLEAN DEFAULT FALSE,
+
+    CHECK (expires_at > created_at)
+);
+
+CREATE UNIQUE INDEX unique_active_otp
+ON otp_verification(identifier)
+WHERE is_verified = FALSE;
+
+
+
+-- =========================
+-- 10. EVENTS
+-- =========================
+CREATE TABLE events (
+    event_id SERIAL PRIMARY KEY,
+    orgid VARCHAR(20),
+    created_by_uid VARCHAR(20),
+    scope_id INT,
+
+    title VARCHAR(200) NOT NULL,
+    description TEXT,
+
+    start_time TIMESTAMP NOT NULL,
+    end_time TIMESTAMP NOT NULL,
+
+    show_live_results BOOLEAN DEFAULT FALSE,
+    visibility_upward BOOLEAN DEFAULT FALSE,
+
+    status VARCHAR(20) DEFAULT 'ACTIVE',
+    is_deleted BOOLEAN DEFAULT FALSE,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (orgid) REFERENCES organization(orgid),
+    FOREIGN KEY (scope_id) REFERENCES org_scope(scope_id),
+
+    CHECK (end_time > start_time),
+    CHECK (status IN ('ACTIVE', 'COMPLETED', 'CANCELLED'))
+);
+
+-- Only organizer can create event
+CREATE OR REPLACE FUNCTION check_event_creator()
+RETURNS TRIGGER AS $$
+DECLARE
+    user_scope INT;
+BEGIN
+    -- must be organizer
+    IF NOT EXISTS (
+        SELECT 1 FROM member_roles
+        WHERE orgid = NEW.orgid
+          AND uid = NEW.created_by_uid
+          AND is_organizer = TRUE
+    ) THEN
+        RAISE EXCEPTION 'Only organizers can create events';
+    END IF;
+
+    -- get creator scope
+    SELECT scope_id INTO user_scope
+    FROM member_roles
+    WHERE orgid = NEW.orgid
+      AND uid = NEW.created_by_uid;
+
+    -- enforce scope hierarchy
+    IF NEW.scope_id NOT IN (
+        SELECT scope_id 
+        FROM get_scope_descendants(user_scope)
+    ) THEN
+        RAISE EXCEPTION 'Cannot create event outside your scope';
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_check_event_creator
+BEFORE INSERT ON events
+FOR EACH ROW
+EXECUTE FUNCTION check_event_creator();
+
+-- =========================
+-- 11. CANDIDATES
+-- =========================
+CREATE TABLE candidates (
+    candidate_id SERIAL PRIMARY KEY,
+    event_id INT NOT NULL,
+
+    candidate_name VARCHAR(100) NOT NULL,
+    description TEXT,
+
+    FOREIGN KEY (event_id)
+        REFERENCES events(event_id)
+        ON DELETE CASCADE,
+    CONSTRAINT unique_candidate_per_event
+UNIQUE (event_id, candidate_name)
+);
+
+-- =========================
+-- 12. VOTES (FIXED)
+-- =========================
+CREATE TABLE votes (
+    vote_id SERIAL PRIMARY KEY,
+    event_id INT,
+    orgid VARCHAR(20),
+    uid VARCHAR(20),
+    candidate_id INT,
+
+    voter_hash TEXT,
+    voted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    UNIQUE (event_id, orgid, uid),
+
+    FOREIGN KEY (event_id) REFERENCES events(event_id),
+    FOREIGN KEY (candidate_id) REFERENCES candidates(candidate_id),
+    CONSTRAINT fk_vote_member FOREIGN KEY (orgid, uid) REFERENCES org_members(orgid, uid),
+    CONSTRAINT fk_vote_participant
+FOREIGN KEY (event_id, orgid, uid)
+REFERENCES event_participants(event_id, orgid, uid)
+);
+
+-- Enforce candidate belongs to event
+CREATE OR REPLACE FUNCTION validate_vote_candidate()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM candidates
+        WHERE candidate_id = NEW.candidate_id
+          AND event_id = NEW.event_id
+    ) THEN
+        RAISE EXCEPTION 'Candidate does not belong to event';
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_validate_vote_candidate
+BEFORE INSERT ON votes
+FOR EACH ROW
+EXECUTE FUNCTION validate_vote_candidate();
+
+CREATE OR REPLACE FUNCTION check_voter_role()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM member_roles
+        WHERE orgid = NEW.orgid
+          AND uid = NEW.uid
+          AND is_voter = TRUE
+    ) THEN
+        RAISE EXCEPTION 'User is not a voter';
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_check_voter_role
+BEFORE INSERT ON votes
+FOR EACH ROW
+EXECUTE FUNCTION check_voter_role();
+
+-- =========================
+-- 13. EVENT PARTICIPANTS
+-- =========================
+CREATE TABLE event_participants (
+    event_id INT,
+    orgid VARCHAR(20),
+    uid VARCHAR(20),
+    has_voted BOOLEAN DEFAULT FALSE,
+
+    PRIMARY KEY (event_id, orgid, uid),
+
+    FOREIGN KEY (event_id) REFERENCES events(event_id),
+    CONSTRAINT fk_event_participant_member FOREIGN KEY (orgid, uid) REFERENCES org_members(orgid, uid) ON DELETE CASCADE
+);
+
+-- =========================
+-- 14. OPTIONAL: VOTE RESULTS CACHE
+-- =========================
+CREATE TABLE vote_results (
+    event_id INT,
+    candidate_id INT,
+    vote_count INT DEFAULT 0,
+
+    PRIMARY KEY (event_id, candidate_id),
+
+    FOREIGN KEY (event_id)
+        REFERENCES events(event_id),
+
+    FOREIGN KEY (candidate_id)
+        REFERENCES candidates(candidate_id)
+);
+-- =========================
+-- 14. SESSIONS
+-- =========================
+CREATE TABLE user_sessions (
+    session_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+	token text,
+    pid BIGINT,
+    identity_type VARCHAR(10), -- 'ORG', 'GOV', 'UNIFIED'
+    identity_id VARCHAR(20),   -- orgid or epic_id or NULL
+    uid VARCHAR(20),           -- for ORG login
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+
+    ip_address INET,
+    user_agent TEXT,
+
+    FOREIGN KEY (pid) REFERENCES uaccount(pid)
+);
+-- =========================
+-- INDEXES (PERFORMANCE)
+-- =========================
+
+CREATE INDEX idx_org_members_orgid ON org_members(orgid);
+CREATE INDEX idx_member_roles_scope ON member_roles(orgid, scope_id);
+CREATE INDEX idx_scope_parent ON org_scope(parent_scope_id);
+CREATE INDEX idx_events_scope ON events(scope_id);
+CREATE INDEX idx_votes_event ON votes(event_id);
+CREATE INDEX idx_votes_candidate ON votes(candidate_id);
+CREATE INDEX idx_event_participants ON event_participants(event_id);
+CREATE INDEX idx_identity_wallet_pid ON identity_wallet(pid);
+CREATE INDEX idx_org_members_pid ON org_members(pid);
+CREATE INDEX idx_member_roles_uid ON member_roles(uid);
+CREATE INDEX idx_events_orgid ON events(orgid);
+CREATE INDEX idx_votes_uid ON votes(uid);
+CREATE INDEX idx_active_sessions ON user_sessions(pid, identity_type, is_active);
+
+-- =========================
+-- END OF FILE
+-- =========================
+-- =========================
+-- ADVANCED CONSTRAINTS
+-- =========================
+
+-- Ensure event time validity
+ALTER TABLE events
+ADD CONSTRAINT chk_event_time
+CHECK (end_time > start_time);
+
+-- Ensure valid event status
+ALTER TABLE events
+ADD CONSTRAINT chk_event_status
+CHECK (status IN ('ACTIVE', 'COMPLETED', 'CANCELLED'));
+
+
+-- Ensure OTP expiry logic
+ALTER TABLE otp_verification
+ADD CONSTRAINT chk_otp_expiry
+CHECK (expires_at > created_at);
+
+-- =========================================
+-- SCOPE FUNCTIONS
+-- =========================================
+CREATE OR REPLACE FUNCTION get_scope_descendants(p_scope INT)
+RETURNS TABLE(scope_id INT) AS $$
+WITH RECURSIVE st AS (
+    SELECT scope_id FROM org_scope WHERE scope_id = p_scope
+    UNION ALL
+    SELECT s.scope_id FROM org_scope s
+    JOIN st ON s.parent_scope_id = st.scope_id
+)
+SELECT scope_id FROM st;
+$$ LANGUAGE sql;
+
+CREATE OR REPLACE FUNCTION get_scope_ancestors(p_scope INT)
+RETURNS TABLE(scope_id INT) AS $$
+WITH RECURSIVE st AS (
+    SELECT scope_id, parent_scope_id FROM org_scope WHERE scope_id = p_scope
+    UNION ALL
+    SELECT s.scope_id, s.parent_scope_id
+    FROM org_scope s
+    JOIN st ON st.parent_scope_id = s.scope_id
+)
+SELECT scope_id FROM st;
+$$ LANGUAGE sql;
+
+CREATE OR REPLACE FUNCTION check_scope_permission()
+RETURNS TRIGGER AS $$
+DECLARE
+    user_scope INT;
+BEGIN
+    SELECT scope_id INTO user_scope
+    FROM member_roles
+    WHERE orgid = NEW.orgid AND uid = NEW.uid;
+
+    IF NEW.scope_id NOT IN (
+        SELECT scope_id FROM get_scope_descendants(user_scope)
+    ) THEN
+        RAISE EXCEPTION 'Cannot assign/manage outside your scope';
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_scope_permission
+BEFORE INSERT OR UPDATE ON member_roles
+FOR EACH ROW
+EXECUTE FUNCTION check_scope_permission();
+
+-- =========================
+-- FUNCTION: CHECK VOTING ELIGIBILITY
+-- =========================
+CREATE OR REPLACE FUNCTION get_visible_events(p_orgid VARCHAR, p_scope INT)
+RETURNS TABLE(event_id INT) AS $$
+SELECT e.event_id
+FROM events e
+WHERE e.orgid = p_orgid
+AND (
+    -- Downward visibility
+    e.scope_id IN (SELECT scope_id FROM get_scope_descendants(p_scope))
+
+    OR
+
+    -- Upward visibility if allowed
+    (
+        e.visibility_upward = TRUE
+        AND e.scope_id IN (SELECT scope_id FROM get_scope_ancestors(p_scope))
+    )
+);
+$$ LANGUAGE sql;
+
+CREATE OR REPLACE FUNCTION check_vote_validity()
+RETURNS TRIGGER AS $$
+DECLARE ev RECORD;
+DECLARE user_scope INT;
+BEGIN
+    SELECT * INTO ev FROM events WHERE event_id = NEW.event_id;
+
+    IF CURRENT_TIMESTAMP < ev.start_time OR CURRENT_TIMESTAMP > ev.end_time THEN
+        RAISE EXCEPTION 'Voting not active';
+    END IF;
+
+    SELECT scope_id INTO user_scope
+    FROM member_roles
+    WHERE orgid = NEW.orgid AND uid = NEW.uid;
+
+    IF user_scope NOT IN (
+        SELECT scope_id FROM get_scope_descendants(ev.scope_id)
+    ) THEN
+        RAISE EXCEPTION 'Not eligible';
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_vote_validity
+BEFORE INSERT ON votes
+FOR EACH ROW
+EXECUTE FUNCTION check_vote_validity();
+-- =========================
+-- FUNCTION: AUTO UPDATE VOTE COUNT
+-- =========================
+CREATE OR REPLACE FUNCTION update_vote_count()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO vote_results (event_id, candidate_id, vote_count)
+    VALUES (NEW.event_id, NEW.candidate_id, 1)
+    ON CONFLICT (event_id, candidate_id)
+    DO UPDATE SET vote_count = vote_results.vote_count + 1;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_vote_count
+AFTER INSERT ON votes
+FOR EACH ROW
+EXECUTE FUNCTION update_vote_count();
+
+-- =========================
+-- FUNCTION: MARK PARTICIPANT AS VOTED
+-- =========================
+CREATE OR REPLACE FUNCTION mark_participant_voted()
+RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE event_participants
+    SET has_voted = TRUE
+    WHERE event_id = NEW.event_id
+      AND orgid = NEW.orgid
+      AND uid = NEW.uid;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger: after vote insert
+CREATE TRIGGER trg_mark_participant_voted
+AFTER INSERT ON votes
+FOR EACH ROW
+EXECUTE FUNCTION mark_participant_voted();
+
+-- =========================
+-- FUNCTION: AUTO ADD PARTICIPANTS ON EVENT CREATION
+-- =========================
+CREATE OR REPLACE FUNCTION populate_event_participants()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO event_participants (event_id, orgid, uid)
+    SELECT NEW.event_id, om.orgid, om.uid
+    FROM org_members om
+    JOIN member_roles mr ON mr.orgid = om.orgid AND mr.uid = om.uid
+    WHERE om.orgid = NEW.orgid AND mr.is_voter = TRUE
+      AND mr.scope_id IN (
+          SELECT scope_id FROM get_scope_descendants(NEW.scope_id)
+      )
+    ON CONFLICT (event_id, orgid, uid) DO NOTHING;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_populate_event_participants
+AFTER INSERT ON events
+FOR EACH ROW
+EXECUTE FUNCTION populate_event_participants();
+
+-- =========================
+-- FUNCTION: AUTO COMPLETE EVENT
+-- =========================
+CREATE OR REPLACE FUNCTION auto_complete_event()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.end_time < CURRENT_TIMESTAMP THEN
+        NEW.status := 'COMPLETED';
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger: before update on events
+CREATE TRIGGER trg_auto_complete_event
+BEFORE UPDATE ON events
+FOR EACH ROW
+EXECUTE FUNCTION auto_complete_event();
+
+
+-- =========================
+-- FUNCTION: CREATE ROOT SCOPE
+-- =========================
+CREATE OR REPLACE FUNCTION create_root_scope()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO org_scope (orgid, scope_name, parent_scope_id)
+    VALUES (NEW.orgid, 'ROOT', NULL);
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_create_root_scope
+AFTER INSERT ON organization
+FOR EACH ROW
+EXECUTE FUNCTION create_root_scope();
+
+-- =========================
+-- FUNCTION: ENSURE SCOPE BELONGS TO ORG
+-- =========================
+CREATE OR REPLACE FUNCTION check_scope_org_consistency()
+RETURNS TRIGGER AS $$
+DECLARE
+    scope_org VARCHAR(20);
+BEGIN
+    SELECT orgid INTO scope_org
+    FROM org_scope
+    WHERE scope_id = NEW.scope_id;
+
+    IF scope_org IS NULL OR scope_org <> NEW.orgid THEN
+        RAISE EXCEPTION 'Scope does not belong to the given organization';
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger: before insert/update events
+CREATE TRIGGER trg_scope_check_event
+BEFORE INSERT OR UPDATE ON events
+FOR EACH ROW
+EXECUTE FUNCTION check_scope_org_consistency();
+
+-- =========================
+-- END OF ADVANCED LOGIC
+-- =========================
+-- =========================
+-- 1. ANONYMIZED VOTING
+-- =========================
+
+-- Added hashed voter identity (instead of exposing uid directly)
+
+-- Function to generate hash
+CREATE OR REPLACE FUNCTION generate_voter_hash(p_event INT, p_org VARCHAR, p_uid VARCHAR)
+RETURNS TEXT AS $$
+BEGIN
+    RETURN encode(
+        digest(p_event || '-' || p_org || '-' || p_uid || '-' || clock_timestamp()::TEXT, 'sha256'),
+        'hex'
+    );
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger: replace uid visibility with hash
+CREATE OR REPLACE FUNCTION anonymize_vote()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.voter_hash := generate_voter_hash(NEW.event_id, NEW.orgid, NEW.uid);
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_anonymize_vote
+BEFORE INSERT ON votes
+FOR EACH ROW
+EXECUTE FUNCTION anonymize_vote();
+
+
+-- =========================
+-- 2. FRAUD DETECTION (IP + DEVICE)
+-- =========================
+
+-- Extend votes table
+ALTER TABLE votes
+ADD COLUMN ip_address INET,
+ADD COLUMN device_fingerprint TEXT;
+
+-- Fraud log table
+CREATE TABLE fraud_logs (
+    fraud_id SERIAL PRIMARY KEY,
+    event_id INT,
+    orgid VARCHAR(20),
+    uid VARCHAR(20),
+    ip_address INET,
+    device_fingerprint TEXT,
+    reason TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Function: detect suspicious activity
+CREATE OR REPLACE FUNCTION detect_vote_fraud()
+RETURNS TRIGGER AS $$
+DECLARE
+    ip_count INT;
+    device_count INT;
+BEGIN
+    -- Count votes from same IP in same event
+    SELECT COUNT(*) INTO ip_count
+    FROM votes
+    WHERE event_id = NEW.event_id
+      AND ip_address = NEW.ip_address;
+
+    -- Count votes from same device
+    SELECT COUNT(*) INTO device_count
+    FROM votes
+    WHERE event_id = NEW.event_id
+      AND device_fingerprint = NEW.device_fingerprint;
+
+    IF ip_count > 5 THEN
+        INSERT INTO fraud_logs(event_id, orgid, uid, ip_address, device_fingerprint, reason)
+        VALUES (NEW.event_id, NEW.orgid, NEW.uid, NEW.ip_address, NEW.device_fingerprint,
+                'Too many votes from same IP');
+    END IF;
+
+    IF device_count > 3 THEN
+        INSERT INTO fraud_logs(event_id, orgid, uid, ip_address, device_fingerprint, reason)
+        VALUES (NEW.event_id, NEW.orgid, NEW.uid, NEW.ip_address, NEW.device_fingerprint,
+                'Multiple votes from same device');
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_detect_vote_fraud
+AFTER INSERT ON votes
+FOR EACH ROW
+EXECUTE FUNCTION detect_vote_fraud();
+
+
+-- =========================
+-- 3. AUDIT LOGGING SYSTEM
+-- =========================
+
+CREATE TABLE audit_logs (
+    log_id SERIAL PRIMARY KEY,
+    table_name VARCHAR(50),
+    operation VARCHAR(10), -- INSERT, UPDATE, DELETE
+    record_id TEXT,
+    changed_data JSONB,
+    changed_by VARCHAR(50),
+    changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Generic audit function
+CREATE OR REPLACE FUNCTION audit_trigger_function()
+RETURNS TRIGGER AS $$
+DECLARE
+    data JSONB;
+    rec_id TEXT;
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        data := to_jsonb(OLD);
+        rec_id := OLD::TEXT;
+    ELSE
+        data := to_jsonb(NEW);
+        rec_id := NEW::TEXT;
+    END IF;
+
+    INSERT INTO audit_logs(table_name, operation, record_id, changed_data, changed_by)
+    VALUES (TG_TABLE_NAME, TG_OP, rec_id, data, current_user);
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Attach audit triggers to critical tables
+
+CREATE TRIGGER audit_events
+AFTER INSERT OR UPDATE OR DELETE ON events
+FOR EACH ROW EXECUTE FUNCTION audit_trigger_function();
+
+CREATE TRIGGER audit_votes
+AFTER INSERT OR UPDATE OR DELETE ON votes
+FOR EACH ROW EXECUTE FUNCTION audit_trigger_function();
+
+CREATE TRIGGER audit_org_members
+AFTER INSERT OR UPDATE OR DELETE ON org_members
+FOR EACH ROW EXECUTE FUNCTION audit_trigger_function();
+
+CREATE TRIGGER audit_member_roles
+AFTER INSERT OR UPDATE OR DELETE ON member_roles
+FOR EACH ROW EXECUTE FUNCTION audit_trigger_function();
+
+
+-- =========================
+-- 4. OPTIONAL HARD PRIVACY MODE
+-- =========================
+-- (Uncomment if you want FULL anonymization)
+
+-- This removes UID after vote is recorded (irreversible)
+-- WARNING: cannot trace voter afterward
+
+/*
+CREATE OR REPLACE FUNCTION remove_uid_after_vote()
+RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE votes
+    SET uid = NULL
+    WHERE vote_id = NEW.vote_id;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_remove_uid
+AFTER INSERT ON votes
+FOR EACH ROW
+EXECUTE FUNCTION remove_uid_after_vote();
+*/
+
+
+-- =========================
+-- INDEXES FOR FRAUD + AUDIT
+-- =========================
+
+CREATE INDEX idx_votes_ip ON votes(ip_address);
+CREATE INDEX idx_votes_device ON votes(device_fingerprint);
+CREATE INDEX idx_fraud_event ON fraud_logs(event_id);
+CREATE INDEX idx_audit_table ON audit_logs(table_name);
+
+-- =========================
+-- END OPTIONAL FEATURES
+-- =========================
