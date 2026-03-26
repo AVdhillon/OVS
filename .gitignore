@@ -1,0 +1,73 @@
+# =========================
+# ROOT
+# =========================
+node_modules/
+.env
+.env.*
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Temp
+tmp/
+temp/
+*.tmp
+
+# =========================
+# BACKEND (NestJS)
+# =========================
+apps/backend/node_modules/
+apps/backend/dist/
+apps/backend/build/
+
+# Logs
+apps/backend/logs/
+apps/backend/*.log
+
+# =========================
+# FRONTEND (Next.js / React)
+# =========================
+apps/frontend/node_modules/
+apps/frontend/.next/
+apps/frontend/out/
+apps/frontend/build/
+
+# =========================
+# TESTING / COVERAGE
+# =========================
+coverage/
+*.lcov
+
+# =========================
+# PACKAGE MANAGERS
+# =========================
+pnpm-lock.yaml
+yarn.lock
+package-lock.json
+
+# (Optional: keep ONE of above, not all)
+
+# =========================
+# DATABASE / LOCAL FILES
+# =========================
+*.sqlite
+*.db
+
+# =========================
+# PRISMA (if you use later)
+# =========================
+prisma/generated/
+
+# =========================
+# MISC
+# =========================
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
