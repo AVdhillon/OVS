@@ -5,18 +5,22 @@ import { AppService } from './app.service';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
-import { OrganizationModule } from './organization/organization.module';
+import { OrgModule } from './organization/org.module';
 import { EventsModule } from './events/events.module';
 import { VotingModule } from './voting/voting.module';
 import { OtpModule } from './otp/otp.module';
 import { IdentityModule } from './identity/identity.module';
+import { ScheduleModule } from '@nestjs/schedule';
+import { CommonModule } from './common/common.module';
 @Module({
   imports: [
+    CommonModule, AuthModule, UsersModule, IdentityModule, 
+    ScheduleModule.forRoot(),
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
     AuthModule,
     UsersModule,
-    OrganizationModule,
+    OrgModule,
     EventsModule,
     VotingModule,
     OtpModule,

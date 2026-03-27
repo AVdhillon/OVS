@@ -457,6 +457,9 @@ CREATE INDEX idx_member_roles_uid ON member_roles(uid);
 CREATE INDEX idx_events_orgid ON events(orgid);
 CREATE INDEX idx_votes_uid ON votes(uid);
 CREATE INDEX idx_active_sessions ON user_sessions(pid, identity_type, is_active);
+CREATE INDEX idx_event_end_time ON events(end_time);
+CREATE INDEX idx_otp_expiry ON otp_verification(expires_at);
+CREATE INDEX idx_session_expiry ON user_sessions(expires_at);
 
 -- =========================
 -- END OF FILE

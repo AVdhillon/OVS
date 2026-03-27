@@ -1,0 +1,374 @@
+﻿==========================
+MODULE: auth
+==========================
+
+--- auth\auth.controller.spec.ts ---
+
+import { Test, TestingModule } from '@nestjs/testing';
+import { AuthController } from './auth.controller';
+
+describe('AuthController', () => {
+  let controller: AuthController;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      controllers: [AuthController],
+    }).compile();
+
+    controller = module.get<AuthController>(AuthController);
+  });
+
+  it('should be defined', () => {
+    expect(controller).toBeDefined();
+  });
+});
+
+
+
+--- auth\auth.controller.ts ---
+
+import { Controller, Post, Body, Req,Get, UseGuards } from '@nestjs/common';
+import { AuthService } from './auth.service';
+import { SendOtpDto } from './dto/send-otp.dto';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { LoginDto } from './dto/login.dto';
+import { AuthGuard } from '@nestjs/passport';
+import * as express from 'express';
+@Controller('auth')
+export class AuthController {
+  constructor(private authService: AuthService) {}
+
+  @Post('send-otp')
+  sendOtp(@Body() dto: SendOtpDto) {
+    return this.authService.sendOtp(dto.identifier);
+  }
+
+  @Post('verify-otp')
+  verifyOtp(@Body() dto: VerifyOtpDto) {
+    return this.authService.verifyOtp(dto.identifier, dto.otp);
+  }
+
+  @Post('login')
+login(@Body() dto: LoginDto, @Req() req: any) {
+  return this.authService.login(dto, req);
+}
+
+@Post('logout')
+@UseGuards(AuthGuard('jwt')) // ✅ only logged-in users can logout
+logout(@Req() req: express.Request) {
+  const token = req.headers.authorization?.split(' ')[1];
+  return this.authService.logout(token!);
+}
+@UseGuards(AuthGuard('jwt'))
+@Get('profile')
+getProfile(@Req() req: express.Request) {
+  //console.log(req.headers);
+  return req.user;
+}
+}
+
+
+--- auth\auth.module.ts ---
+
+import { Module } from '@nestjs/common';
+import { AuthService } from './auth.service';
+import { AuthController } from './auth.controller';
+import { PrismaModule } from '../prisma/prisma.module';
+import { JwtModule } from '@nestjs/jwt';
+import { JwtStrategy } from './strategies/jwt.strategy';
+import { OtpModule } from '../otp/otp.module';   // ← import OtpModule
+
+@Module({
+  imports: [
+    PrismaModule,
+    OtpModule,             // ← provides OtpService
+    JwtModule.register({
+      secret: process.env.JWT_SECRET || 'SECRET_KEY',
+      signOptions: { expiresIn: '1h' },
+    }),
+  ],
+  providers: [AuthService, JwtStrategy],
+  controllers: [AuthController],
+})
+export class AuthModule {}
+
+
+
+--- auth\auth.service.spec.ts ---
+
+import { Test, TestingModule } from '@nestjs/testing';
+import { AuthService } from './auth.service';
+
+describe('AuthService', () => {
+  let service: AuthService;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [AuthService],
+    }).compile();
+
+    service = module.get<AuthService>(AuthService);
+  });
+
+  it('should be defined', () => {
+    expect(service).toBeDefined();
+  });
+});
+
+
+
+--- auth\auth.service.ts ---
+
+import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { JwtService } from '@nestjs/jwt';
+import { OtpService } from '../otp/otp.service';
+import { Request } from 'express';
+
+@Injectable()
+export class AuthService {
+  constructor(
+    private prisma: PrismaService,
+    private jwtService: JwtService,
+    private otpService: OtpService,   // ← injected from OtpModule
+  ) {}
+
+  // ─── Send OTP ─────────────────────────────────────────────────────────────
+  // Delegates entirely to OtpService (which handles delivery + storage).
+  async sendOtp(identifier: string) {
+    return this.otpService.sendOtp(identifier);
+  }
+
+  // ─── Verify OTP (standalone endpoint, used before login) ─────────────────
+  async verifyOtp(identifier: string, otp: string) {
+    // NOTE: this marks OTP as consumed.
+    // The login endpoint does its own OTP check below — this endpoint is
+    // kept for clients that do a two-step flow (verify → then login).
+    await this.otpService.verifyOtp(identifier, otp);
+    return { verified: true };
+  }
+
+  // ─── Login ────────────────────────────────────────────────────────────────
+  async login(data: any, req: Request) {
+    let payload: any = {};
+
+    // ── Resolve identity ─────────────────────────────────────────────────
+    if (data.type === 'UNIFIED') {
+      const user = await this.prisma.uaccount.findFirst({
+        where: {
+          OR: [{ mobile: data.identifier }, { email: data.identifier }],
+        },
+      });
+      if (!user) throw new UnauthorizedException('User not found');
+      payload = { pid: user.pid.toString, type: 'UNIFIED' };
+    }
+
+    if (data.type === 'ORG') {
+      const member = await this.prisma.org_members.findFirst({
+        where: { orgid: data.orgid, uid: data.uid },
+      });
+      if (!member) throw new UnauthorizedException('Invalid org login');
+      payload = { orgid: data.orgid, uid: data.uid, pid: member.pid?.toString, type: 'ORG' };
+    }
+
+    if (data.type === 'GOV') {
+      const gov = await this.prisma.gov_identity.findUnique({
+        where: { epic_id: data.epic_id },
+      });
+      if (!gov) throw new UnauthorizedException('Invalid GOV ID');
+      payload = { epic_id: data.epic_id, type: 'GOV' };
+    }
+
+    // ── Verify OTP was consumed (login flow: sendOtp → login with otp field)
+    // Re-verify here so login is atomic — no separate /verify-otp step needed.
+    await this.otpService.verifyOtp(data.identifier, data.otp);
+
+    // ── Deactivate old sessions ──────────────────────────────────────────
+    const ip =
+      (req.headers['x-forwarded-for'] as string)?.split(',')[0] ||
+      req.socket.remoteAddress;
+
+    await this.prisma.user_sessions.updateMany({
+      where: {
+        OR: [
+          { pid: payload.pid ?? undefined },
+          {
+            identity_type: payload.type,
+            identity_id: payload.orgid || payload.epic_id || null,
+          },
+        ],
+        is_active: true,
+      },
+      data: { is_active: false },
+    });
+
+    // ── Issue JWT & persist session ──────────────────────────────────────
+    const token = this.jwtService.sign(payload);
+
+    await this.prisma.user_sessions.create({
+      data: {
+        pid: payload.pid ? BigInt(payload.pid) : null,
+        identity_type: payload.type,
+        identity_id: payload.orgid || payload.epic_id || null,
+        uid: payload.uid || null,
+        ip_address: ip,
+        user_agent: req.headers['user-agent'],
+        expires_at: new Date(Date.now() + 60 * 60 * 1000), // 1 hour
+        token,
+      },
+    });
+
+    return { access_token: token };
+  }
+
+  // ─── Logout ───────────────────────────────────────────────────────────────
+  async logout(token: string) {
+    if (!token) throw new UnauthorizedException('No token provided');
+
+    await this.prisma.user_sessions.updateMany({
+      where: { token },
+      data: { is_active: false },
+    });
+
+    return { message: 'Logged out successfully' };
+  }
+}
+
+
+
+--- auth\dto\login.dto.ts ---
+
+import { IsIn, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+
+export class LoginDto {
+  /**
+   * Login type: UNIFIED (mobile/email), ORG (orgid+uid), GOV (epic_id)
+   */
+  @IsIn(['UNIFIED', 'ORG', 'GOV'])
+  type: 'UNIFIED' | 'ORG' | 'GOV';
+
+  /**
+   * The contact identifier the OTP was sent to.
+   * UNIFIED → mobile or email
+   * ORG     → the mobile/email on file for that org member
+   * GOV     → the mobile/email on file for that EPIC ID
+   */
+  @IsString()
+  @IsNotEmpty()
+  identifier: string;
+
+  /**
+   * The 6-digit OTP received on the identifier above.
+   */
+  @IsString()
+  @IsNotEmpty()
+  otp: string;
+
+  // ── ORG-specific ──────────────────────────────────────────────────────
+  @IsOptional()
+  @IsString()
+  orgid?: string;
+
+  @IsOptional()
+  @IsString()
+  uid?: string;
+
+  // ── GOV-specific ──────────────────────────────────────────────────────
+  @IsOptional()
+  @IsString()
+  epic_id?: string;
+}
+
+
+
+--- auth\dto\send-otp.dto.ts ---
+
+import { IsString } from 'class-validator';
+
+export class SendOtpDto {
+  @IsString()
+  identifier: string; // mobile or email
+}
+
+
+--- auth\dto\verify-otp.dto.ts ---
+
+import { IsString } from 'class-validator';
+
+export class VerifyOtpDto {
+  @IsString()
+  identifier: string;
+
+  @IsString()
+  otp: string;
+}
+
+
+--- auth\guards\jwt.guard.ts ---
+
+import { Injectable } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
+
+@Injectable()
+export class JwtAuthGuard extends AuthGuard('jwt') {}
+
+
+--- auth\strategies\jwt.strategy.ts ---
+
+import {
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { PassportStrategy } from '@nestjs/passport';
+import { ExtractJwt, Strategy } from 'passport-jwt';
+import { PrismaService } from 'src/prisma/prisma.service';
+import * as express from 'express';
+
+@Injectable()
+export class JwtStrategy extends PassportStrategy(Strategy) {
+  constructor(private prisma: PrismaService) {
+    super({
+      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      ignoreExpiration: false, // ✅ JWT expiry check
+      secretOrKey: process.env.JWT_SECRET || 'SECRET_KEY',
+      passReqToCallback: true, // ✅ to access req in validate
+    });
+  }
+
+  async validate(req: express.Request, payload: any) {
+    // 🔑 Extract token from header
+    console.log('here');
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ')
+      ? authHeader.slice(7).trim()
+      : null;
+
+    if (!token) {
+      throw new UnauthorizedException('Token missing');
+    }
+
+    // 🔥 Check session in DB
+    const session = await this.prisma.user_sessions.findFirst({
+      where: {
+        token,
+        is_active: true,
+      },
+    });
+
+    if (!session) {
+      throw new UnauthorizedException('Session expired or invalid');
+    }
+
+    // ⏳ Optional: check DB expiry
+    if (session.expires_at < new Date()) {
+      throw new UnauthorizedException('Session expired');
+    }
+
+    // 🧠 Attach useful data to request
+    return {
+      ...payload,
+      session_id: session.session_id,
+    };
+  }
+}
+

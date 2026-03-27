@@ -55,7 +55,7 @@ export class UsersService {
       },
     });
 
-    return { ...user, pid: user.pid.toString() };
+    return user;
   }
 
   // ─── Get profile by pid ───────────────────────────────────────────────────

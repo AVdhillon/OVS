@@ -1,9 +1,18 @@
-import * as express from 'express';
+
+
+import { JwtUser } from 'src/common/decorators/current-user.decorator';
 
 declare global {
   namespace Express {
     interface Request {
-      user?: any; // you can type this better later
+      user?: JwtUser;
+      orgContext?: { orgid: string; uid: string };
+      scopeContext?: {
+        callerScope: number;
+        targetScope: number;
+        orgid: string;
+        uid: string;
+      };
     }
   }
 }

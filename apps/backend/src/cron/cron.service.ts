@@ -1,0 +1,68 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { PrismaService } from '../prisma/prisma.service';
+
+@Injectable()
+export class CronService {
+  private readonly logger = new Logger(CronService.name);
+
+  constructor(private prisma: PrismaService) {}
+
+  // 1️⃣ Event Completion Job
+  @Cron(CronExpression.EVERY_MINUTE)
+  async handleEventCompletion() {
+    this.logger.log('Checking for expired events...');
+
+    const result = await this.prisma.events.updateMany({
+      where: {
+        end_time: {
+          lt: new Date(),
+        },
+        status: 'ACTIVE',
+      },
+      data: {
+        status: 'COMPLETED',
+      },
+    });
+
+    if (result.count > 0) {
+      this.logger.log(`Completed ${result.count} events`);
+    }
+  }
+
+  // 2️⃣ OTP Cleanup Job
+  @Cron(CronExpression.EVERY_5_MINUTES)
+  async cleanupExpiredOtps() {
+    this.logger.log('Cleaning expired OTPs...');
+
+    const result = await this.prisma.otp_verification.deleteMany({
+      where: {
+        expires_at: {
+          lt: new Date(),
+        },
+      },
+    });
+
+    if (result.count > 0) {
+      this.logger.log(`Deleted ${result.count} expired OTPs`);
+    }
+  }
+
+  // 3️⃣ Session Cleanup (if using refresh tokens)
+  @Cron(CronExpression.EVERY_HOUR)
+  async cleanupSessions() {
+    this.logger.log('Cleaning expired sessions...');
+
+    const result = await this.prisma.user_sessions.deleteMany({
+      where: {
+        expires_at: {
+          lt: new Date(),
+        },
+      },
+    });
+
+    if (result.count > 0) {
+      this.logger.log(`Deleted ${result.count} sessions`);
+    }
+  }
+}

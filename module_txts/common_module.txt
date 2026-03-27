@@ -1,0 +1,469 @@
+﻿==========================
+MODULE: common
+==========================
+
+--- common\common.module.ts ---
+
+// src/common/common.module.ts
+
+import { Global, Module } from '@nestjs/common';
+import { RolesGuard } from './guards/roles.guard';
+import { ScopeGuard } from './guards/scope.guard';
+import { PrismaModule } from 'src/prisma/prisma.module';
+
+/**
+ * @Global() so RolesGuard and ScopeGuard can be injected
+ * anywhere without re-importing this module.
+ */
+@Global()
+@Module({
+  imports: [PrismaModule],
+  providers: [RolesGuard, ScopeGuard],
+  exports: [RolesGuard, ScopeGuard],
+})
+export class CommonModule {}
+
+
+--- common\decorators\current-user.decorator.ts ---
+
+// src/common/decorators/current-user.decorator.ts
+
+import { createParamDecorator, ExecutionContext } from '@nestjs/common';
+
+export interface JwtUser {
+  pid?: number;           // present for UNIFIED / ORG logins
+  type: 'UNIFIED' | 'ORG' | 'GOV';
+  orgid?: string;         // ORG login
+  uid?: string;           // ORG login
+  epic_id?: string;       // GOV login
+  session_id: string;
+}
+
+/**
+ * @CurrentUser() user: JwtUser
+ * Extracts the validated JWT payload attached by JwtStrategy.validate()
+ */
+export const CurrentUser = createParamDecorator(
+  (_data: unknown, ctx: ExecutionContext): JwtUser => {
+    const request = ctx.switchToHttp().getRequest();
+    return request.user as JwtUser;
+  },
+);
+
+
+--- common\decorators\org-context.decorator.ts ---
+
+// src/common/decorators/org-context.decorator.ts
+
+import { createParamDecorator, ExecutionContext, BadRequestException } from '@nestjs/common';
+
+export interface OrgContext {
+  orgid: string;
+  uid: string;
+}
+
+/**
+ * @OrgCtx() ctx: OrgContext
+ *
+ * Resolves orgid + uid from (in priority order):
+ *   1. req.user  (when user is logged in via ORG identity)
+ *   2. route params  (/orgs/:orgid/members/:uid)
+ *   3. request body  ({ orgid, uid })
+ *
+ * Throws BadRequestException if neither can be resolved.
+ */
+export const OrgCtx = createParamDecorator(
+  (_data: unknown, ctx: ExecutionContext): OrgContext => {
+    const req = ctx.switchToHttp().getRequest();
+    const user = req.user;
+
+    // 1. Prefer JWT payload (most trusted)
+    if (user?.type === 'ORG' && user.orgid && user.uid) {
+      return { orgid: user.orgid, uid: user.uid };
+    }
+
+    // 2. Route params
+    const orgid = req.params?.orgid ?? req.body?.orgid;
+    const uid   = req.params?.uid   ?? req.body?.uid;
+
+    if (orgid && uid) {
+      return { orgid, uid };
+    }
+
+    throw new BadRequestException('Could not resolve org context (orgid/uid missing)');
+  },
+);
+
+
+--- common\decorators\require-organizer.decorator.ts ---
+
+// src/common/decorators/require-organizer.decorator.ts
+
+import { SetMetadata } from '@nestjs/common';
+
+export const ORGANIZER_KEY = 'require_organizer';
+
+/**
+ * Marks a route as requiring organizer role in the resolved org.
+ * Works together with RolesGuard.
+ *
+ * @param orgidParam  name of the route param that holds the orgid (default: 'orgid')
+ */
+export const RequireOrganizer = (orgidParam = 'orgid') =>
+  SetMetadata(ORGANIZER_KEY, { orgidParam });
+
+
+--- common\decorators\require-scope.decorator.ts ---
+
+// src/common/decorators/require-scope.decorator.ts
+
+import { SetMetadata } from '@nestjs/common';
+
+export const SCOPE_KEY = 'require_scope';
+
+/**
+ * Marks a route as requiring scope access.
+ *
+ * @param targetScopeParam  name of the route param / body field that holds the
+ *                          target scope_id the caller must be able to reach.
+ *                          Default: 'scope_id'
+ */
+export const RequireScope = (targetScopeParam = 'scope_id') =>
+  SetMetadata(SCOPE_KEY, { targetScopeParam });
+
+
+--- common\filters\http-exception.filter.ts ---
+
+// src/common/filters/http-exception.filter.ts
+
+import {
+    ExceptionFilter,
+    Catch,
+    ArgumentsHost,
+    HttpException,
+    HttpStatus,
+    Logger,
+  } from '@nestjs/common';
+  import type { Request, Response } from 'express';
+  
+  @Catch(HttpException)
+  export class HttpExceptionFilter implements ExceptionFilter {
+    private readonly logger = new Logger(HttpExceptionFilter.name);
+  
+    catch(exception: HttpException, host: ArgumentsHost) {
+      const ctx      = host.switchToHttp();
+      const response = ctx.getResponse<Response>();
+      const request  = ctx.getRequest<Request>();
+      const status   = exception.getStatus();
+      const raw      = exception.getResponse();
+  
+      // NestJS validation errors come as { message: string[], error, statusCode }
+      const message =
+        typeof raw === 'object' && raw !== null && 'message' in raw
+          ? (raw as any).message
+          : exception.message;
+  
+      const body = {
+        statusCode: status,
+        message,
+        path:      request.url,
+        timestamp: new Date().toISOString(),
+      };
+  
+      if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
+        this.logger.error(`${request.method} ${request.url}`, exception.stack);
+      }
+  
+      response.status(status).json(body);
+    }
+  }
+
+
+--- common\filters\prisma-exception.filter.ts ---
+
+// src/common/filters/prisma-exception.filter.ts
+
+import {
+    ExceptionFilter,
+    Catch,
+    ArgumentsHost,
+    HttpStatus,
+    Logger,
+  } from '@nestjs/common';
+  import { Prisma } from '@prisma/client';
+  import type { Request, Response } from 'express';
+  
+  @Catch(
+    Prisma.PrismaClientKnownRequestError,
+    Prisma.PrismaClientUnknownRequestError,
+    Prisma.PrismaClientValidationError,
+  )
+  export class PrismaExceptionFilter implements ExceptionFilter {
+    private readonly logger = new Logger(PrismaExceptionFilter.name);
+  
+    catch(
+      exception:
+        | Prisma.PrismaClientKnownRequestError
+        | Prisma.PrismaClientUnknownRequestError
+        | Prisma.PrismaClientValidationError,
+      host: ArgumentsHost,
+    ) {
+      const ctx      = host.switchToHttp();
+      const response = ctx.getResponse<Response>();
+      const request  = ctx.getRequest<Request>();
+  
+      let status  = HttpStatus.INTERNAL_SERVER_ERROR;
+      let message = 'Database error';
+  
+      if (exception instanceof Prisma.PrismaClientKnownRequestError) {
+        switch (exception.code) {
+          // Unique constraint violation
+          case 'P2002': {
+            status  = HttpStatus.CONFLICT;
+            const fields = (exception.meta?.target as string[])?.join(', ') ?? 'field';
+            message = `Duplicate value on: ${fields}`;
+            break;
+          }
+          // Record not found (findUniqueOrThrow / updateOrThrow)
+          case 'P2025':
+            status  = HttpStatus.NOT_FOUND;
+            message = 'Record not found';
+            break;
+          // Foreign key constraint failed
+          case 'P2003':
+            status  = HttpStatus.BAD_REQUEST;
+            message = 'Referenced record does not exist';
+            break;
+          // Required field missing
+          case 'P2011':
+            status  = HttpStatus.BAD_REQUEST;
+            message = 'Required field missing';
+            break;
+          default:
+            this.logger.error(
+              `Unhandled Prisma error ${exception.code}: ${exception.message}`,
+            );
+        }
+      }
+  
+      if (exception instanceof Prisma.PrismaClientValidationError) {
+        status  = HttpStatus.BAD_REQUEST;
+        message = 'Invalid data sent to database';
+      }
+  
+      // Postgres-level RAISE EXCEPTION from triggers comes through as
+      // PrismaClientUnknownRequestError with the message in exception.message
+      if (exception instanceof Prisma.PrismaClientUnknownRequestError) {
+        // Extract the user-facing message from Postgres trigger exceptions.
+        // Format: "... ERROR: <our message>\nDETAIL: ..."
+        const match = exception.message.match(/ERROR:\s*(.+?)(?:\n|$)/);
+        if (match) {
+          status  = HttpStatus.BAD_REQUEST;
+          message = match[1].trim();
+        } else {
+          this.logger.error(`Unknown Prisma error: ${exception.message}`);
+        }
+      }
+  
+      response.status(status).json({
+        statusCode: status,
+        message,
+        path:      request.url,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+
+--- common\guards\roles.guard.ts ---
+
+// src/common/guards/roles.guard.ts
+
+import {
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { PrismaService } from 'src/prisma/prisma.service';
+import { ORGANIZER_KEY } from '../decorators/require-organizer.decorator';
+
+@Injectable()
+export class RolesGuard implements CanActivate {
+  constructor(
+    private reflector: Reflector,
+    private prisma: PrismaService,
+  ) {}
+
+  async canActivate(ctx: ExecutionContext): Promise<boolean> {
+    // Read metadata set by @RequireOrganizer()
+    const meta = this.reflector.getAllAndOverride<{ orgidParam: string } | undefined>(
+      ORGANIZER_KEY,
+      [ctx.getHandler(), ctx.getClass()],
+    );
+
+    // If no @RequireOrganizer() on this route, skip guard
+    if (!meta) return true;
+
+    const req  = ctx.switchToHttp().getRequest();
+    const user = req.user;
+
+    // Resolve orgid: from JWT payload first, then route param
+    const orgid: string =
+      user?.orgid ?? req.params?.[meta.orgidParam] ?? req.body?.[meta.orgidParam];
+
+    // Resolve uid: from JWT payload first, then route param / body
+    const uid: string = user?.uid ?? req.params?.uid ?? req.body?.uid;
+
+    if (!orgid || !uid) {
+      throw new ForbiddenException('org context required to check organizer role');
+    }
+
+    const role = await this.prisma.member_roles.findFirst({
+      where: { orgid, uid },
+      select: { is_organizer: true },
+    });
+
+    if (!role?.is_organizer) {
+      throw new ForbiddenException('Organizer role required');
+    }
+
+    // Attach resolved context to request for downstream use
+    req.orgContext = { orgid, uid };
+
+    return true;
+  }
+}
+
+
+--- common\guards\scope.guard.ts ---
+
+// src/common/guards/scope.guard.ts
+
+import {
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { PrismaService } from 'src/prisma/prisma.service';
+import { SCOPE_KEY } from '../decorators/require-scope.decorator';
+
+@Injectable()
+export class ScopeGuard implements CanActivate {
+  constructor(
+    private reflector: Reflector,
+    private prisma: PrismaService,
+  ) {}
+
+  async canActivate(ctx: ExecutionContext): Promise<boolean> {
+    const meta = this.reflector.getAllAndOverride<{ targetScopeParam: string } | undefined>(
+      SCOPE_KEY,
+      [ctx.getHandler(), ctx.getClass()],
+    );
+
+    if (!meta) return true;
+
+    const req  = ctx.switchToHttp().getRequest();
+    const user = req.user;
+
+    // ── Resolve orgid + uid ──────────────────────────────────────────────────
+    const orgid: string =
+      user?.orgid ?? req.params?.orgid ?? req.body?.orgid;
+    const uid: string =
+      user?.uid ?? req.params?.uid ?? req.body?.uid;
+
+    if (!orgid || !uid) {
+      throw new ForbiddenException('Org context required for scope check');
+    }
+
+    // ── Resolve caller's scope ───────────────────────────────────────────────
+    const role = await this.prisma.member_roles.findFirst({
+      where: { orgid, uid },
+      select: { scope_id: true },
+    });
+
+    if (!role) {
+      throw new ForbiddenException('Member role not found');
+    }
+
+    const callerScope = role.scope_id;
+
+    // ── Resolve target scope from param or body ──────────────────────────────
+    const rawTarget =
+      req.params?.[meta.targetScopeParam] ??
+      req.body?.[meta.targetScopeParam];
+
+    if (rawTarget === undefined || rawTarget === null) {
+      throw new ForbiddenException(`Target scope param "${meta.targetScopeParam}" missing`);
+    }
+
+    const targetScope = Number(rawTarget);
+
+    // ── Check: is targetScope a descendant-or-equal of callerScope? ──────────
+    // Uses the DB function get_scope_descendants defined in the schema
+    const descendants: { scope_id: number }[] = await this.prisma.$queryRaw`
+      SELECT scope_id FROM get_scope_descendants(${callerScope}::int)
+    `;
+
+    const allowed = descendants.some((r) => r.scope_id === targetScope);
+
+    if (!allowed) {
+      throw new ForbiddenException('Scope access denied — target scope is outside your tree');
+    }
+
+    // Attach for downstream use
+    req.scopeContext = { callerScope, targetScope, orgid, uid };
+
+    return true;
+  }
+}
+
+
+--- common\interceptors\bigint.interceptor.ts ---
+
+// src/common/interceptors/bigint.interceptor.ts
+
+import {
+    CallHandler,
+    ExecutionContext,
+    Injectable,
+    NestInterceptor,
+  } from '@nestjs/common';
+  import { Observable } from 'rxjs';
+  import { map } from 'rxjs/operators';
+  
+  function replaceBigInt(value: unknown): unknown {
+    if (typeof value === 'bigint') return value.toString();
+    if (Array.isArray(value))      return value.map(replaceBigInt);
+    if (value !== null && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([k, v]) => [
+          k,
+          replaceBigInt(v),
+        ]),
+      );
+    }
+    return value;
+  }
+  
+  @Injectable()
+  export class BigIntInterceptor implements NestInterceptor {
+    intercept(_ctx: ExecutionContext, next: CallHandler): Observable<unknown> {
+      return next.handle().pipe(map(replaceBigInt));
+    }
+  }
+
+
+--- common\utils\bigint.util.ts ---
+
+export function serializeBigInt(obj: any) {
+    return JSON.parse(
+      JSON.stringify(obj, (_, value) =>
+        typeof value === "bigint" ? value.toString() : value
+      )
+    );
+  }
+

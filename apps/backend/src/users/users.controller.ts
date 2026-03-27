@@ -12,7 +12,8 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { RegisterDto } from './dto/register.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
 import { Request } from 'express';
-
+import type { JwtUser } from 'src/common/decorators/current-user.decorator';
+import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 @Controller('users')
 export class UsersController {
   constructor(private usersService: UsersService) {}
@@ -24,12 +25,11 @@ export class UsersController {
   }
 
   // GET /users/me
-  @UseGuards(JwtAuthGuard)
   @Get('me')
-  getProfile(@Req() req: Express.Request) {
-    const pid = BigInt((req.user as any).pid);
-    return this.usersService.getProfile(pid);
-  }
+@UseGuards(JwtAuthGuard)
+getProfile(@CurrentUser() user: JwtUser) {
+  return this.usersService.getProfile(BigInt(user.pid!));
+}
 
   // PATCH /users/me
   @UseGuards(JwtAuthGuard)

@@ -1,0 +1,124 @@
+﻿PROJECT STRUCTURE
+Root: apps\backend
+Generated: 2026-03-27 21:43
+==========================
+
+B:\Wrk\OVS\apps\backend
+prisma/
+  schema.prisma
+src/
+  auth/
+    dto/
+      login.dto.ts
+      send-otp.dto.ts
+      verify-otp.dto.ts
+    guards/
+      jwt.guard.ts
+    strategies/
+      jwt.strategy.ts
+    auth.controller.spec.ts
+    auth.controller.ts
+    auth.module.ts
+    auth.service.spec.ts
+    auth.service.ts
+  common/
+    decorators/
+      current-user.decorator.ts
+      org-context.decorator.ts
+      require-organizer.decorator.ts
+      require-scope.decorator.ts
+    filters/
+      http-exception.filter.ts
+      prisma-exception.filter.ts
+    guards/
+      roles.guard.ts
+      scope.guard.ts
+    interceptors/
+      bigint.interceptor.ts
+    utils/
+      bigint.util.ts
+    common.module.ts
+  cron/
+    cron.module.ts
+    cron.service.ts
+  events/
+    dto/
+      add-candidate.dto.ts
+      create-event.dto.ts
+      update-event.dto.ts
+    candidates.controller.ts
+    candidates.service.ts
+    events.controller.spec.ts
+    events.controller.ts
+    events.module.ts
+    events.service.spec.ts
+    events.service.ts
+  identity/
+    dto/
+      add-identity.dto.ts
+    identity.controller.spec.ts
+    identity.controller.ts
+    identity.module.ts
+    identity.service.spec.ts
+    identity.service.ts
+  organization/
+    dto/
+      add-members.dto.ts
+      register-org.dto.ts
+      scope.dto.ts
+      update-member.dto.ts
+    org.controller.spec.ts
+    org.controller.ts
+    org.module.ts
+    org.service.spec.ts
+    org.service.ts
+    scope.service.ts
+  otp/
+    otp.controller.spec.ts
+    otp.controller.ts
+    otp.module.ts
+    otp.service.spec.ts
+    otp.service.ts
+    otp-delivery.service.ts
+  prisma/
+    prisma.module.ts
+    prisma.service.ts
+  types/
+    express.d.ts
+  users/
+    dto/
+      register.dto.ts
+      update-user.dto.ts
+    users.controller.spec.ts
+    users.controller.ts
+    users.module.ts
+    users.service.spec.ts
+    users.service.ts
+  voting/
+    dto/
+      cast-vote.dto.ts
+    voting.controller.spec.ts
+    voting.controller.ts
+    voting.module.ts
+    voting.service.spec.ts
+    voting.service.ts
+  app.controller.spec.ts
+  app.controller.ts
+  app.module.ts
+  app.service.ts
+  main.ts
+test/
+  app.e2e-spec.ts
+  jest-e2e.json
+.env
+.prettierrc
+backend_code_export.txt
+eslint.config.mjs
+export_codes.ps1
+nest-cli.json
+package.json
+package-lock.json
+prisma.config.ts
+README.md
+tsconfig.build.json
+tsconfig.json
