@@ -7,11 +7,20 @@ export class OtpDeliveryService {
   private readonly logger = new Logger(OtpDeliveryService.name);
 
   // ─── Nodemailer transporter (Gmail SMTP) ────────────────────────────────
-  private readonly mailer = nodemailer.createTransport({
+  /*private readonly mailer = nodemailer.createTransport({
     service: 'gmail',
     auth: {
       user: process.env.GMAIL_USER,       // your.address@gmail.com
       pass: process.env.GMAIL_APP_PASS,   // 16-char App Password from Google Account > Security
+    },
+  });*/
+  private readonly mailer = nodemailer.createTransport({
+    host: 'smtp.gmail.com',
+    port: 587,
+    secure: false, // use STARTTLS
+    auth: {
+      user: process.env.GMAIL_USER,
+      pass: process.env.GMAIL_APP_PASS,
     },
   });
 
