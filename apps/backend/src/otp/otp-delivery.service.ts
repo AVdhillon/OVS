@@ -8,15 +8,7 @@ export class OtpDeliveryService {
   constructor() {
     sgMail.setApiKey(process.env.SENDGRID_API_KEY!);
   }
-  // ─── Nodemailer transporter (Gmail SMTP) ────────────────────────────────
-  /*private readonly mailer = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: process.env.GMAIL_USER,       // your.address@gmail.com
-      pass: process.env.GMAIL_APP_PASS,   // 16-char App Password from Google Account > Security
-    },
-  });*/
-
+  
   // ─── Twilio client ──────────────────────────────────────────────────────
   private readonly twilio = twilio(  //-for whatsappmessage
     process.env.TWILIO_ACCOUNT_SID,
@@ -103,28 +95,5 @@ export class OtpDeliveryService {
       to: `+91${mobile}`,
       body: `Your OTP for Online Voting Platform is: ${otp}. Expires in 5 minutes.`,
     });
-  }/*
-private async sendSms(mobile: string, otp: string): Promise<void> {   //fastsms
-  const response = await fetch('https://www.fast2sms.com/dev/bulkV2', {
-    method: 'POST',
-    headers: {
-      authorization: process.env.FAST2SMS_API_KEY!,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      route: 'q',
-      variables_values: otp,
-      numbers: mobile,   // plain 10-digit, no +91
-    }),
-  });
-
-  const result = await response.json();
-
-  if (!result.return) {
-    this.logger.error(`Fast2SMS failed`, result);
-    throw new Error(`SMS delivery failed: ${JSON.stringify(result)}`);
   }
-
-  this.logger.log(`OTP SMS sent → ${mobile}`);
-}*/
 }
