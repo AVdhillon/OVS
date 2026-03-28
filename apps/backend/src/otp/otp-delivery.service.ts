@@ -1,11 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
-import * as nodemailer from 'nodemailer';
+import { BrevoClient } from '@getbrevo/brevo';
 import twilio from 'twilio'; //-for whatsapp message
 
 @Injectable()
 export class OtpDeliveryService {
   private readonly logger = new Logger(OtpDeliveryService.name);
-
+  
   // ─── Nodemailer transporter (Gmail SMTP) ────────────────────────────────
   /*private readonly mailer = nodemailer.createTransport({
     service: 'gmail',
@@ -14,22 +14,15 @@ export class OtpDeliveryService {
       pass: process.env.GMAIL_APP_PASS,   // 16-char App Password from Google Account > Security
     },
   });*/
-  private readonly mailer = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 587,
-    secure: false, // use STARTTLS
-    auth: {
-      user: process.env.GMAIL_USER,
-      pass: process.env.GMAIL_APP_PASS,
-    },
-  });
 
   // ─── Twilio client ──────────────────────────────────────────────────────
   private readonly twilio = twilio(  //-for whatsappmessage
     process.env.TWILIO_ACCOUNT_SID,
     process.env.TWILIO_AUTH_TOKEN,
   );
-
+  private readonly brevo = new BrevoClient({
+    apiKey: process.env.BREVO_API_KEY!,
+  });
   /**
    * Dispatch OTP to the right channel based on the identifier format.
    * Email → Nodemailer SMTP
@@ -46,21 +39,18 @@ export class OtpDeliveryService {
     }
   }
 
-  // ─── Email via Gmail SMTP ───────────────────────────────────────────────
+  // ─── Email via Gmail HTTP ───────────────────────────────────────────────
   private async sendEmail(to: string, otp: string): Promise<void> {
     try {
-      await this.mailer.sendMail({
-        from: `"Online Voting Platform" <${process.env.GMAIL_USER}>`,
-        to,
+      await this.brevo.transactionalEmails.sendTransacEmail({
+        sender: { name: 'Online Voting Platform', email: process.env.BREVO_SENDER_EMAIL! },
+        to: [{ email: to }],
         subject: 'Your OTP Code',
-        text: `Your OTP is: ${otp}\n\nIt expires in 5 minutes. Do not share it with anyone.`,
-        html: `
+        htmlContent: `
           <div style="font-family:sans-serif;max-width:400px;margin:auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
-            <h2 style="color:#1d4ed8;margin-bottom:8px;">Online Voting Platform</h2>
-            <p style="color:#374151;">Your one-time password:</p>
-            <div style="font-size:32px;font-weight:700;letter-spacing:8px;color:#111827;padding:16px 0;">
-              ${otp}
-            </div>
+            <h2 style="color:#1d4ed8;">Online Voting Platform</h2>
+            <p>Your one-time password:</p>
+            <div style="font-size:32px;font-weight:700;letter-spacing:8px;padding:16px 0;">${otp}</div>
             <p style="color:#6b7280;font-size:14px;">Expires in <strong>5 minutes</strong>. Do not share this code.</p>
           </div>
         `,
