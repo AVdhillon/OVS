@@ -29,7 +29,7 @@ export class RolesGuard implements CanActivate {
 
     const req  = ctx.switchToHttp().getRequest();
     const user = req.user;
-
+    console.log(user);
     // Resolve orgid: from JWT payload first, then route param
     const orgid: string =
       user?.orgid ?? req.params?.[meta.orgidParam] ?? req.body?.[meta.orgidParam];

@@ -184,16 +184,13 @@ export class OrgService {
 
   // ─── Get orgs where user is organizer ──────────────────────────────────────
   async getMyOrgs(pid: bigint) {
-    // Find all (orgid, uid) combos for this pid
     const links = await this.prisma.user_org.findMany({
       where: { pid },
       select: { orgid: true, uid: true },
     });
-
     if (links.length === 0) return [];
-
-    // Filter to those where user has organizer role
-    const organigerLinks = await Promise.all(
+  
+    const organizerLinks = await Promise.all(
       links.map(async (l) => {
         const role = await this.prisma.member_roles.findUnique({
           where: { orgid_uid: { orgid: l.orgid, uid: l.uid } },
@@ -201,13 +198,12 @@ export class OrgService {
         return role?.is_organizer ? l : null;
       }),
     );
-
-    const organizerOrgIds = organigerLinks
-      .filter(Boolean)
-      .map((l) => l!.orgid);
-
+  
+    const validLinks = organizerLinks.filter(Boolean) as { orgid: string; uid: string }[];
+    const orgIdToUid = Object.fromEntries(validLinks.map((l) => [l.orgid, l.uid]));
+  
     const orgs = await this.prisma.organization.findMany({
-      where: { orgid: { in: organizerOrgIds }, is_deleted: false },
+      where: { orgid: { in: validLinks.map((l) => l.orgid) }, is_deleted: false },
       select: {
         orgid: true,
         org_name: true,
@@ -216,8 +212,9 @@ export class OrgService {
         created_at: true,
       },
     });
-
-    return orgs;
+  
+    // ✅ attach uid so frontend can pass it back as org context
+    return orgs.map((o) => ({ ...o, uid: orgIdToUid[o.orgid] }));
   }
 
   // ─── Get members (scope-filtered for organizer) ─────────────────────────────
