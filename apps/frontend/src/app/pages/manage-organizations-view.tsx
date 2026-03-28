@@ -84,6 +84,7 @@ async function apiFetch<T>(
   extraHeaders: Record<string, string> = {},
 ): Promise<T> {
   const token = getToken();
+  console.log("TOKEN:", token);
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers: {

@@ -511,10 +511,31 @@ CREATE OR REPLACE FUNCTION check_scope_permission()
 RETURNS TRIGGER AS $$
 DECLARE
     user_scope INT;
+    current_uid TEXT;
+    role_count INT;
+    bypass BOOLEAN;
 BEGIN
-    SELECT scope_id INTO user_scope
+    bypass := current_setting('app.bypass_rls', true) = 'true';
+    IF bypass THEN
+        RETURN NEW;
+    END IF;
+    current_uid := current_setting('app.current_uid');
+
+    SELECT COUNT(*) INTO role_count
     FROM member_roles
-    WHERE orgid = NEW.orgid AND uid = NEW.uid;
+    WHERE orgid = NEW.orgid;
+
+    IF role_count = 0 THEN
+        -- Allow bootstrap (first admin)
+        RETURN NEW;
+    END IF;
+    SELECT MIN(scope_id) INTO user_scope
+    FROM member_roles
+    WHERE orgid = NEW.orgid AND uid = current_uid;
+
+    IF user_scope IS NULL THEN
+        RAISE EXCEPTION 'No scope assigned to current user';
+    END IF;
 
     IF NEW.scope_id NOT IN (
         SELECT scope_id FROM get_scope_descendants(user_scope)
