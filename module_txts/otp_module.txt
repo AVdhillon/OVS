@@ -176,28 +176,21 @@ export class OtpService {
 --- otp\otp-delivery.service.ts ---
 
 import { Injectable, Logger } from '@nestjs/common';
-import * as nodemailer from 'nodemailer';
+import sgMail from '@sendgrid/mail';
 import twilio from 'twilio'; //-for whatsapp message
 
 @Injectable()
 export class OtpDeliveryService {
   private readonly logger = new Logger(OtpDeliveryService.name);
-
-  // ─── Nodemailer transporter (Gmail SMTP) ────────────────────────────────
-  private readonly mailer = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: process.env.GMAIL_USER,       // your.address@gmail.com
-      pass: process.env.GMAIL_APP_PASS,   // 16-char App Password from Google Account > Security
-    },
-  });
-
+  constructor() {
+    sgMail.setApiKey(process.env.SENDGRID_API_KEY!);
+  }
+  
   // ─── Twilio client ──────────────────────────────────────────────────────
   private readonly twilio = twilio(  //-for whatsappmessage
     process.env.TWILIO_ACCOUNT_SID,
     process.env.TWILIO_AUTH_TOKEN,
   );
-
   /**
    * Dispatch OTP to the right channel based on the identifier format.
    * Email → Nodemailer SMTP
@@ -214,21 +207,21 @@ export class OtpDeliveryService {
     }
   }
 
-  // ─── Email via Gmail SMTP ───────────────────────────────────────────────
+  // ─── Email via Gmail HTTP ───────────────────────────────────────────────
   private async sendEmail(to: string, otp: string): Promise<void> {
     try {
-      await this.mailer.sendMail({
-        from: `"Online Voting Platform" <${process.env.GMAIL_USER}>`,
+      await sgMail.send({
         to,
+        from: {
+          email: process.env.SENDGRID_SENDER_EMAIL!,
+          name: 'Online Voting Platform',
+        },
         subject: 'Your OTP Code',
-        text: `Your OTP is: ${otp}\n\nIt expires in 5 minutes. Do not share it with anyone.`,
         html: `
           <div style="font-family:sans-serif;max-width:400px;margin:auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
-            <h2 style="color:#1d4ed8;margin-bottom:8px;">Online Voting Platform</h2>
-            <p style="color:#374151;">Your one-time password:</p>
-            <div style="font-size:32px;font-weight:700;letter-spacing:8px;color:#111827;padding:16px 0;">
-              ${otp}
-            </div>
+            <h2 style="color:#1d4ed8;">Online Voting Platform</h2>
+            <p>Your one-time password:</p>
+            <div style="font-size:32px;font-weight:700;letter-spacing:8px;padding:16px 0;">${otp}</div>
             <p style="color:#6b7280;font-size:14px;">Expires in <strong>5 minutes</strong>. Do not share this code.</p>
           </div>
         `,
@@ -268,41 +261,18 @@ export class OtpDeliveryService {
       this.logger.warn(`[DEV] OTP for ${mobile}: ${otp}`);
       return;
     }
-  
+
     const client = twilio(
       process.env.TWILIO_ACCOUNT_SID,
       process.env.TWILIO_AUTH_TOKEN,
     );
-  
+
     await client.messages.create({
       from: process.env.TWILIO_PHONE_FROM,
       to: `+91${mobile}`,
       body: `Your OTP for Online Voting Platform is: ${otp}. Expires in 5 minutes.`,
     });
-  }/*
-private async sendSms(mobile: string, otp: string): Promise<void> {   //fastsms
-  const response = await fetch('https://www.fast2sms.com/dev/bulkV2', {
-    method: 'POST',
-    headers: {
-      authorization: process.env.FAST2SMS_API_KEY!,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      route: 'q',
-      variables_values: otp,
-      numbers: mobile,   // plain 10-digit, no +91
-    }),
-  });
-
-  const result = await response.json();
-
-  if (!result.return) {
-    this.logger.error(`Fast2SMS failed`, result);
-    throw new Error(`SMS delivery failed: ${JSON.stringify(result)}`);
   }
-
-  this.logger.log(`OTP SMS sent → ${mobile}`);
-}*/
 }
 
 

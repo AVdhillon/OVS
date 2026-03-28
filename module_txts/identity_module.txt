@@ -95,6 +95,7 @@ export class IdentityController {
 
   // GET /identity/wallet
   // Returns all identities bound to the caller's pid
+  @Get('getwallet')
   getWallet(@CurrentUser() user: JwtUser){
     return this.identityService.getWallet(BigInt(user.pid!));
   }

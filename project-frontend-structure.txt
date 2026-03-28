@@ -1,11 +1,13 @@
 ﻿PROJECT STRUCTURE
 Root: apps\frontend
-Generated: 2026-03-27 21:43
+Generated: 2026-03-28 17:02
 ==========================
 
 B:\Wrk\OVS\apps\frontend
 guidelines/
   Guidelines.md
+public/
+  whatsappqr.svg
 src/
   app/
     components/
@@ -73,6 +75,8 @@ src/
       manage-organizations-view.tsx
     App.tsx
     routes.tsx
+  constants/
+    location.ts
   lib/
     api.ts
   styles/
@@ -80,6 +84,8 @@ src/
     index.css
     tailwind.css
     theme.css
+  types/
+    users.ts
   main.tsx
   vite-env.d.ts
 .env
@@ -92,4 +98,5 @@ package-lock.json
 postcss.config.mjs
 README.md
 tsconfig.json
+vercel.json
 vite.config.ts

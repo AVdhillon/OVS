@@ -160,7 +160,7 @@ export class AuthService {
         },
       });
       if (!user) throw new UnauthorizedException('User not found');
-      payload = { pid: user.pid.toString, type: 'UNIFIED' };
+      payload = { pid: user.pid.toString(), type: 'UNIFIED' };
     }
 
     if (data.type === 'ORG') {
@@ -168,7 +168,7 @@ export class AuthService {
         where: { orgid: data.orgid, uid: data.uid },
       });
       if (!member) throw new UnauthorizedException('Invalid org login');
-      payload = { orgid: data.orgid, uid: data.uid, pid: member.pid?.toString, type: 'ORG' };
+      payload = { orgid: data.orgid, uid: data.uid, pid: member.pid?.toString(), type: 'ORG' };
     }
 
     if (data.type === 'GOV') {
