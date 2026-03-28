@@ -1,5 +1,5 @@
 const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
-
+import { UpdateMeResponse } from '../types/users';
 export function setToken(t: string | null) {
   t ? localStorage.setItem('ovp_token', t) : localStorage.removeItem('ovp_token');
 }
@@ -37,7 +37,10 @@ export const api = {
     request('/users/register', { method: 'POST', body: JSON.stringify(body) }),
   getMe: () => request('/users/me'),
   updateMe: (body: object) =>
-    request('/users/me', { method: 'PATCH', body: JSON.stringify(body) }),
+    request<UpdateMeResponse>('/users/me', {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
 
   // Events
   getEvents: () => request('/events'),

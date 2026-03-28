@@ -4,6 +4,7 @@ import {
   IsString,
   Length,
   Matches,
+  ValidateIf,
 } from 'class-validator';
 
 export class UpdateUserDto {
@@ -39,4 +40,14 @@ export class UpdateUserDto {
   @IsString()
   @Length(0, 32)
   state?: string;
+
+  @ValidateIf((o) => o.email !== undefined)
+  @IsString()
+  @Length(6, 6, { message: 'email_otp must be 6 digits' })
+  email_otp?: string;
+
+  @ValidateIf((o) => o.mobile !== undefined)
+  @IsString()
+  @Length(6, 6, { message: 'mobile_otp must be 6 digits' })
+  mobile_otp?: string;
 }

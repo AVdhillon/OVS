@@ -13,11 +13,18 @@ import {
   SelectValue,
 } from '../components/ui/select';
 import { OTPVerificationModal } from '../components/otp-verification-modal';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog";
 import { useAppContext, OrgType } from '../context/app-context';
 import { Shield, Info } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip';
 import { ImageWithFallback } from '../components/figma/ImageWithFallback';
 import { api, setToken } from '../../lib/api';
+import { countryStateMap } from '../../constants/location';
 
 export function AuthPage() {
   const navigate = useNavigate();
@@ -39,6 +46,7 @@ export function AuthPage() {
   const [loginContact, setLoginContact] = useState('');
 
   // OTP Modal state
+  const [showWhatsAppHelp, setShowWhatsAppHelp] = useState(false);
   const [showOTPModal, setShowOTPModal] = useState(false);
   const [otpContact, setOTPContact] = useState('');
   const [isRegistering, setIsRegistering] = useState(false);
@@ -354,13 +362,29 @@ export function AuthPage() {
                   />
                 </div>
 
-                <Button
-                  className="w-full"
-                  onClick={handleLogin}
-                  disabled={!isLoginValid || !loginContact || loading}
-                >
-                  {loading ? 'Sending OTP…' : 'Send OTP'}
-                </Button>
+                <div className="flex items-center gap-2">
+                  {/* Main Button */}
+                  <Button
+                    className="flex-1"
+                    onClick={handleLogin}
+                    disabled={!isLoginValid || !loginContact || loading}
+                  >
+                    {loading ? 'Sending OTP…' : 'Send OTP'}
+                  </Button>
+
+                  {/* Info Button */}
+                  {loginContact && !loginContact.includes('@') && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="shrink-0"
+                      onClick={() => setShowWhatsAppHelp(true)}
+                    >
+                      <Info className="h-5 w-5" />
+                    </Button>
+                  )}
+                </div>
               </TabsContent>
 
               {/* ── Register Tab ── */}
@@ -417,15 +441,17 @@ export function AuthPage() {
                     <Label htmlFor="state">
                       State <span className="text-destructive">*</span>
                     </Label>
-                    <Select value={state} onValueChange={setState}>
+                    <Select value={state} onValueChange={setState} disabled={!country}>
                       <SelectTrigger id="state">
-                        <SelectValue placeholder="Select state" />
+                        <SelectValue placeholder={country ? "Select state" : "Select country first"} />
                       </SelectTrigger>
+
                       <SelectContent>
-                        <SelectItem value="CA">California</SelectItem>
-                        <SelectItem value="NY">New York</SelectItem>
-                        <SelectItem value="TX">Texas</SelectItem>
-                        <SelectItem value="FL">Florida</SelectItem>
+                        {countryStateMap[country]?.map((s) => (
+                          <SelectItem key={s.value} value={s.value}>
+                            {s.label}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -433,7 +459,13 @@ export function AuthPage() {
                     <Label htmlFor="country">
                       Country <span className="text-destructive">*</span>
                     </Label>
-                    <Select value={country} onValueChange={setCountry}>
+                    <Select
+                      value={country}
+                      onValueChange={(val) => {
+                        setCountry(val);
+                        setState(''); // 🔥 reset state when country changes
+                      }}
+                    >
                       <SelectTrigger id="country">
                         <SelectValue placeholder="Select country" />
                       </SelectTrigger>
@@ -467,13 +499,29 @@ export function AuthPage() {
                   </p>
                 </div>
 
-                <Button
-                  className="w-full"
-                  onClick={handleRegister}
-                  disabled={!isRegisterValid || loading}
-                >
-                  {loading ? 'Sending OTP…' : 'Create Account'}
-                </Button>
+                <div className="flex items-center gap-2">
+                  {/* Main Button */}
+                  <Button
+                    className="flex-1"
+                    onClick={handleRegister}
+                    disabled={!isRegisterValid || loading}
+                  >
+                    {loading ? 'Sending OTP…' : 'Create Account'}
+                  </Button>
+
+                  {/* Info Button */}
+                  {email && !email.includes('@') && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="shrink-0"
+                      onClick={() => setShowWhatsAppHelp(true)}
+                    >
+                      <Info className="h-5 w-5" />
+                    </Button>
+                  )}
+                </div>
               </TabsContent>
             </Tabs>
           </CardContent>
@@ -486,6 +534,50 @@ export function AuthPage() {
         onVerify={handleOTPVerify}
         contact={otpContact}
       />
+      <Dialog open={showWhatsAppHelp} onOpenChange={setShowWhatsAppHelp}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Using Mobile Number?  </DialogTitle>
+          </DialogHeader>
+
+          <div className="grid md:grid-cols-2 gap-6 items-center">
+
+            {/* LEFT SIDE */}
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold">Opt-in First:</h3>
+
+              <p className="text-sm text-gray-600">
+                Send a message from your WhatsApp to:
+              </p>
+
+              <div className="font-medium text-lg flex items-center gap-2">
+                📱 +1 415 523 8886
+              </div>
+
+              <div className="text-sm">
+                with code <span className="font-semibold">join person-easy</span>
+              </div>
+
+              <a
+                href="https://wa.me/14155238886?text=join%20person-easy"
+                target="_blank"
+                className="inline-block bg-blue-600 text-white px-4 py-2 rounded-md"
+              >
+                Open WhatsApp
+              </a>
+            </div>
+
+            {/* RIGHT SIDE */}
+            <div className="flex justify-center">
+              <img
+                src="/whatsappqr.svg" // 👈 put your QR in public folder
+                alt="WhatsApp QR"
+                className="w-48 h-48"
+              />
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
