@@ -1,11 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { BrevoClient } from '@getbrevo/brevo';
+import * as sgMail from '@sendgrid/mail';
 import twilio from 'twilio'; //-for whatsapp message
 
 @Injectable()
 export class OtpDeliveryService {
   private readonly logger = new Logger(OtpDeliveryService.name);
-  
+  constructor() {
+    sgMail.setApiKey(process.env.SENDGRID_API_KEY!);
+  }
   // ─── Nodemailer transporter (Gmail SMTP) ────────────────────────────────
   /*private readonly mailer = nodemailer.createTransport({
     service: 'gmail',
@@ -20,9 +22,6 @@ export class OtpDeliveryService {
     process.env.TWILIO_ACCOUNT_SID,
     process.env.TWILIO_AUTH_TOKEN,
   );
-  private readonly brevo = new BrevoClient({
-    apiKey: process.env.BREVO_API_KEY!,
-  });
   /**
    * Dispatch OTP to the right channel based on the identifier format.
    * Email → Nodemailer SMTP
@@ -42,11 +41,14 @@ export class OtpDeliveryService {
   // ─── Email via Gmail HTTP ───────────────────────────────────────────────
   private async sendEmail(to: string, otp: string): Promise<void> {
     try {
-      await this.brevo.transactionalEmails.sendTransacEmail({
-        sender: { name: 'Online Voting Platform', email: process.env.BREVO_SENDER_EMAIL! },
-        to: [{ email: to }],
+      await sgMail.send({
+        to,
+        from: {
+          email: process.env.SENDGRID_SENDER_EMAIL!,
+          name: 'Online Voting Platform',
+        },
         subject: 'Your OTP Code',
-        htmlContent: `
+        html: `
           <div style="font-family:sans-serif;max-width:400px;margin:auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
             <h2 style="color:#1d4ed8;">Online Voting Platform</h2>
             <p>Your one-time password:</p>
@@ -90,12 +92,12 @@ export class OtpDeliveryService {
       this.logger.warn(`[DEV] OTP for ${mobile}: ${otp}`);
       return;
     }
-  
+
     const client = twilio(
       process.env.TWILIO_ACCOUNT_SID,
       process.env.TWILIO_AUTH_TOKEN,
     );
-  
+
     await client.messages.create({
       from: process.env.TWILIO_PHONE_FROM,
       to: `+91${mobile}`,
