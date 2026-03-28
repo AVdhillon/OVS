@@ -323,7 +323,20 @@ CREATE TABLE candidates (
     CONSTRAINT unique_candidate_per_event
 UNIQUE (event_id, candidate_name)
 );
+-- =========================
+-- 13. EVENT PARTICIPANTS
+-- =========================
+CREATE TABLE event_participants (
+    event_id INT,
+    orgid VARCHAR(20),
+    uid VARCHAR(20),
+    has_voted BOOLEAN DEFAULT FALSE,
 
+    PRIMARY KEY (event_id, orgid, uid),
+
+    FOREIGN KEY (event_id) REFERENCES events(event_id),
+    CONSTRAINT fk_event_participant_member FOREIGN KEY (orgid, uid) REFERENCES org_members(orgid, uid) ON DELETE CASCADE
+);
 -- =========================
 -- 12. VOTES (FIXED)
 -- =========================
@@ -389,20 +402,7 @@ BEFORE INSERT ON votes
 FOR EACH ROW
 EXECUTE FUNCTION check_voter_role();
 
--- =========================
--- 13. EVENT PARTICIPANTS
--- =========================
-CREATE TABLE event_participants (
-    event_id INT,
-    orgid VARCHAR(20),
-    uid VARCHAR(20),
-    has_voted BOOLEAN DEFAULT FALSE,
 
-    PRIMARY KEY (event_id, orgid, uid),
-
-    FOREIGN KEY (event_id) REFERENCES events(event_id),
-    CONSTRAINT fk_event_participant_member FOREIGN KEY (orgid, uid) REFERENCES org_members(orgid, uid) ON DELETE CASCADE
-);
 
 -- =========================
 -- 14. OPTIONAL: VOTE RESULTS CACHE
@@ -457,9 +457,6 @@ CREATE INDEX idx_member_roles_uid ON member_roles(uid);
 CREATE INDEX idx_events_orgid ON events(orgid);
 CREATE INDEX idx_votes_uid ON votes(uid);
 CREATE INDEX idx_active_sessions ON user_sessions(pid, identity_type, is_active);
-CREATE INDEX idx_event_end_time ON events(end_time);
-CREATE INDEX idx_otp_expiry ON otp_verification(expires_at);
-CREATE INDEX idx_session_expiry ON user_sessions(expires_at);
 
 -- =========================
 -- END OF FILE
