@@ -40,12 +40,12 @@ export class RolesGuard implements CanActivate {
     if (!orgid || !uid) {
       throw new ForbiddenException('org context required to check organizer role');
     }
-
+    console.log('GUARD checking:', { orgid, uid });
     const role = await this.prisma.member_roles.findFirst({
       where: { orgid, uid },
       select: { is_organizer: true },
     });
-
+    console.log('GUARD role result:', role);
     if (!role?.is_organizer) {
       throw new ForbiddenException('Organizer role required');
     }

@@ -227,7 +227,7 @@ function RegisterOrgModal({
         org_name: orgName.trim(),
         preferred_orgid: preferredOrgId.trim() || undefined,
         caller_uid: myUid.trim(),
-        members: buildMembers(),
+        participants: buildMembers(),
       });
       toast.success('Organization registered!');
       onSuccess();
@@ -397,7 +397,7 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
   const fetchMembers = async () => {
     setMembersLoading(true);
     try {
-      const data: OrgMember[] = await api.getMembers(org.orgid, { uid: org.uid }) as OrgMember[];
+      const data: OrgMember[] = await api.getMembers(org.orgid, org.uid) as OrgMember[];
       setMembers(data);
     } catch (e: any) {
       toast.error(e.message ?? 'Failed to load members');
@@ -460,7 +460,7 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
 
     setAddLoading(true);
     try {
-      await api.addMembers(org.orgid, { members: buildRows() });
+      await api.addMembers(org.orgid, org.uid, { participants: buildRows() });
       toast.success('Members added');
       setAddMemberOpen(false);
       fetchMembers();

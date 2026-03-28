@@ -9,6 +9,7 @@ import {
   Query,
   UseGuards,
   ParseIntPipe,
+  Req
 } from '@nestjs/common';
 import { OrgService } from './org.service';
 import { ScopeService } from './scope.service';
@@ -25,13 +26,17 @@ import type { JwtUser } from '../common/decorators/current-user.decorator';
 // ─── Helper: resolve caller uid ───────────────────────────────────────────────
 // ORG sessions: uid is baked into JWT.
 // UNIFIED sessions: caller passes uid via x-caller-uid header.
-function resolveCallerUid(user: JwtUser, headers: Record<string, any>): string {
+function resolveCallerUid(user: JwtUser, req: any): string {
   if (user.uid) return user.uid;
-  const h = headers['x-caller-uid'];
-  if (typeof h === 'string' && h.trim()) return h.trim().toUpperCase();
+  // check header, then query param
+  const fromHeader = req.headers?.['x-caller-uid'];
+  if (typeof fromHeader === 'string' && fromHeader.trim())
+    return fromHeader.trim().toUpperCase();
+  const fromQuery = req.query?.uid;
+  if (typeof fromQuery === 'string' && fromQuery.trim())
+    return fromQuery.trim().toUpperCase();
   return '';
 }
-
 @UseGuards(JwtAuthGuard)
 @Controller('org')
 export class OrgController {
@@ -79,11 +84,12 @@ export class OrgController {
   getMembers(
     @CurrentUser() user: JwtUser,
     @Param('orgid') orgid: string,
+    @Req() req: any,
     @Query('role') role?: string,
     @Query('scope_id') scopeId?: string,
     @Query('search') search?: string,
   ) {
-    const callerUid = resolveCallerUid(user, {});
+    const callerUid = resolveCallerUid(user, req);
     return this.orgService.getMembers(BigInt(user.pid!), orgid, callerUid, {
       role,
       scope_id: scopeId ? Number(scopeId) : undefined,
@@ -102,8 +108,9 @@ export class OrgController {
     @CurrentUser() user: JwtUser,
     @Param('orgid') orgid: string,
     @Body() dto: AddMembersDto,
+    @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, {});
+    const callerUid = resolveCallerUid(user, req);
     return this.orgService.addMembers(BigInt(user.pid!), orgid, callerUid, dto);
   }
 
@@ -119,8 +126,9 @@ export class OrgController {
     @Param('orgid') orgid: string,
     @Param('uid') targetUid: string,
     @Body() dto: UpdateMemberDto,
+    @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, {});
+    const callerUid = resolveCallerUid(user, req);
     return this.orgService.updateMember(
       BigInt(user.pid!),
       orgid,
@@ -141,8 +149,9 @@ export class OrgController {
     @CurrentUser() user: JwtUser,
     @Param('orgid') orgid: string,
     @Param('uid') targetUid: string,
+    @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, {});
+    const callerUid = resolveCallerUid(user, req);
     return this.orgService.removeMember(
       BigInt(user.pid!),
       orgid,
@@ -163,8 +172,9 @@ export class OrgController {
   getScopeTree(
     @CurrentUser() user: JwtUser,
     @Param('orgid') orgid: string,
+    @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, {});
+    const callerUid = resolveCallerUid(user, req);
     return this.scopeService.getScopeTree(orgid, callerUid);
   }
 
@@ -179,8 +189,9 @@ export class OrgController {
     @CurrentUser() user: JwtUser,
     @Param('orgid') orgid: string,
     @Body() dto: CreateScopeDto,
+    @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, {});
+    const callerUid = resolveCallerUid(user, req);
     return this.scopeService.createScope(orgid, callerUid, dto);
   }
 
@@ -196,8 +207,9 @@ export class OrgController {
     @Param('orgid') orgid: string,
     @Param('scope_id', ParseIntPipe) scopeId: number,
     @Body() dto: UpdateScopeDto,
+    @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, {});
+    const callerUid = resolveCallerUid(user, req);
     return this.scopeService.updateScope(orgid, callerUid, scopeId, dto);
   }
 
@@ -212,8 +224,9 @@ export class OrgController {
     @CurrentUser() user: JwtUser,
     @Param('orgid') orgid: string,
     @Param('scope_id', ParseIntPipe) scopeId: number,
+    @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, {});
+    const callerUid = resolveCallerUid(user, req);
     return this.scopeService.deleteScope(orgid, callerUid, scopeId);
   }
 }
