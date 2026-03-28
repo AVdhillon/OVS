@@ -62,7 +62,7 @@ export const api = {
   addMembers: (orgid: string, body: object) =>
     request(`/org/${orgid}/members`, { method: 'POST', body: JSON.stringify(body) }),
   getScopeTree: (orgid: string, callerUid: string) =>
-    request(`/org/${orgid}/scope`, { headers: { 'x-caller-uid': callerUid } }),
+    request(`/org/${orgid}/scope?uid=${callerUid}`),
 
   // Identity
   getWallet: () => request('/identity/getwallet'),

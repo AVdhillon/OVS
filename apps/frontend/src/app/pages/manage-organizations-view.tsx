@@ -397,7 +397,7 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
   const fetchMembers = async () => {
     setMembersLoading(true);
     try {
-      const data: OrgMember[] = await api.getMembers(org.orgid) as OrgMember[];
+      const data: OrgMember[] = await api.getMembers(org.orgid, { uid: org.uid }) as OrgMember[];
       setMembers(data);
     } catch (e: any) {
       toast.error(e.message ?? 'Failed to load members');

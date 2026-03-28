@@ -35,7 +35,7 @@ export class RolesGuard implements CanActivate {
       user?.orgid ?? req.params?.[meta.orgidParam] ?? req.body?.[meta.orgidParam];
 
     // Resolve uid: from JWT payload first, then route param / body
-    const uid: string = user?.uid ?? req.params?.uid ?? req.body?.uid;
+    const uid: string = user?.uid ?? req.params?.uid ?? req.query?.uid ?? req.body?.uid;
 
     if (!orgid || !uid) {
       throw new ForbiddenException('org context required to check organizer role');
