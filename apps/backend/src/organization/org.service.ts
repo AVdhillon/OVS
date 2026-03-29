@@ -81,14 +81,41 @@ export class OrgService {
     const deduped = Array.from(seen.values());
 
     // Generate org ID
-    let orgid = generateOrgId(dto.org_name, dto.org_prefix, dto.org_suffix);
+    const preferredOrgId = dto.preferred_orgid?.trim().toUpperCase();
 
-    // Collision check — retry up to 5 times
-    for (let i = 0; i < 5; i++) {
-      const exists = await this.prisma.organization.findUnique({ where: { orgid } });
-      if (!exists) break;
-      orgid = generateOrgId(dto.org_name, dto.org_prefix);
-      if (i === 4) throw new ConflictException('Could not generate unique org ID. Try a different prefix.');
+    let orgid: string;
+
+    if (preferredOrgId) {
+      const exists = await this.prisma.organization.findUnique({
+        where: { orgid: preferredOrgId },
+      });
+
+      if (exists) {
+        throw new ConflictException(
+          `Organization ID "${preferredOrgId}" is already taken.`
+        );
+      }
+
+      orgid = preferredOrgId;
+    } else {
+      // fallback to generated ID with retry
+      orgid = generateOrgId(dto.org_name, dto.org_prefix, dto.org_suffix);
+
+      for (let i = 0; i < 5; i++) {
+        const exists = await this.prisma.organization.findUnique({
+          where: { orgid },
+        });
+
+        if (!exists) break;
+
+        orgid = generateOrgId(dto.org_name, dto.org_prefix);
+
+        if (i === 4) {
+          throw new ConflictException(
+            'Could not generate unique org ID. Try again.'
+          );
+        }
+      }
     }
 
     // The caller must supply their own uid for this org.
@@ -96,7 +123,7 @@ export class OrgService {
     // For a fresh org registration from a UNIFIED account, the caller provides their desired uid.
     if (!callerUid) {
       throw new BadRequestException(
-        'You must supply your uid for the new organization via the request body (caller_uid)',
+        'Uid Not Supplied',
       );
     }
 

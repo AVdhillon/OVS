@@ -262,13 +262,13 @@ function RegisterOrgModal({
             <div className="space-y-2">
               <Label>Preferred Org ID (3 letters + 4 digits)</Label>
               <Input
-                placeholder={`Auto: ${generateOrgId(orgName || 'ORG')}`}
+                placeholder="e.g. ABC1234"
                 value={preferredOrgId}
                 onChange={(e) => setPreferredOrgId(e.target.value.toUpperCase())}
                 maxLength={7}
               />
               <p className="text-xs text-muted-foreground">
-                Will use: <span className="font-mono font-bold">{generatedOrgId}</span>
+                Suggested: <span className="font-mono font-bold">{generatedOrgId}</span>
               </p>
             </div>
           </div>

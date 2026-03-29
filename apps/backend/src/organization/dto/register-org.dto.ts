@@ -64,6 +64,12 @@ export class RegisterOrgDto {
   @Matches(/^[0-9]{4}$/, { message: 'org_suffix must be exactly 4 digits' })
   org_suffix?: string;
 
+  
+  @IsOptional()
+  @Matches(/^[A-Z]{3}[0-9]{4}$/, {
+    message: 'preferred_orgid must be in format ABC1234',
+  })
+  preferred_orgid?: string;
   /**
    * Participants to seed into org_members.
    * The submitter is always added as voter+organizer at ROOT scope.
