@@ -85,7 +85,7 @@ export const api = {
     request(`/org/${orgid}/scope/${scopeId}?uid=${uid}`, { method: 'DELETE' }),
 
   // ── Identity ────────────────────────────────────────────────────────────────
-  getWallet: () => request('/identity/wallet'),
+  getWallet: () => request('/identity/getwallet'),
   addIdentity: (body: object) =>
     request('/identity/wallet/add', { method: 'POST', body: JSON.stringify(body) }),
 };
