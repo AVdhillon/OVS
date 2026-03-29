@@ -177,6 +177,10 @@ export class OrgService {
       await tx.user_org.create({
         data: { pid, orgid, uid: callerUidNorm },
       });
+      // add organizer identity to wallet
+      await tx.identity_wallet.create({
+        data: { pid, identity_type:"ORG",identity_id:orgid, uid: callerUidNorm },
+      });
 
       // 6. Insert participants (skip if uid === caller)
       for (const p of deduped) {
