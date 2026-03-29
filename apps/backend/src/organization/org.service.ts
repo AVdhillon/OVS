@@ -59,7 +59,7 @@ function generateOrgId(
 
 @Injectable()
 export class OrgService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService) { }
 
   // ─── Register Organization ──────────────────────────────────────────────────
   async registerOrg(
@@ -100,8 +100,13 @@ export class OrgService {
       );
     }
 
-    const callerUidNorm = callerUid.toUpperCase();
+    const callerUidNorm = callerUid.trim().toUpperCase();
 
+    if (!/^[A-Z0-9]{4,20}$/.test(callerUidNorm)) {
+      throw new BadRequestException(
+        'Invalid Organizer Uid format. Must be 4–20 uppercase alphanumeric characters.'
+      );
+    }
     // Run everything in a transaction
     const result = await this.prisma.$transaction(async (tx) => {
       // 1. Create org (trigger auto-creates ROOT scope)
@@ -189,7 +194,7 @@ export class OrgService {
       select: { orgid: true, uid: true },
     });
     if (links.length === 0) return [];
-  
+
     const organizerLinks = await Promise.all(
       links.map(async (l) => {
         const role = await this.prisma.member_roles.findUnique({
@@ -198,10 +203,10 @@ export class OrgService {
         return role?.is_organizer ? l : null;
       }),
     );
-  
+
     const validLinks = organizerLinks.filter(Boolean) as { orgid: string; uid: string }[];
     const orgIdToUid = Object.fromEntries(validLinks.map((l) => [l.orgid, l.uid]));
-  
+
     const orgs = await this.prisma.organization.findMany({
       where: { orgid: { in: validLinks.map((l) => l.orgid) }, is_deleted: false },
       select: {
@@ -212,7 +217,7 @@ export class OrgService {
         created_at: true,
       },
     });
-  
+
     // ✅ attach uid so frontend can pass it back as org context
     return orgs.map((o) => ({ ...o, uid: orgIdToUid[o.orgid] }));
   }
@@ -241,12 +246,12 @@ export class OrgService {
         },
         ...(filters?.search
           ? {
-              OR: [
-                { uid: { contains: filters.search, mode: 'insensitive' } },
-                { email: { contains: filters.search, mode: 'insensitive' } },
-                { mobile: { contains: filters.search } },
-              ],
-            }
+            OR: [
+              { uid: { contains: filters.search, mode: 'insensitive' } },
+              { email: { contains: filters.search, mode: 'insensitive' } },
+              { mobile: { contains: filters.search } },
+            ],
+          }
           : {}),
       },
       select: {
