@@ -55,12 +55,10 @@ interface OrgMember {
   mobile: string | null;
   email: string | null;
   pid: string | null;
-  is_deleted: boolean;
-  member_roles?: {
-    is_voter: boolean;
-    is_organizer: boolean;
-    scope_id: number;
-  };
+  is_deleted?: boolean;
+  is_voter: boolean;
+  is_organizer: boolean;
+  scope_id: number | null;
 }
 
 interface ScopeNode {
@@ -129,9 +127,8 @@ function ScopeTreeNode({
   return (
     <div style={{ paddingLeft: depth * 20 }}>
       <div
-        className={`flex items-center gap-2 py-1 px-2 rounded cursor-pointer hover:bg-accent transition-colors ${
-          selectedId === node.scope_id ? 'bg-accent font-semibold' : ''
-        }`}
+        className={`flex items-center gap-2 py-1 px-2 rounded cursor-pointer hover:bg-accent transition-colors ${selectedId === node.scope_id ? 'bg-accent font-semibold' : ''
+          }`}
         onClick={() => onSelect(node)}
       >
         {node.children && node.children.length > 0 && (
@@ -435,8 +432,8 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
 
     const matchRole =
       roleFilter === 'all' ||
-      (roleFilter === 'voter' && m.member_roles?.is_voter) ||
-      (roleFilter === 'organizer' && m.member_roles?.is_organizer);
+      (roleFilter === 'voter' && m.is_voter) ||
+      (roleFilter === 'organizer' && m.is_organizer);
 
     return matchSearch && matchRole && !m.is_deleted;
   });
@@ -549,18 +546,17 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
                       <TableCell className="text-sm">{m.mobile ?? '—'}</TableCell>
                       <TableCell>
                         <div className="flex gap-1 flex-wrap">
-                          {m.member_roles?.is_voter && (
+                          {m.is_voter && (
                             <Badge variant="outline" className="text-xs">Voter</Badge>
                           )}
-                          {m.member_roles?.is_organizer && (
+                          {m.is_organizer && (
                             <Badge className="text-xs">Organizer</Badge>
                           )}
                         </div>
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">
-                        {m.member_roles?.scope_id != null
-                          ? flatScopes.find((s) => s.scope_id === m.member_roles!.scope_id)
-                              ?.scope_name ?? `#${m.member_roles.scope_id}`
+                        {m.scope_id != null
+                          ? flatScopes.find((s) => s.scope_id === m.scope_id)?.scope_name ?? `#${m.scope_id}`
                           : '—'}
                       </TableCell>
                     </TableRow>
@@ -732,7 +728,7 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
                         {members
                           .filter(
                             (m) =>
-                              m.member_roles?.scope_id === selectedScope.scope_id &&
+                              m.scope_id === selectedScope.scope_id &&
                               !m.is_deleted,
                           )
                           .map((m) => (
@@ -742,10 +738,10 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
                             >
                               <span className="font-mono text-sm font-semibold">{m.uid}</span>
                               <div className="flex gap-1">
-                                {m.member_roles?.is_voter && (
+                                {m.is_voter && (
                                   <Badge variant="outline" className="text-xs">V</Badge>
                                 )}
-                                {m.member_roles?.is_organizer && (
+                                {m.is_organizer && (
                                   <Badge className="text-xs">O</Badge>
                                 )}
                               </div>
@@ -753,12 +749,12 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
                           ))}
                         {members.filter(
                           (m) =>
-                            m.member_roles?.scope_id === selectedScope.scope_id && !m.is_deleted,
+                            m.scope_id === selectedScope.scope_id && !m.is_deleted,
                         ).length === 0 && (
-                          <p className="text-sm text-muted-foreground">
-                            No members at this scope level
-                          </p>
-                        )}
+                            <p className="text-sm text-muted-foreground">
+                              No members at this scope level
+                            </p>
+                          )}
                       </div>
                     </div>
                   )}
@@ -830,11 +826,10 @@ export function ManageOrganizationsView() {
               <button
                 key={org.orgid}
                 onClick={() => setSelectedOrg(org)}
-                className={`w-full text-left px-3 py-2 rounded-md border transition-colors hover:bg-accent ${
-                  selectedOrg?.orgid === org.orgid
+                className={`w-full text-left px-3 py-2 rounded-md border transition-colors hover:bg-accent ${selectedOrg?.orgid === org.orgid
                     ? 'bg-accent border-primary font-semibold'
                     : 'border-border'
-                }`}
+                  }`}
               >
                 <p className="text-sm font-semibold truncate">{org.org_name}</p>
                 <p className="text-xs text-muted-foreground font-mono">{org.orgid}</p>
