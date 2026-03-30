@@ -292,14 +292,13 @@ export function AuthPage() {
               {/* ── Login Tab ── */}
               <TabsContent value="login" className="space-y-4 mt-4">
                 <div className="space-y-2">
-                  <Label htmlFor="orgType">Organization Type</Label>
+                  <Label htmlFor="orgType">Account Type</Label>
                   <Select value={orgType} onValueChange={(v) => { setOrgType(v as OrgType); setError(null); }}>
                     <SelectTrigger id="orgType">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="Government">Government</SelectItem>
-                      <SelectItem value="Other ORG">Other ORG</SelectItem>
+                      <SelectItem value="Other ORG">ORG Account</SelectItem>
                       <SelectItem value="Unified Account">Unified Account</SelectItem>
                     </SelectContent>
                   </Select>

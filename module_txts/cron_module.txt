@@ -25,10 +25,13 @@ export class CronService {
   private readonly logger = new Logger(CronService.name);
 
   constructor(private prisma: PrismaService) {}
-
+  private shouldSkip(): boolean {
+    return process.env.DISABLE_CRONS === 'true';
+  }
   // 1️⃣ Event Completion Job
   @Cron(CronExpression.EVERY_MINUTE)
   async handleEventCompletion() {
+    if (this.shouldSkip()) return;
     this.logger.log('Checking for expired events...');
 
     const result = await this.prisma.events.updateMany({
@@ -51,6 +54,7 @@ export class CronService {
   // 2️⃣ OTP Cleanup Job
   @Cron(CronExpression.EVERY_5_MINUTES)
   async cleanupExpiredOtps() {
+    if (this.shouldSkip()) return;
     this.logger.log('Cleaning expired OTPs...');
 
     const result = await this.prisma.otp_verification.deleteMany({
@@ -69,6 +73,7 @@ export class CronService {
   // 3️⃣ Session Cleanup (if using refresh tokens)
   @Cron(CronExpression.EVERY_HOUR)
   async cleanupSessions() {
+    if (this.shouldSkip()) return;
     this.logger.log('Cleaning expired sessions...');
 
     const result = await this.prisma.user_sessions.deleteMany({

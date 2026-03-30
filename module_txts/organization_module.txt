@@ -103,6 +103,12 @@ export class RegisterOrgDto {
   @Matches(/^[0-9]{4}$/, { message: 'org_suffix must be exactly 4 digits' })
   org_suffix?: string;
 
+  
+  @IsOptional()
+  @Matches(/^[A-Z]{3}[0-9]{4}$/, {
+    message: 'preferred_orgid must be in format ABC1234',
+  })
+  preferred_orgid?: string;
   /**
    * Participants to seed into org_members.
    * The submitter is always added as voter+organizer at ROOT scope.
@@ -230,6 +236,7 @@ import {
   Query,
   UseGuards,
   ParseIntPipe,
+  Req
 } from '@nestjs/common';
 import { OrgService } from './org.service';
 import { ScopeService } from './scope.service';
@@ -246,13 +253,17 @@ import type { JwtUser } from '../common/decorators/current-user.decorator';
 // ─── Helper: resolve caller uid ───────────────────────────────────────────────
 // ORG sessions: uid is baked into JWT.
 // UNIFIED sessions: caller passes uid via x-caller-uid header.
-function resolveCallerUid(user: JwtUser, headers: Record<string, any>): string {
+function resolveCallerUid(user: JwtUser, req: any): string {
   if (user.uid) return user.uid;
-  const h = headers['x-caller-uid'];
-  if (typeof h === 'string' && h.trim()) return h.trim().toUpperCase();
+  // check header, then query param
+  const fromHeader = req.headers?.['x-caller-uid'];
+  if (typeof fromHeader === 'string' && fromHeader.trim())
+    return fromHeader.trim().toUpperCase();
+  const fromQuery = req.query?.uid;
+  if (typeof fromQuery === 'string' && fromQuery.trim())
+    return fromQuery.trim().toUpperCase();
   return '';
 }
-
 @UseGuards(JwtAuthGuard)
 @Controller('org')
 export class OrgController {
@@ -300,11 +311,12 @@ export class OrgController {
   getMembers(
     @CurrentUser() user: JwtUser,
     @Param('orgid') orgid: string,
+    @Req() req: any,
     @Query('role') role?: string,
     @Query('scope_id') scopeId?: string,
     @Query('search') search?: string,
   ) {
-    const callerUid = resolveCallerUid(user, {});
+    const callerUid = resolveCallerUid(user, req);
     return this.orgService.getMembers(BigInt(user.pid!), orgid, callerUid, {
       role,
       scope_id: scopeId ? Number(scopeId) : undefined,
@@ -323,8 +335,9 @@ export class OrgController {
     @CurrentUser() user: JwtUser,
     @Param('orgid') orgid: string,
     @Body() dto: AddMembersDto,
+    @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, {});
+    const callerUid = resolveCallerUid(user, req);
     return this.orgService.addMembers(BigInt(user.pid!), orgid, callerUid, dto);
   }
 
@@ -340,8 +353,9 @@ export class OrgController {
     @Param('orgid') orgid: string,
     @Param('uid') targetUid: string,
     @Body() dto: UpdateMemberDto,
+    @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, {});
+    const callerUid = resolveCallerUid(user, req);
     return this.orgService.updateMember(
       BigInt(user.pid!),
       orgid,
@@ -362,8 +376,9 @@ export class OrgController {
     @CurrentUser() user: JwtUser,
     @Param('orgid') orgid: string,
     @Param('uid') targetUid: string,
+    @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, {});
+    const callerUid = resolveCallerUid(user, req);
     return this.orgService.removeMember(
       BigInt(user.pid!),
       orgid,
@@ -384,8 +399,9 @@ export class OrgController {
   getScopeTree(
     @CurrentUser() user: JwtUser,
     @Param('orgid') orgid: string,
+    @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, {});
+    const callerUid = resolveCallerUid(user, req);
     return this.scopeService.getScopeTree(orgid, callerUid);
   }
 
@@ -400,8 +416,9 @@ export class OrgController {
     @CurrentUser() user: JwtUser,
     @Param('orgid') orgid: string,
     @Body() dto: CreateScopeDto,
+    @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, {});
+    const callerUid = resolveCallerUid(user, req);
     return this.scopeService.createScope(orgid, callerUid, dto);
   }
 
@@ -417,8 +434,9 @@ export class OrgController {
     @Param('orgid') orgid: string,
     @Param('scope_id', ParseIntPipe) scopeId: number,
     @Body() dto: UpdateScopeDto,
+    @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, {});
+    const callerUid = resolveCallerUid(user, req);
     return this.scopeService.updateScope(orgid, callerUid, scopeId, dto);
   }
 
@@ -433,8 +451,9 @@ export class OrgController {
     @CurrentUser() user: JwtUser,
     @Param('orgid') orgid: string,
     @Param('scope_id', ParseIntPipe) scopeId: number,
+    @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, {});
+    const callerUid = resolveCallerUid(user, req);
     return this.scopeService.deleteScope(orgid, callerUid, scopeId);
   }
 }
@@ -544,7 +563,7 @@ function generateOrgId(
 
 @Injectable()
 export class OrgService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService) { }
 
   // ─── Register Organization ──────────────────────────────────────────────────
   async registerOrg(
@@ -566,14 +585,41 @@ export class OrgService {
     const deduped = Array.from(seen.values());
 
     // Generate org ID
-    let orgid = generateOrgId(dto.org_name, dto.org_prefix, dto.org_suffix);
+    const preferredOrgId = dto.preferred_orgid?.trim().toUpperCase();
 
-    // Collision check — retry up to 5 times
-    for (let i = 0; i < 5; i++) {
-      const exists = await this.prisma.organization.findUnique({ where: { orgid } });
-      if (!exists) break;
-      orgid = generateOrgId(dto.org_name, dto.org_prefix);
-      if (i === 4) throw new ConflictException('Could not generate unique org ID. Try a different prefix.');
+    let orgid: string;
+
+    if (preferredOrgId) {
+      const exists = await this.prisma.organization.findUnique({
+        where: { orgid: preferredOrgId },
+      });
+
+      if (exists) {
+        throw new ConflictException(
+          `Organization ID "${preferredOrgId}" is already taken.`
+        );
+      }
+
+      orgid = preferredOrgId;
+    } else {
+      // fallback to generated ID with retry
+      orgid = generateOrgId(dto.org_name, dto.org_prefix, dto.org_suffix);
+
+      for (let i = 0; i < 5; i++) {
+        const exists = await this.prisma.organization.findUnique({
+          where: { orgid },
+        });
+
+        if (!exists) break;
+
+        orgid = generateOrgId(dto.org_name, dto.org_prefix);
+
+        if (i === 4) {
+          throw new ConflictException(
+            'Could not generate unique org ID. Try again.'
+          );
+        }
+      }
     }
 
     // The caller must supply their own uid for this org.
@@ -581,12 +627,17 @@ export class OrgService {
     // For a fresh org registration from a UNIFIED account, the caller provides their desired uid.
     if (!callerUid) {
       throw new BadRequestException(
-        'You must supply your uid for the new organization via the request body (caller_uid)',
+        'Uid Not Supplied',
       );
     }
 
-    const callerUidNorm = callerUid.toUpperCase();
+    const callerUidNorm = callerUid.trim().toUpperCase();
 
+    if (!/^[A-Z0-9]{4,20}$/.test(callerUidNorm)) {
+      throw new BadRequestException(
+        'Invalid Organizer Uid format. Must be 4–20 uppercase alphanumeric characters.'
+      );
+    }
     // Run everything in a transaction
     const result = await this.prisma.$transaction(async (tx) => {
       // 1. Create org (trigger auto-creates ROOT scope)
@@ -630,6 +681,10 @@ export class OrgService {
       await tx.user_org.create({
         data: { pid, orgid, uid: callerUidNorm },
       });
+      // add organizer identity to wallet
+      await tx.identity_wallet.create({
+        data: { pid, identity_type:"ORG",identity_id:orgid, uid: callerUidNorm },
+      });
 
       // 6. Insert participants (skip if uid === caller)
       for (const p of deduped) {
@@ -669,16 +724,13 @@ export class OrgService {
 
   // ─── Get orgs where user is organizer ──────────────────────────────────────
   async getMyOrgs(pid: bigint) {
-    // Find all (orgid, uid) combos for this pid
     const links = await this.prisma.user_org.findMany({
       where: { pid },
       select: { orgid: true, uid: true },
     });
-
     if (links.length === 0) return [];
 
-    // Filter to those where user has organizer role
-    const organigerLinks = await Promise.all(
+    const organizerLinks = await Promise.all(
       links.map(async (l) => {
         const role = await this.prisma.member_roles.findUnique({
           where: { orgid_uid: { orgid: l.orgid, uid: l.uid } },
@@ -687,12 +739,11 @@ export class OrgService {
       }),
     );
 
-    const organizerOrgIds = organigerLinks
-      .filter(Boolean)
-      .map((l) => l!.orgid);
+    const validLinks = organizerLinks.filter(Boolean) as { orgid: string; uid: string }[];
+    const orgIdToUid = Object.fromEntries(validLinks.map((l) => [l.orgid, l.uid]));
 
     const orgs = await this.prisma.organization.findMany({
-      where: { orgid: { in: organizerOrgIds }, is_deleted: false },
+      where: { orgid: { in: validLinks.map((l) => l.orgid) }, is_deleted: false },
       select: {
         orgid: true,
         org_name: true,
@@ -702,7 +753,8 @@ export class OrgService {
       },
     });
 
-    return orgs;
+    // ✅ attach uid so frontend can pass it back as org context
+    return orgs.map((o) => ({ ...o, uid: orgIdToUid[o.orgid] }));
   }
 
   // ─── Get members (scope-filtered for organizer) ─────────────────────────────
@@ -729,12 +781,12 @@ export class OrgService {
         },
         ...(filters?.search
           ? {
-              OR: [
-                { uid: { contains: filters.search, mode: 'insensitive' } },
-                { email: { contains: filters.search, mode: 'insensitive' } },
-                { mobile: { contains: filters.search } },
-              ],
-            }
+            OR: [
+              { uid: { contains: filters.search, mode: 'insensitive' } },
+              { email: { contains: filters.search, mode: 'insensitive' } },
+              { mobile: { contains: filters.search } },
+            ],
+          }
           : {}),
       },
       select: {
