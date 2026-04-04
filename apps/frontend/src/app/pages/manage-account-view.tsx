@@ -1,12 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAppContext } from '../context/app-context';
 import { api } from '../../lib/api';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
+import { toast } from 'sonner';
+
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
+import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
-import { Button } from '../components/ui/button';
-import { Skeleton } from '../components/ui/skeleton';
-import { toast } from 'sonner';
+import { Separator } from '../components/ui/separator';
+import { Badge } from '../components/ui/badge';
 import {
   Select,
   SelectContent,
@@ -15,308 +17,446 @@ import {
   SelectValue,
 } from '../components/ui/select';
 import { countryStateMap } from '../../constants/location';
-import { UpdateMeResponse } from '../../types/users';
+import type { UpdateMeResponse } from '../../types/users';
+
+// ─── OTP cooldown hook ────────────────────────────────────────────────────────
+
+function useOtpCooldown(seconds = 60) {
+  const [remaining, setRemaining] = useState(0);
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const start = () => {
+    setRemaining(seconds);
+    timer.current = setInterval(() => {
+      setRemaining((r) => {
+        if (r <= 1) { clearInterval(timer.current!); return 0; }
+        return r - 1;
+      });
+    }, 1000);
+  };
+
+  useEffect(() => () => { if (timer.current) clearInterval(timer.current); }, []);
+
+  return { remaining, start, active: remaining > 0 };
+}
+
+// ─── Section divider ──────────────────────────────────────────────────────────
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">
+        {children}
+      </p>
+  );
+}
+
+// ─── Main View ────────────────────────────────────────────────────────────────
 
 export function ManageAccountView() {
   const { user, setUser } = useAppContext();
 
-  const [firstName, setFirstName] = useState('');
+  // ── Form state — all snake_case to match User interface ──────────────────
+  const [firstName, setFirstName]   = useState('');
   const [middleName, setMiddleName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [mobile, setMobile] = useState('');
-  const [email, setEmail] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [emailOtp, setEmailOtp] = useState('');
-  const [mobileOtp, setMobileOtp] = useState('');
-  const [country, setCountry] = useState('');
-  const [state, setState] = useState('');
-  const [emailChanged, setEmailChanged] = useState(false);
-  const [mobileChanged, setMobileChanged] = useState(false);
+  const [lastName, setLastName]     = useState('');
+  const [email, setEmail]           = useState('');
+  const [mobile, setMobile]         = useState('');
+  const [country, setCountry]       = useState('');
+  const [stateVal, setStateVal]     = useState('');
 
-  const [sendingEmailOtp, setSendingEmailOtp] = useState(false);
+  // OTP inputs — only shown when the respective contact changes
+  const [emailOtp, setEmailOtp]   = useState('');
+  const [mobileOtp, setMobileOtp] = useState('');
+
+  // Track whether each contact differs from saved value
+  const emailChanged  = email  !== (user?.email  ?? '');
+  const mobileChanged = mobile !== (user?.mobile ?? '');
+
+  const [isEditing, setIsEditing]         = useState(false);
+  const [saving, setSaving]               = useState(false);
+  const [sendingEmailOtp, setSendingEmailOtp]   = useState(false);
   const [sendingMobileOtp, setSendingMobileOtp] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
-  // Seed form from context (already fetched on app boot via getMe)
-  useEffect(() => {
+
+  const emailCooldown  = useOtpCooldown(60);
+  const mobileCooldown = useOtpCooldown(60);
+
+  // ── Seed form from context (hydrated on app boot via getMe) ──────────────
+  const seedFromUser = () => {
     if (!user) return;
-    setFirstName(user.firstName ?? '');
-    setMiddleName(user.middleName ?? '');
-    setLastName(user.lastName ?? '');
-    setMobile(user.mobile ?? '');
-    setEmail(user.email ?? '');
-    setCountry(user.country ?? '');
-    setState(user.state ?? '');
-  }, [user]);
-  const sendEmailOtp = async () => {
+    setFirstName(user.first_name   ?? '');
+    setMiddleName(user.middle_name ?? '');
+    setLastName(user.last_name     ?? '');
+    setEmail(user.email            ?? '');
+    setMobile(user.mobile          ?? '');
+    setCountry(user.country        ?? '');
+    setStateVal(user.state         ?? '');
+    setEmailOtp('');
+    setMobileOtp('');
+  };
+
+  useEffect(seedFromUser, [user]);
+
+  // ── Send OTP ──────────────────────────────────────────────────────────────
+  const handleSendEmailOtp = async () => {
+    if (!email.trim()) return;
     setSendingEmailOtp(true);
     try {
-      await api.sendOtp(email);
-      toast.success('OTP sent to email');
+      await api.sendOtp(email.trim());
+      toast.success('OTP sent to your new email');
+      emailCooldown.start();
     } catch (e: any) {
-      toast.error(e.message);
+      toast.error(e.message ?? 'Failed to send OTP');
     } finally {
       setSendingEmailOtp(false);
     }
   };
 
-  const sendMobileOtp = async () => {
+  const handleSendMobileOtp = async () => {
+    if (!mobile.trim()) return;
     setSendingMobileOtp(true);
     try {
-      await api.sendOtp(mobile);
-      toast.success('OTP sent to mobile');
+      await api.sendOtp(mobile.trim());
+      toast.success('OTP sent to your new mobile');
+      mobileCooldown.start();
     } catch (e: any) {
-      toast.error(e.message);
+      toast.error(e.message ?? 'Failed to send OTP');
     } finally {
       setSendingMobileOtp(false);
     }
   };
+
+  // ── Save ──────────────────────────────────────────────────────────────────
   const handleSave = async () => {
     if (!user) return;
 
-    const payload: any = {};
+    const payload: Parameters<typeof api.updateMe>[0] = {};
 
-    if (firstName !== user.firstName) payload.first_name = firstName;
-    if (middleName !== (user.middleName ?? '')) payload.middle_name = middleName || null;
-    if (lastName !== user.lastName) payload.last_name = lastName;
-    if (state !== (user.state ?? '')) payload.state = state;
-    if (country !== (user.country ?? '')) payload.country = country;
-    if (email !== (user.email ?? '')) {
-      payload.email = email || null;
-      payload.email_otp = emailOtp; // include OTP
+    if (firstName.trim()  !== (user.first_name  ?? '')) payload.first_name  = firstName.trim();
+    if (middleName.trim() !== (user.middle_name ?? '')) payload.middle_name = middleName.trim() || undefined;
+    if (lastName.trim()   !== (user.last_name   ?? '')) payload.last_name   = lastName.trim();
+    if (country           !== (user.country     ?? '')) payload.country     = country || undefined;
+    if (stateVal          !== (user.state       ?? '')) payload.state       = stateVal || undefined;
+
+    if (emailChanged) {
+      if (!emailOtp.trim()) {
+        toast.error('Enter the OTP sent to your new email');
+        return;
+      }
+      payload.email     = email.trim() || undefined;
+      payload.email_otp = emailOtp.trim();
     }
 
-    if (mobile !== (user.mobile ?? '')) {
-      payload.mobile = mobile || null;
-      payload.mobile_otp = mobileOtp; // include OTP
+    if (mobileChanged) {
+      if (!mobileOtp.trim()) {
+        toast.error('Enter the OTP sent to your new mobile');
+        return;
+      }
+      payload.mobile     = mobile.trim() || undefined;
+      payload.mobile_otp = mobileOtp.trim();
     }
 
     if (Object.keys(payload).length === 0) {
-      toast.info('No changes to update');
+      toast.info('No changes to save');
+      setIsEditing(false);
       return;
     }
 
-    setLoading(true);
+    setSaving(true);
     try {
-      const updated = await api.updateMe(payload);
+      const updated: UpdateMeResponse = await api.updateMe(payload);
 
+      // Merge response back into context — UpdateMeResponse is snake_case
       setUser({
         ...user,
-        ...{
-          firstName: updated.first_name,
-          middleName: updated.middle_name,
-          lastName: updated.last_name,
-          mobile: updated.mobile,
-          email: updated.email,
-          state: updated.state,
-          country: updated.country,
-        }
+        first_name:  updated.first_name  ?? user.first_name,
+        middle_name: updated.middle_name ?? user.middle_name,
+        last_name:   updated.last_name   ?? user.last_name,
+        email:       updated.email       ?? user.email,
+        mobile:      updated.mobile      ?? user.mobile,
+        country:     updated.country     ?? user.country,
+        state:       updated.state       ?? user.state,
       });
 
-      toast.success('Account updated successfully!');
+      toast.success('Account updated');
+      setIsEditing(false);
     } catch (err: any) {
-      toast.error(err.message ?? 'Failed to update account');
+      // 409: contact belongs to a rich (UNIFIED) account — guide to wallet
+      if (
+          err.message?.includes('MOBILE_ACCOUNT_EXISTS') ||
+          err.message?.includes('EMAIL_ACCOUNT_EXISTS')
+      ) {
+        toast.error(
+            'This contact is linked to another account. Use Identity Wallet to merge.',
+            { duration: 6000 },
+        );
+      } else {
+        toast.error(err.message ?? 'Failed to update account');
+      }
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   };
 
+  const handleCancel = () => {
+    seedFromUser();
+    setIsEditing(false);
+  };
+
+  // ── Guard ─────────────────────────────────────────────────────────────────
   if (!user) return null;
 
+  const countryKeys = Object.keys(countryStateMap);
+  const statesForCountry = country ? (countryStateMap[country] ?? []) : [];
+
   return (
-    <div className="max-w-3xl mx-auto">
-      <div className="mb-6">
-        <h1 className="mb-2">Manage Account</h1>
-        <p className="text-muted-foreground">Update your personal information</p>
-      </div>
+      <div className="max-w-2xl mx-auto">
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Personal Information</CardTitle>
-          <CardDescription>
-            Your unique PID: <span className="font-mono">{user.pid}</span>
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="firstName">First Name</Label>
-              <Input
-                disabled={!isEditing}
-                id="firstName"
-                value={firstName}
-                onChange={(e) => setFirstName(e.target.value)}
-                placeholder="First name"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="middleName">Middle Name</Label>
-              <Input
-                disabled={!isEditing}
-                id="middleName"
-                value={middleName}
-                onChange={(e) => setMiddleName(e.target.value)}
-                placeholder="Middle name (optional)"
-              />
-            </div>
+        {/* Page header */}
+        <div className="mb-6 flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight mb-1">Account</h1>
+            <p className="text-sm text-muted-foreground">Manage your personal information</p>
           </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="lastName">Last Name</Label>
-            <Input
-              disabled={!isEditing}
-              id="lastName"
-              value={lastName}
-              onChange={(e) => setLastName(e.target.value)}
-              placeholder="Last name"
-            />
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-
-            {/* STATE */}
-            <div className="space-y-2">
-              <Label htmlFor="state">State</Label>
-
-              <Select
-                value={state}
-                onValueChange={setState}
-                disabled={!isEditing || !country}
-              >
-                <SelectTrigger id="state">
-                  <SelectValue
-                    placeholder={country ? "Select state" : "Select country first"}
-                  />
-                </SelectTrigger>
-
-                <SelectContent>
-                  {countryStateMap[country]?.map((s) => (
-                    <SelectItem key={s.value} value={s.value}>
-                      {s.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* COUNTRY */}
-            <div className="space-y-2">
-              <Label htmlFor="country">Country</Label>
-
-              <Select
-                value={country}
-                onValueChange={(val) => {
-                  setCountry(val);
-                  setState('');
-                }}
-                disabled={!isEditing}
-              >
-                <SelectTrigger id="country">
-                  <SelectValue placeholder="Select country" />
-                </SelectTrigger>
-
-                <SelectContent>
-                  <SelectItem value="USA">United States</SelectItem>
-                  <SelectItem value="UK">United Kingdom</SelectItem>
-                  <SelectItem value="CA">Canada</SelectItem>
-                  <SelectItem value="AU">Australia</SelectItem>
-                  <SelectItem value="IN">India</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
-            <div className="flex gap-2">
-              <Input
-                disabled={!isEditing}
-                id="email"
-                type="email"
-                value={email}
-                onChange={(e) => {
-                  setEmail(e.target.value);
-                  setEmailChanged(e.target.value !== (user?.email ?? ''));
-                }}
-                placeholder="your@email.com"
-              />
-              {isEditing && emailChanged && (
-                <Button onClick={sendEmailOtp} disabled={!isEditing || sendingEmailOtp}>
-                  {sendingEmailOtp ? 'Sending...' : 'Get OTP'}
-                </Button>
-              )}
-            </div>
-
-            {isEditing && emailChanged && (
-              <Input
-                placeholder="Enter Email OTP"
-                value={emailOtp}
-                onChange={(e) => setEmailOtp(e.target.value)}
-              />
-            )}
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="mobile">Mobile Number (10 digits)</Label>
-            <div className="flex gap-2">
-              <Input
-                disabled={!isEditing}
-                id="mobile"
-                type="tel"
-                value={mobile}
-                onChange={(e) => {
-                  setMobile(e.target.value);
-                  setMobileChanged(e.target.value !== (user?.mobile ?? ''));
-                }}
-                placeholder="9876543210"
-                maxLength={10}
-              />
-              {isEditing && mobileChanged && (
-                <Button onClick={sendMobileOtp} disabled={!isEditing || sendingMobileOtp}>
-                  {sendingMobileOtp ? 'Sending...' : 'Get OTP'}
-                </Button>
-              )}
-            </div>
-
-            {isEditing && mobileChanged && (
-              <Input
-                placeholder="Enter Mobile OTP"
-                value={mobileOtp}
-                onChange={(e) => setMobileOtp(e.target.value)}
-              />
-            )}
-          </div>
-
-          <div className="pt-4 flex gap-2">
-            {!isEditing ? (
-              <Button onClick={() => setIsEditing(true)}>
-                Edit
+          {!isEditing && (
+              <Button variant="outline" onClick={() => setIsEditing(true)} className="flex-shrink-0">
+                Edit Profile
               </Button>
-            ) : (
-              <>
-                <Button onClick={handleSave} disabled={loading}>
-                  {loading ? 'Saving…' : 'Save Changes'}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setIsEditing(false);
-                    // reset values from user
-                    setFirstName(user.firstName ?? '');
-                    setMiddleName(user.middleName ?? '');
-                    setLastName(user.lastName ?? '');
-                    setMobile(user.mobile ?? '');
-                    setEmail(user.email ?? '');
-                    setCountry(user.country ?? '');
-                    setState(user.state ?? '');
-                  }}
-                >
-                  Cancel
-                </Button>
-              </>
+          )}
+        </div>
+
+        <Card>
+          <CardHeader className="pb-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <CardTitle className="text-base">Personal Information</CardTitle>
+                <CardDescription className="mt-1">
+                  PID:{' '}
+                  <span className="font-mono text-foreground text-xs bg-muted px-1.5 py-0.5 rounded">
+                  {user.pid}
+                </span>
+                </CardDescription>
+              </div>
+              {isEditing && (
+                  <Badge variant="secondary" className="text-xs flex-shrink-0">Editing</Badge>
+              )}
+            </div>
+          </CardHeader>
+
+          <CardContent className="space-y-6">
+
+            {/* ── Name ── */}
+            <div>
+              <SectionLabel>Name</SectionLabel>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="firstName">First Name</Label>
+                  <Input
+                      id="firstName"
+                      placeholder="First name"
+                      value={firstName}
+                      onChange={(e) => setFirstName(e.target.value)}
+                      disabled={!isEditing}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="middleName">
+                    Middle Name{' '}
+                    <span className="text-muted-foreground font-normal">(optional)</span>
+                  </Label>
+                  <Input
+                      id="middleName"
+                      placeholder="Middle name"
+                      value={middleName}
+                      onChange={(e) => setMiddleName(e.target.value)}
+                      disabled={!isEditing}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="lastName">Last Name</Label>
+                  <Input
+                      id="lastName"
+                      placeholder="Last name"
+                      value={lastName}
+                      onChange={(e) => setLastName(e.target.value)}
+                      disabled={!isEditing}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* ── Location ── */}
+            <div>
+              <SectionLabel>Location</SectionLabel>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="country">Country</Label>
+                  <Select
+                      value={country}
+                      onValueChange={(v) => { setCountry(v); setStateVal(''); }}
+                      disabled={!isEditing}
+                  >
+                    <SelectTrigger id="country">
+                      <SelectValue placeholder="Select country" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {countryKeys.map((c) => (
+                          <SelectItem key={c} value={c}>{c}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="state">State / Province</Label>
+                  <Select
+                      value={stateVal}
+                      onValueChange={setStateVal}
+                      disabled={!isEditing || !country || statesForCountry.length === 0}
+                  >
+                    <SelectTrigger id="state">
+                      <SelectValue
+                          placeholder={
+                            !country
+                                ? 'Select country first'
+                                : statesForCountry.length === 0
+                                    ? 'No states available'
+                                    : 'Select state'
+                          }
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {statesForCountry.map((s) => (
+                          <SelectItem key={s.value} value={s.value}>
+                            {s.label}
+                          </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* ── Contact ── */}
+            <div>
+              <SectionLabel>Contact</SectionLabel>
+              <div className="space-y-4">
+
+                {/* Email */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="email">Email</Label>
+                  <div className="flex gap-2">
+                    <Input
+                        id="email"
+                        type="email"
+                        placeholder="you@example.com"
+                        value={email}
+                        onChange={(e) => {
+                          setEmail(e.target.value);
+                          setEmailOtp('');
+                        }}
+                        disabled={!isEditing}
+                        className="flex-1"
+                    />
+                    {isEditing && emailChanged && (
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleSendEmailOtp}
+                            disabled={sendingEmailOtp || emailCooldown.active || !email.trim()}
+                            className="flex-shrink-0 min-w-24"
+                        >
+                          {sendingEmailOtp
+                              ? 'Sending…'
+                              : emailCooldown.active
+                                  ? `${emailCooldown.remaining}s`
+                                  : 'Send OTP'}
+                        </Button>
+                    )}
+                  </div>
+                  {isEditing && emailChanged && (
+                      <Input
+                          placeholder="Enter email OTP"
+                          value={emailOtp}
+                          onChange={(e) => setEmailOtp(e.target.value)}
+                          maxLength={6}
+                          className="max-w-48 font-mono tracking-widest"
+                      />
+                  )}
+                </div>
+
+                {/* Mobile */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="mobile">Mobile <span className="text-muted-foreground font-normal text-xs">(10 digits)</span></Label>
+                  <div className="flex gap-2">
+                    <Input
+                        id="mobile"
+                        type="tel"
+                        placeholder="9876543210"
+                        value={mobile}
+                        onChange={(e) => {
+                          setMobile(e.target.value.replace(/\D/g, '').slice(0, 10));
+                          setMobileOtp('');
+                        }}
+                        disabled={!isEditing}
+                        maxLength={10}
+                        className="flex-1 font-mono"
+                    />
+                    {isEditing && mobileChanged && (
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleSendMobileOtp}
+                            disabled={sendingMobileOtp || mobileCooldown.active || mobile.length !== 10}
+                            className="flex-shrink-0 min-w-24"
+                        >
+                          {sendingMobileOtp
+                              ? 'Sending…'
+                              : mobileCooldown.active
+                                  ? `${mobileCooldown.remaining}s`
+                                  : 'Send OTP'}
+                        </Button>
+                    )}
+                  </div>
+                  {isEditing && mobileChanged && (
+                      <Input
+                          placeholder="Enter mobile OTP"
+                          value={mobileOtp}
+                          onChange={(e) => setMobileOtp(e.target.value)}
+                          maxLength={6}
+                          className="max-w-48 font-mono tracking-widest"
+                      />
+                  )}
+                </div>
+
+                {/* 409 hint — shown only when editing contacts */}
+                {isEditing && (emailChanged || mobileChanged) && (
+                    <p className="text-xs text-muted-foreground">
+                      If a contact belongs to another account, you'll be guided to link it via your{' '}
+                      <span className="font-medium text-foreground">Identity Wallet</span>.
+                    </p>
+                )}
+              </div>
+            </div>
+
+            {/* ── Actions ── */}
+            {isEditing && (
+                <>
+                  <Separator />
+                  <div className="flex gap-2 pt-1">
+                    <Button onClick={handleSave} disabled={saving}>
+                      {saving ? 'Saving…' : 'Save Changes'}
+                    </Button>
+                    <Button variant="outline" onClick={handleCancel} disabled={saving}>
+                      Cancel
+                    </Button>
+                  </div>
+                </>
             )}
-          </div>
-        </CardContent>
-      </Card>
-
-
-    </div>
+          </CardContent>
+        </Card>
+      </div>
   );
 }

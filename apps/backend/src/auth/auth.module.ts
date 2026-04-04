@@ -4,12 +4,12 @@ import { AuthController } from './auth.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 import { JwtModule } from '@nestjs/jwt';
 import { JwtStrategy } from './strategies/jwt.strategy';
-import { OtpModule } from '../otp/otp.module';   // ← import OtpModule
+import { OtpModule } from '../otp/otp.module'; // ← import OtpModule
 
 @Module({
   imports: [
     PrismaModule,
-    OtpModule,             // ← provides OtpService
+    OtpModule, // ← provides OtpService
     JwtModule.register({
       secret: process.env.JWT_SECRET || 'SECRET_KEY',
       signOptions: { expiresIn: '1h' },

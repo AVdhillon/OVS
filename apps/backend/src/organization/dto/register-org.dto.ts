@@ -8,9 +8,9 @@ import {
   IsArray,
   ValidateNested,
   IsIn,
-  ArrayMinSize,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { IsEmailOrPhone } from '../../common/decorators/org-context.decorator';
 
 // ─── Participant row (used in table input) ────────────────────────────────────
 export class ParticipantRowDto {
@@ -21,20 +21,15 @@ export class ParticipantRowDto {
   })
   uid: string;
 
-  @IsOptional()
-  @Matches(/^[0-9]{10}$/, { message: 'mobile must be 10 digits' })
-  mobile?: string;
-
-  @IsOptional()
-  @IsEmail()
-  email?: string;
+  @IsEmailOrPhone()
+  participant_identifier?: string;
 
   /**
    * 'v' = voter only (default), 'vo' = voter + organizer
    */
   @IsOptional()
-  @IsIn(['v', 'vo'])
-  role?: 'v' | 'vo';
+  @IsIn(['v', 'vo', 'o', 'none'])
+  role?: 'v' | 'vo' | 'o' | 'none';
 }
 
 // ─── Register Org DTO ─────────────────────────────────────────────────────────
@@ -49,11 +44,33 @@ export class RegisterOrgDto {
   org_email?: string;
 
   /**
+   * The caller's own contact (mobile or email) used to bind them
+   * as first member. Required for UNIFIED sessions registering a new org.
+   */
+  @IsEmailOrPhone()
+  caller_identifier?: string;
+
+  /**
+   * The caller's desired uid within this org.
+   * Required when the session is UNIFIED (user.uid is absent from JWT).
+   * ORG sessions already carry uid in the JWT and may omit this.
+   */
+  // FIX: added — controller references dto.caller_uid but it was never declared
+  //      or validated in the DTO, causing silent undefined at runtime for UNIFIED sessions.
+  @IsOptional()
+  @Matches(/^[A-Z0-9]{4,20}$/, {
+    message: 'caller_uid must be 4–20 uppercase alphanumeric characters',
+  })
+  caller_uid?: string;
+
+  /**
    * Optional preferred prefix (3 uppercase letters).
    * If not provided, first 3 letters of org_name are used.
    */
   @IsOptional()
-  @Matches(/^[A-Z]{3}$/, { message: 'org_prefix must be exactly 3 uppercase letters' })
+  @Matches(/^[A-Z]{3}$/, {
+    message: 'org_prefix must be exactly 3 uppercase letters',
+  })
   org_prefix?: string;
 
   /**
@@ -64,12 +81,12 @@ export class RegisterOrgDto {
   @Matches(/^[0-9]{4}$/, { message: 'org_suffix must be exactly 4 digits' })
   org_suffix?: string;
 
-  
   @IsOptional()
   @Matches(/^[A-Z]{3}[0-9]{4}$/, {
     message: 'preferred_orgid must be in format ABC1234',
   })
   preferred_orgid?: string;
+
   /**
    * Participants to seed into org_members.
    * The submitter is always added as voter+organizer at ROOT scope.
@@ -82,7 +99,7 @@ export class RegisterOrgDto {
 
   /**
    * Alternatively, paste/import raw CSV text.
-   * Header row: uid,mobile,email,role
+   * Header row: uid,contact,role
    * role defaults to 'v' if absent.
    */
   @IsOptional()

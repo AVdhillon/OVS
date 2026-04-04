@@ -1,19 +1,13 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Patch,
-  Body,
-  Req,
-  UseGuards,
-} from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, UseGuards } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { RegisterDto } from './dto/register.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
-import { Request } from 'express';
-import type { JwtUser } from 'src/common/decorators/current-user.decorator';
-import { CurrentUser } from 'src/common/decorators/current-user.decorator';
+import {
+  CurrentUser,
+  type JwtUser,
+} from 'src/common/decorators/current-user.decorator';
+
 @Controller('users')
 export class UsersController {
   constructor(private usersService: UsersService) {}
@@ -25,17 +19,18 @@ export class UsersController {
   }
 
   // GET /users/me
+  @UseGuards(JwtAuthGuard)
   @Get('me')
-@UseGuards(JwtAuthGuard)
-getProfile(@CurrentUser() user: JwtUser) {
-  return this.usersService.getProfile(BigInt(user.pid!));
-}
+  getProfile(@CurrentUser() user: JwtUser) {
+    return this.usersService.getProfile(BigInt(user.pid!));
+  }
 
   // PATCH /users/me
+  // FIX: was using @Req() + manual (req.user as any).pid cast;
+  //      now uses @CurrentUser() consistently, same as getProfile above.
   @UseGuards(JwtAuthGuard)
   @Patch('me')
-  updateProfile(@Req() req: Express.Request, @Body() dto: UpdateUserDto) {
-    const pid = BigInt((req.user as any).pid);
-    return this.usersService.updateProfile(pid, dto);
+  updateProfile(@CurrentUser() user: JwtUser, @Body() dto: UpdateUserDto) {
+    return this.usersService.updateProfile(BigInt(user.pid!), dto);
   }
 }

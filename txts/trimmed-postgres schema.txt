@@ -1,0 +1,198 @@
+-- =========================
+-- ONLINE VOTING PLATFORM — REFERENCE SCHEMA
+-- =========================
+-- DB setting: app.voter_hash_salt = 'mzalpqnxskowcbjdeirvbhftugy'
+
+-- =========================
+-- TABLES
+-- =========================
+
+uaccount (
+    pid BIGSERIAL PK,
+    first_name, middle_name, last_name VARCHAR NOT NULL,
+    mobile VARCHAR(10) UNIQUE,          -- 10 digits only
+    email VARCHAR(100) UNIQUE,
+    country, state VARCHAR,
+    created_at TIMESTAMP
+)
+
+organization (
+    orgid VARCHAR(20) PK,               -- format: [A-Z]{3}[0-9]{4}
+    org_name VARCHAR NOT NULL,
+    org_email VARCHAR UNIQUE,
+    is_active BOOLEAN DEFAULT FALSE,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP
+)
+
+org_members (
+    orgid FK→organization,
+    uid VARCHAR(20),                    -- format: [A-Z0-9]{4,20}
+    pid FK→uaccount (SET NULL on delete),
+    mobile, email VARCHAR,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    PK(orgid, uid),
+    UNIQUE(orgid, mobile), UNIQUE(orgid, email),
+    CHECK: pid OR mobile OR email must not all be null
+)
+
+org_scope (
+    scope_id SERIAL PK,
+    orgid FK→organization NOT NULL,
+    scope_name VARCHAR NOT NULL,
+    parent_scope_id FK→org_scope,       -- NULL = root
+    UNIQUE(orgid, parent_scope_id, scope_name)
+)
+-- Root scope auto-created on org insert via trg_create_root_scope
+
+scope_closure (
+    ancestor_id FK→org_scope CASCADE,
+    descendant_id FK→org_scope CASCADE,
+    depth INT DEFAULT 0,                -- 0 = self-reference
+    PK(ancestor_id, descendant_id)
+)
+-- Maintained by trg_closure_insert (AFTER INSERT on org_scope)
+-- Queried via: get_scope_descendants(scope_id), get_scope_ancestors(scope_id)
+
+member_roles (
+    orgid, uid FK→org_members CASCADE,
+    is_voter BOOLEAN DEFAULT TRUE,
+    is_organizer BOOLEAN DEFAULT FALSE,
+    scope_id FK→org_scope NOT NULL,
+    PK(orgid, uid)
+)
+-- trg_check_member_scope_org: scope must belong to same org
+-- trg_add_member_to_ongoing_events: on INSERT or is_voter FALSE→TRUE UPDATE,
+--   auto-adds member to currently active events they're eligible for
+
+gov_identity (
+    epic_id VARCHAR(20) PK,
+    name, mobile, email, state VARCHAR,
+    is_active BOOLEAN DEFAULT TRUE
+)
+
+identity_wallet (
+    pid FK→uaccount,
+    identity_type VARCHAR(10),          -- 'ORG' or 'GOV'
+    identity_id VARCHAR(20),            -- orgid or epic_id
+    uid VARCHAR(20),                    -- NOT NULL if ORG, NULL if GOV
+    PK(pid, identity_type, identity_id)
+)
+-- trg_validate_identity_wallet: validates org/gov identity exists + uid belongs to org
+-- trg_cleanup_org_wallet: AFTER DELETE on org_members, removes wallet entry using OLD.pid
+
+otp_verification (
+    otp_id SERIAL PK,
+    identifier VARCHAR(100) NOT NULL,
+    otp_code TEXT NOT NULL,
+    attempts INT DEFAULT 0,
+    created_at TIMESTAMP,
+    expires_at TIMESTAMP,               -- CHECK expires_at > created_at
+    is_verified BOOLEAN DEFAULT FALSE
+)
+-- UNIQUE INDEX on identifier WHERE is_verified = FALSE (one active OTP per identifier)
+
+events (
+    event_id SERIAL PK,
+    orgid FK→organization,              -
+    created_by_uid VARCHAR,
+    scope_id FK→org_scope,             
+    title VARCHAR(200) NOT NULL,
+    description TEXT,
+    start_time, end_time TIMESTAMP,     -- CHECK end_time > start_time
+    show_live_results BOOLEAN DEFAULT FALSE,
+    visibility_upward BOOLEAN DEFAULT FALSE,  -- allow ancestor-scope members to see/vote
+    scope_only BOOLEAN DEFAULT FALSE,         -- restrict to exact scope only, no descendants
+    status VARCHAR DEFAULT 'ACTIVE',    -- 'ACTIVE' | 'COMPLETED' | 'CANCELLED'
+    is_deleted BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP,
+    CHECK: NOT (scope_only AND visibility_upward)
+)
+-- trg_check_event_creator: must be organizer, scope must be within creator's subtree
+-- trg_scope_check_event: scope must belong to same org
+-- trg_populate_event_participants: AFTER INSERT, auto-populates eligible voters
+-- trg_auto_complete_event: BEFORE UPDATE, sets status=COMPLETED if end_time passed
+
+candidates (
+    candidate_id SERIAL PK,
+    event_id FK→events CASCADE,
+    candidate_name VARCHAR(100) NOT NULL,
+    description TEXT,
+    UNIQUE(event_id, candidate_name)
+)
+
+event_participants (
+    event_id FK→events,
+    orgid, uid FK→org_members CASCADE,
+    has_voted BOOLEAN DEFAULT FALSE,
+    PK(event_id, orgid, uid)
+)
+
+votes (
+    vote_id SERIAL PK,
+    event_id FK→events,
+    orgid, uid FK→org_members,
+    candidate_id FK→candidates,
+    voter_hash TEXT,                    -- SHA256 of event+org+uid+salt (deterministic)
+    voted_at TIMESTAMP,
+    ip_address INET,
+    device_fingerprint TEXT,
+    UNIQUE(event_id, orgid, uid),       -- one vote per member per event
+    FK(event_id, orgid, uid)→event_participants
+)
+-- trg_validate_vote_candidate: candidate must belong to event
+-- trg_check_voter_role: uid must have is_voter=TRUE
+-- trg_check_vote_validity: checks timing + scope eligibility
+-- trg_anonymize_vote: generates voter_hash BEFORE INSERT
+-- trg_mark_participant_voted: sets has_voted=TRUE AFTER INSERT
+-- trg_vote_count: increments vote_results AFTER INSERT
+-- trg_detect_vote_fraud: logs to fraud_logs if ip_count>4 or device_count>3
+
+vote_results (
+    event_id FK→events,
+    candidate_id FK→candidates,
+    vote_count INT DEFAULT 0,
+    PK(event_id, candidate_id)
+)
+-- Cache table, maintained by trg_vote_count
+
+user_sessions (
+    session_id UUID PK DEFAULT gen_random_uuid(),
+    token TEXT,
+    pid FK→uaccount,
+    identity_type VARCHAR(10),          -- 'ORG' | 'GOV' | 'UNIFIED'
+    identity_id VARCHAR(20),            -- orgid or epic_id or NULL
+    uid VARCHAR(20),                    -- for ORG login
+    created_at TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    ip_address INET,
+    user_agent TEXT
+)
+
+fraud_logs (
+    fraud_id SERIAL PK,
+    event_id, orgid, uid,
+    ip_address INET,
+    device_fingerprint TEXT,
+    reason TEXT,
+    created_at TIMESTAMP
+)
+
+audit_logs (
+    log_id SERIAL PK,
+    table_name, operation VARCHAR,      -- operation: INSERT | UPDATE | DELETE
+    record_id TEXT,
+    changed_data JSONB,
+    changed_by VARCHAR,
+    changed_at TIMESTAMP
+)
+-- Attached to: events, votes, org_members, member_roles
+
+-- =========================
+-- KEY DB FUNCTIONS
+-- =========================
+-- get_scope_descendants(scope_id) → all descendant scope_ids incl. self
+-- get_scope_ancestors(scope_id)   → all ancestor scope_ids incl. self
+-- get_visible_events(orgid, scope_id) → event_ids visible to a member
+--   respects: scope_only, visibility_upward, is_deleted

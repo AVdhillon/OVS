@@ -55,7 +55,16 @@ export const CurrentUser = createParamDecorator(
 
 // src/common/decorators/org-context.decorator.ts
 
-import { createParamDecorator, ExecutionContext, BadRequestException } from '@nestjs/common';
+import {
+  createParamDecorator,
+  ExecutionContext,
+  BadRequestException,
+} from '@nestjs/common';
+import {
+  registerDecorator,
+  ValidationOptions,
+  ValidationArguments,
+} from 'class-validator';
 
 export interface OrgContext {
   orgid: string;
@@ -72,6 +81,32 @@ export interface OrgContext {
  *
  * Throws BadRequestException if neither can be resolved.
  */
+
+export function IsEmailOrPhone(validationOptions?: ValidationOptions) {
+  return function (object: Object, propertyName: string) {
+    registerDecorator({
+      name: 'isEmailOrPhone',
+      target: object.constructor,
+      propertyName: propertyName,
+      options: validationOptions,
+      validator: {
+        validate(value: any, _args: ValidationArguments) {
+          if (!value) return true; // handled by @IsOptional
+
+          const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+          // simple international phone (digits, +, 10–15 length)
+          const phoneRegex = /^\+?[1-9]\d{9,14}$/;
+
+          return emailRegex.test(value) || phoneRegex.test(value);
+        },
+        defaultMessage() {
+          return 'caller_identifier must be a valid email or phone number';
+        },
+      },
+    });
+  };
+}
 export const OrgCtx = createParamDecorator(
   (_data: unknown, ctx: ExecutionContext): OrgContext => {
     const req = ctx.switchToHttp().getRequest();
@@ -137,46 +172,47 @@ export const RequireScope = (targetScopeParam = 'scope_id') =>
 // src/common/filters/http-exception.filter.ts
 
 import {
-    ExceptionFilter,
-    Catch,
-    ArgumentsHost,
-    HttpException,
-    HttpStatus,
-    Logger,
-  } from '@nestjs/common';
-  import type { Request, Response } from 'express';
-  
-  @Catch(HttpException)
-  export class HttpExceptionFilter implements ExceptionFilter {
-    private readonly logger = new Logger(HttpExceptionFilter.name);
-  
-    catch(exception: HttpException, host: ArgumentsHost) {
-      const ctx      = host.switchToHttp();
-      const response = ctx.getResponse<Response>();
-      const request  = ctx.getRequest<Request>();
-      const status   = exception.getStatus();
-      const raw      = exception.getResponse();
-  
-      // NestJS validation errors come as { message: string[], error, statusCode }
-      const message =
-        typeof raw === 'object' && raw !== null && 'message' in raw
-          ? (raw as any).message
-          : exception.message;
-  
-      const body = {
-        statusCode: status,
-        message,
-        path:      request.url,
-        timestamp: new Date().toISOString(),
-      };
-  
-      if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
-        this.logger.error(`${request.method} ${request.url}`, exception.stack);
-      }
-  
-      response.status(status).json(body);
+  ExceptionFilter,
+  Catch,
+  ArgumentsHost,
+  HttpException,
+  HttpStatus,
+  Logger,
+} from '@nestjs/common';
+import type { Request, Response } from 'express';
+
+@Catch(HttpException)
+export class HttpExceptionFilter implements ExceptionFilter {
+  private readonly logger = new Logger(HttpExceptionFilter.name);
+
+  catch(exception: HttpException, host: ArgumentsHost) {
+    const ctx = host.switchToHttp();
+    const response = ctx.getResponse<Response>();
+    const request = ctx.getRequest<Request>();
+    const status = exception.getStatus();
+    const raw = exception.getResponse();
+
+    // NestJS validation errors come as { message: string[], error, statusCode }
+    const message =
+      typeof raw === 'object' && raw !== null && 'message' in raw
+        ? (raw as any).message
+        : exception.message;
+
+    const body = {
+      statusCode: status,
+      message,
+      path: request.url,
+      timestamp: new Date().toISOString(),
+    };
+
+    if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
+      this.logger.error(`${request.method} ${request.url}`, exception.stack);
     }
+
+    response.status(status).json(body);
   }
+}
+
 
 
 --- common\filters\prisma-exception.filter.ts ---
@@ -184,95 +220,97 @@ import {
 // src/common/filters/prisma-exception.filter.ts
 
 import {
-    ExceptionFilter,
-    Catch,
-    ArgumentsHost,
-    HttpStatus,
-    Logger,
-  } from '@nestjs/common';
-  import { Prisma } from '@prisma/client';
-  import type { Request, Response } from 'express';
-  
-  @Catch(
-    Prisma.PrismaClientKnownRequestError,
-    Prisma.PrismaClientUnknownRequestError,
-    Prisma.PrismaClientValidationError,
-  )
-  export class PrismaExceptionFilter implements ExceptionFilter {
-    private readonly logger = new Logger(PrismaExceptionFilter.name);
-  
-    catch(
-      exception:
-        | Prisma.PrismaClientKnownRequestError
-        | Prisma.PrismaClientUnknownRequestError
-        | Prisma.PrismaClientValidationError,
-      host: ArgumentsHost,
-    ) {
-      const ctx      = host.switchToHttp();
-      const response = ctx.getResponse<Response>();
-      const request  = ctx.getRequest<Request>();
-  
-      let status  = HttpStatus.INTERNAL_SERVER_ERROR;
-      let message = 'Database error';
-  
-      if (exception instanceof Prisma.PrismaClientKnownRequestError) {
-        switch (exception.code) {
-          // Unique constraint violation
-          case 'P2002': {
-            status  = HttpStatus.CONFLICT;
-            const fields = (exception.meta?.target as string[])?.join(', ') ?? 'field';
-            message = `Duplicate value on: ${fields}`;
-            break;
-          }
-          // Record not found (findUniqueOrThrow / updateOrThrow)
-          case 'P2025':
-            status  = HttpStatus.NOT_FOUND;
-            message = 'Record not found';
-            break;
-          // Foreign key constraint failed
-          case 'P2003':
-            status  = HttpStatus.BAD_REQUEST;
-            message = 'Referenced record does not exist';
-            break;
-          // Required field missing
-          case 'P2011':
-            status  = HttpStatus.BAD_REQUEST;
-            message = 'Required field missing';
-            break;
-          default:
-            this.logger.error(
-              `Unhandled Prisma error ${exception.code}: ${exception.message}`,
-            );
+  ExceptionFilter,
+  Catch,
+  ArgumentsHost,
+  HttpStatus,
+  Logger,
+} from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import type { Request, Response } from 'express';
+
+@Catch(
+  Prisma.PrismaClientKnownRequestError,
+  Prisma.PrismaClientUnknownRequestError,
+  Prisma.PrismaClientValidationError,
+)
+export class PrismaExceptionFilter implements ExceptionFilter {
+  private readonly logger = new Logger(PrismaExceptionFilter.name);
+
+  catch(
+    exception:
+      | Prisma.PrismaClientKnownRequestError
+      | Prisma.PrismaClientUnknownRequestError
+      | Prisma.PrismaClientValidationError,
+    host: ArgumentsHost,
+  ) {
+    const ctx = host.switchToHttp();
+    const response = ctx.getResponse<Response>();
+    const request = ctx.getRequest<Request>();
+
+    let status = HttpStatus.INTERNAL_SERVER_ERROR;
+    let message = 'Database error';
+
+    if (exception instanceof Prisma.PrismaClientKnownRequestError) {
+      switch (exception.code) {
+        // Unique constraint violation
+        case 'P2002': {
+          status = HttpStatus.CONFLICT;
+          const fields =
+            (exception.meta?.target as string[])?.join(', ') ?? 'field';
+          message = `Duplicate value on: ${fields}`;
+          break;
         }
+        // Record not found (findUniqueOrThrow / updateOrThrow)
+        case 'P2025':
+          status = HttpStatus.NOT_FOUND;
+          message = 'Record not found';
+          break;
+        // Foreign key constraint failed
+        case 'P2003':
+          status = HttpStatus.BAD_REQUEST;
+          message = 'Referenced record does not exist';
+          break;
+        // Required field missing
+        case 'P2011':
+          status = HttpStatus.BAD_REQUEST;
+          message = 'Required field missing';
+          break;
+        default:
+          this.logger.error(
+            `Unhandled Prisma error ${exception.code}: ${exception.message}`,
+          );
       }
-  
-      if (exception instanceof Prisma.PrismaClientValidationError) {
-        status  = HttpStatus.BAD_REQUEST;
-        message = 'Invalid data sent to database';
-      }
-  
-      // Postgres-level RAISE EXCEPTION from triggers comes through as
-      // PrismaClientUnknownRequestError with the message in exception.message
-      if (exception instanceof Prisma.PrismaClientUnknownRequestError) {
-        // Extract the user-facing message from Postgres trigger exceptions.
-        // Format: "... ERROR: <our message>\nDETAIL: ..."
-        const match = exception.message.match(/ERROR:\s*(.+?)(?:\n|$)/);
-        if (match) {
-          status  = HttpStatus.BAD_REQUEST;
-          message = match[1].trim();
-        } else {
-          this.logger.error(`Unknown Prisma error: ${exception.message}`);
-        }
-      }
-  
-      response.status(status).json({
-        statusCode: status,
-        message,
-        path:      request.url,
-        timestamp: new Date().toISOString(),
-      });
     }
+
+    if (exception instanceof Prisma.PrismaClientValidationError) {
+      status = HttpStatus.BAD_REQUEST;
+      message = 'Invalid data sent to database';
+    }
+
+    // Postgres-level RAISE EXCEPTION from triggers comes through as
+    // PrismaClientUnknownRequestError with the message in exception.message
+    if (exception instanceof Prisma.PrismaClientUnknownRequestError) {
+      // Extract the user-facing message from Postgres trigger exceptions.
+      // Format: "... ERROR: <our message>\nDETAIL: ..."
+      const match = exception.message.match(/ERROR:\s*(.+?)(?:\n|$)/);
+      if (match) {
+        status = HttpStatus.BAD_REQUEST;
+        message = match[1].trim();
+      } else {
+        this.logger.error(`Unknown Prisma error: ${exception.message}`);
+      }
+    }
+
+    response.status(status).json({
+      statusCode: status,
+      message,
+      path: request.url,
+      timestamp: new Date().toISOString(),
+    });
   }
+}
+
 
 
 --- common\guards\roles.guard.ts ---
@@ -457,13 +495,27 @@ import {
   }
 
 
---- common\utils\bigint.util.ts ---
+--- common\utils\check.utilities.ts ---
 
 export function serializeBigInt(obj: any) {
-    return JSON.parse(
-      JSON.stringify(obj, (_, value) =>
-        typeof value === "bigint" ? value.toString() : value
-      )
-    );
+  return JSON.parse(
+    JSON.stringify(obj, (_, value) =>
+      typeof value === 'bigint' ? value.toString() : value,
+    ),
+  );
+}
+export function splitIdentifier(value: string) {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const phoneRegex = /^\+?[1-9]\d{9,14}$/;
+
+  if (emailRegex.test(value)) {
+    return { email: value, mobile: null };
   }
+
+  if (phoneRegex.test(value)) {
+    return { email: null, mobile: value };
+  }
+
+  throw new Error('Invalid identifier');
+}
 

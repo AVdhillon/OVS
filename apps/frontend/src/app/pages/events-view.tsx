@@ -1,355 +1,750 @@
-import { useState, useEffect } from 'react';
-import { useAppContext, VotingEvent, Candidate } from '../context/app-context';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { Button } from '../components/ui/button';
-import { Badge } from '../components/ui/badge';
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../components/ui/sheet';
-import { RadioGroup, RadioGroupItem } from '../components/ui/radio-group';
-import { Label } from '../components/ui/label';
-import { Calendar, MapPin, Vote, CheckCircle2 } from 'lucide-react';
-import { format } from 'date-fns';
+import {useState, useEffect, useCallback} from 'react';
+import {useAppContext, VotingEvent} from '../context/app-context';
+import {api} from '../../lib/api';
+import {Card, CardContent, CardHeader, CardTitle} from '../components/ui/card';
+import {Tabs, TabsContent, TabsList, TabsTrigger} from '../components/ui/tabs';
+import {Button} from '../components/ui/button';
+import {Badge} from '../components/ui/badge';
+import {Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription} from '../components/ui/sheet';
+import {RadioGroup, RadioGroupItem} from '../components/ui/radio-group';
+import {Label} from '../components/ui/label';
+import {Skeleton} from '../components/ui/skeleton';
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
 } from '../components/ui/alert-dialog';
-import { ImageWithFallback } from '../components/figma/ImageWithFallback';
-import { toast } from 'sonner';
+import {
+    Calendar,
+    Clock,
+    Vote,
+    CheckCircle2,
+    BarChart3,
+    Building2,
+    AlertCircle,
+    RefreshCw,
+    ChevronRight,
+} from 'lucide-react';
+import {format, formatDistanceToNow, isPast, isFuture} from 'date-fns';
+import {toast} from 'sonner';
+import {formatEventTime} from "./manage-events-view";
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function getEventStatus(event: VotingEvent): 'upcoming' | 'active' | 'ended' | 'cancelled' {
+    if (event.status === 'CANCELLED') return 'cancelled';
+    if (event.status === 'COMPLETED') return 'ended';
+    const now = new Date();
+    const start = new Date(event.start_time);
+    const end = new Date(event.end_time);
+    if (isFuture(start)) return 'upcoming';
+    if (isPast(end)) return 'ended';
+    return 'active';
+}
+
+function StatusBadge({event}: { event: VotingEvent }) {
+    const s = getEventStatus(event);
+    const map = {
+        upcoming: 'bg-amber-50 text-amber-700 border-amber-200',
+        active: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+        ended: 'bg-slate-100 text-slate-600 border-slate-200',
+        cancelled: 'bg-red-50 text-red-600 border-red-200',
+    };
+    const label = {upcoming: 'Upcoming', active: 'Live', ended: 'Ended', cancelled: 'Cancelled'};
+    return (
+        <Badge variant="outline" className={`text-xs font-medium ${map[s]}`}>
+            {s === 'active' && (
+                <span className="mr-1.5 inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"/>
+            )}
+            {label[s]}
+        </Badge>
+    );
+}
+
+function TimeInfo({event}: { event: VotingEvent }) {
+    const start = new Date(event.start_time);
+    const end = new Date(event.end_time);
+    const s = getEventStatus(event);
+
+    if (s === 'active') {
+        return (
+            <span className="text-xs text-emerald-600 font-medium">
+        Closes {formatDistanceToNow(end, {addSuffix: true})}
+      </span>
+        );
+    }
+    if (s === 'upcoming') {
+        return (
+            <span className="text-xs text-amber-600 font-medium">
+        Opens {formatDistanceToNow(start, {addSuffix: true})}
+      </span>
+        );
+    }
+    return (
+        <span className="text-xs text-muted-foreground">
+      {format(start, 'MMM d, yyyy')}
+    </span>
+    );
+}
+
+// ─── Results Bar ──────────────────────────────────────────────────────────────
+
+function ResultsDisplay({event}: { event: VotingEvent }) {
+    if (!event.results || event.results.length === 0) return null;
+
+    const maxVotes = Math.max(...event.results.map((r) => r.vote_count), 1);
+    const total = event.results.reduce((sum, r) => sum + r.vote_count, 0);
+
+    return (
+        <div className="space-y-3">
+            <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold text-foreground">Results</p>
+                <span className="text-xs text-muted-foreground">{total} total votes</span>
+            </div>
+            {event.results.map((r) => (
+                <div key={r.candidate_id} className="space-y-1">
+                    <div className="flex justify-between items-center text-sm">
+                        <span className="font-medium truncate">{r.candidate_name}</span>
+                        <span className="text-muted-foreground ml-2 shrink-0">
+              {r.percentage.toFixed(1)}%
+            </span>
+                    </div>
+                    <div className="h-2 bg-muted rounded-full overflow-hidden">
+                        <div
+                            className="h-full bg-primary rounded-full transition-all duration-700"
+                            style={{width: `${(r.vote_count / maxVotes) * 100}%`}}
+                        />
+                    </div>
+                </div>
+            ))}
+        </div>
+    );
+}
+
+// ─── Event Card ───────────────────────────────────────────────────────────────
+
+interface EventCardProps {
+    event: VotingEvent;
+    onVote: (event: VotingEvent) => void;
+    onViewResults: (event: VotingEvent) => void;
+    canVote: boolean;
+}
+
+function EventCard({event, onVote, onViewResults, canVote}: EventCardProps) {
+    const s = getEventStatus(event);
+    const showResults =
+        event.has_voted ||
+        s === 'ended' ||
+        (s === 'active' && event.show_live_results);
+
+    return (
+        <Card className="group flex flex-col hover:shadow-md transition-all duration-200 border-border/60">
+            <CardHeader className="pb-3">
+                <div className="flex items-start justify-between gap-2">
+                    <StatusBadge event={event}/>
+                    <TimeInfo event={event}/>
+                </div>
+                <CardTitle className="text-base leading-snug mt-2 group-hover:text-primary transition-colors">
+                    {event.title}
+                </CardTitle>
+                {event.description && (
+                    <p className="text-sm text-muted-foreground line-clamp-2 mt-0.5">
+                        {event.description}
+                    </p>
+                )}
+            </CardHeader>
+
+            <CardContent className="flex flex-col flex-1 gap-4 pt-0">
+                {/* Meta */}
+                <div className="space-y-1.5 text-sm text-muted-foreground">
+                    <div className="flex items-center gap-2">
+                        <Building2 className="h-3.5 w-3.5 shrink-0"/>
+                        <span className="font-mono text-xs">{event.orgid}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <Calendar className="h-3.5 w-3.5 shrink-0"/>
+                        <span>
+    {formatEventTime(event.start_time, event.end_time)}
+  </span>
+                    </div>
+                    {event.candidates && (
+                        <div className="flex items-center gap-2">
+                            <Vote className="h-3.5 w-3.5 shrink-0"/>
+                            <span>{event.candidates.length} candidates</span>
+                        </div>
+                    )}
+                </div>
+
+                {/* Results preview (inline for voted/completed with live results) */}
+                {showResults && event.results && event.results.length > 0 && (
+                    <ResultsDisplay event={event}/>
+                )}
+
+                {/* Actions */}
+                <div className="mt-auto pt-1">
+                    {s === 'active' && !event.has_voted && canVote && (
+                        <Button className="w-full" size="sm" onClick={() => onVote(event)}>
+                            <Vote className="h-4 w-4 mr-2"/>
+                            Cast Vote
+                        </Button>
+                    )}
+
+                    {s === 'active' && !event.has_voted && !canVote && (
+                        <p className="text-xs text-center text-muted-foreground py-1">
+                            Not eligible to vote in this session
+                        </p>
+                    )}
+
+                    {event.has_voted && (
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-1.5 text-emerald-600 text-sm font-medium">
+                                <CheckCircle2 className="h-4 w-4"/>
+                                <span>Vote submitted</span>
+                            </div>
+                            {(showResults) && (
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 text-xs gap-1"
+                                    onClick={() => onViewResults(event)}
+                                >
+                                    Full results <ChevronRight className="h-3 w-3"/>
+                                </Button>
+                            )}
+                        </div>
+                    )}
+
+                    {(s === 'ended' || s === 'cancelled') && !event.has_voted && (
+                        <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">
+                {s === 'cancelled' ? 'Event cancelled' : 'Voting closed'}
+              </span>
+                            {s === 'ended' && event.results && event.results.length > 0 && (
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 text-xs gap-1"
+                                    onClick={() => onViewResults(event)}
+                                >
+                                    <BarChart3 className="h-3 w-3"/> Results
+                                </Button>
+                            )}
+                        </div>
+                    )}
+
+                    {s === 'upcoming' && (
+                        <p className="text-xs text-center text-muted-foreground py-1">
+                            Voting not yet open
+                        </p>
+                    )}
+                </div>
+            </CardContent>
+        </Card>
+    );
+}
+
+// ─── Empty State ──────────────────────────────────────────────────────────────
+
+function EmptyState({message}: { message: string }) {
+    return (
+        <Card className="border-dashed">
+            <CardContent className="py-16 flex flex-col items-center gap-3 text-muted-foreground">
+                <Vote className="h-8 w-8 opacity-30"/>
+                <p className="text-sm">{message}</p>
+            </CardContent>
+        </Card>
+    );
+}
+
+// ─── Skeleton Cards ───────────────────────────────────────────────────────────
+
+function CardSkeleton() {
+    return (
+        <Card>
+            <CardHeader className="space-y-2 pb-3">
+                <Skeleton className="h-5 w-16"/>
+                <Skeleton className="h-4 w-3/4"/>
+                <Skeleton className="h-3 w-full"/>
+            </CardHeader>
+            <CardContent className="space-y-3">
+                <Skeleton className="h-3 w-1/2"/>
+                <Skeleton className="h-3 w-2/3"/>
+                <Skeleton className="h-8 w-full mt-2"/>
+            </CardContent>
+        </Card>
+    );
+}
+
+// ─── Grid ─────────────────────────────────────────────────────────────────────
+
+function EventGrid({
+                       events,
+                       emptyMsg,
+                       onVote,
+                       onViewResults,
+                       canVote,
+                       loading,
+                   }: {
+    events: VotingEvent[];
+    emptyMsg: string;
+    onVote: (e: VotingEvent) => void;
+    onViewResults: (e: VotingEvent) => void;
+    canVote: boolean;
+    loading: boolean;
+}) {
+    if (loading) {
+        return (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                {[1, 2, 3].map((i) => <CardSkeleton key={i}/>)}
+            </div>
+        );
+    }
+    if (events.length === 0) return <EmptyState message={emptyMsg}/>;
+    return (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {events.map((event) => (
+                <EventCard
+                    key={event.event_id}
+                    event={event}
+                    onVote={onVote}
+                    onViewResults={onViewResults}
+                    canVote={canVote}
+                />
+            ))}
+        </div>
+    );
+}
+
+// ─── Main View ────────────────────────────────────────────────────────────────
 
 export function EventsView() {
-  const { events, addEvent, voteOnEvent } = useAppContext();
-  const [selectedEvent, setSelectedEvent] = useState<VotingEvent | null>(null);
-  const [selectedCandidate, setSelectedCandidate] = useState<string>('');
-  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+    const {events, setEvents, updateEventInList, session} = useAppContext();
 
-  // Initialize with mock data
-  useEffect(() => {
-    if (events.length === 0) {
-      const mockEvents: VotingEvent[] = [
-        {
-          id: '1',
-          title: 'City Council Election 2026',
-          description:
-            'Annual city council election to elect representatives for the upcoming term. Your vote matters in shaping our community.',
-          organizer: 'City Electoral Commission',
-          organizationId: 'GOV-001',
-          scopeLevel: 0,
-          startDate: new Date('2026-03-15T08:00:00'),
-          endDate: new Date('2026-03-15T20:00:00'),
-          status: 'active',
-          enableLiveData: true,
-          restrictVisibility: false,
-          userVoted: false,
-          candidates: [
-            {
-              id: 'c1',
-              name: 'Sarah Johnson',
-              bio: 'Former business executive with 15 years of public service experience',
-              imageUrl:
-                'https://images.unsplash.com/photo-1770363757711-aa4db84d308d?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHx3b21hbiUyMHByb2Zlc3Npb25hbCUyMHBvcnRyYWl0JTIwY29uZmlkZW50fGVufDF8fHx8MTc3MzIzNzIzM3ww&ixlib=rb-4.1.0&q=80&w=1080',
-            },
-            {
-              id: 'c2',
-              name: 'Michael Chen',
-              bio: 'Community organizer focused on sustainable development',
-              imageUrl:
-                'https://images.unsplash.com/photo-1758691737644-ef8be18256c3?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxidXNpbmVzcyUyMGxlYWRlciUyMHByb2Zlc3Npb25hbCUyMGhlYWRzaG90fGVufDF8fHx8MTc3MzE5NjUwN3ww&ixlib=rb-4.1.0&q=80&w=1080',
-            },
-            {
-              id: 'c3',
-              name: 'Robert Williams',
-              bio: 'Former mayor with proven track record in urban planning',
-              imageUrl:
-                'https://images.unsplash.com/photo-1729219330287-a914170ca5ee?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxwb2xpdGljYWwlMjBjYW5kaWRhdGUlMjBwb3J0cmFpdCUyMHByb2Zlc3Npb25hbHxlbnwxfHx8fDE3NzMyMzcyMzN8MA&ixlib=rb-4.1.0&q=80&w=1080',
-            },
-          ],
-          votes: { c1: 0, c2: 0, c3: 0 },
-        },
-        {
-          id: '2',
-          title: 'Board of Directors Election',
-          description: 'Annual election for company board of directors',
-          organizer: 'TechCorp HR',
-          organizationId: 'TECH-001',
-          scopeLevel: 0,
-          startDate: new Date('2026-04-01T09:00:00'),
-          endDate: new Date('2026-04-01T17:00:00'),
-          status: 'active',
-          enableLiveData: false,
-          restrictVisibility: true,
-          userVoted: false,
-          candidates: [
-            {
-              id: 'c4',
-              name: 'Jennifer Martinez',
-              bio: 'VP of Operations with 20 years industry experience',
-            },
-            {
-              id: 'c5',
-              name: 'David Kim',
-              bio: 'Chief Technology Officer and innovation leader',
-            },
-          ],
-          votes: { c4: 0, c5: 0 },
-        },
-      ];
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
-      mockEvents.forEach((event) => addEvent(event));
-    }
-  }, []);
+    // Vote sheet state
+    const [sheetEvent, setSheetEvent] = useState<VotingEvent | null>(null);
+    const [sheetMode, setSheetMode] = useState<'vote' | 'results'>('vote');
+    const [sheetLoading, setSheetLoading] = useState(false);
+    const [selectedCandidate, setSelectedCandidate] = useState<number | null>(null);
+    const [confirmOpen, setConfirmOpen] = useState(false);
+    const [submitting, setSubmitting] = useState(false);
 
-  const activeEvents = events.filter((e) => e.status === 'active' && !e.userVoted);
-  const votedEvents = events.filter((e) => e.userVoted);
-  const completedEvents = events.filter((e) => e.status === 'completed');
+    // Can this session cast votes?
+    const canVote = session?.type !== 'GOV';
 
-  const handleVoteNow = (event: VotingEvent) => {
-    setSelectedEvent(event);
-    setSelectedCandidate('');
-  };
+    const filterVoterOnly = (list: VotingEvent[]) =>
+        list.filter((e) => e.is_voter);
 
-  const handleConfirmVote = () => {
-    if (!selectedCandidate || !selectedEvent) return;
-    setShowConfirmDialog(true);
-  };
+    // ── Load events ──────────────────────────────────────────────────────────────
 
-  const handleSubmitVote = () => {
-    if (!selectedEvent || !selectedCandidate) return;
-    voteOnEvent(selectedEvent.id, selectedCandidate);
-    setShowConfirmDialog(false);
-    setSelectedEvent(null);
-    setSelectedCandidate('');
-    toast.success('Vote submitted successfully!');
-  };
+    const loadEvents = useCallback(async () => {
+        setLoading(true);
+        setError(null);
+        try {
+            const data = await api.getEvents();
+            setEvents(data);
+        } catch (e: any) {
+            setError(e.message ?? 'Failed to load events');
+        } finally {
+            setLoading(false);
+        }
+    }, [setEvents]);
 
-  const EventCard = ({ event }: { event: VotingEvent }) => (
-    <Card className="hover:shadow-md transition-shadow">
-      <CardHeader>
-        <div className="flex items-start justify-between">
-          <div className="flex-1">
-            <CardTitle className="mb-2">{event.title}</CardTitle>
-            <CardDescription className="line-clamp-2">{event.description}</CardDescription>
-          </div>
-          {event.enableLiveData && (
-            <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
-              Live
-            </Badge>
-          )}
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="space-y-2 text-sm">
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <MapPin className="h-4 w-4" />
-            <span>{event.organizer}</span>
-          </div>
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <Calendar className="h-4 w-4" />
-            <span>
-              {format(event.startDate, 'MMM dd, yyyy')} • {format(event.startDate, 'hh:mm a')} -{' '}
-              {format(event.endDate, 'hh:mm a')}
-            </span>
-          </div>
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <Vote className="h-4 w-4" />
-            <span>Scope Level {event.scopeLevel}</span>
-          </div>
-        </div>
+    useEffect(() => {
+        loadEvents();
+    }, [loadEvents]);
 
-        {event.status === 'active' && !event.userVoted && (
-          <Button className="w-full" onClick={() => handleVoteNow(event)}>
-            Vote Now
-          </Button>
-        )}
+    // ── Open vote sheet (fetch full event with candidates) ────────────────────
 
-        {event.userVoted && (
-          <div className="flex items-center gap-2 text-green-600 justify-center py-2">
-            <CheckCircle2 className="h-5 w-5" />
-            <span>You have voted in this event</span>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
+    const handleVote = async (event: VotingEvent) => {
+        setSheetMode('vote');
+        setSelectedCandidate(null);
+        setSheetEvent(event);
 
-  return (
-    <div className="max-w-7xl mx-auto">
-      <div className="mb-6">
-        <h1 className="mb-2">My Voting Events</h1>
-        <p className="text-muted-foreground">
-          View and participate in voting events you're eligible for
-        </p>
-      </div>
+        if (!event.candidates || event.candidates.length === 0) {
+            setSheetLoading(true);
+            try {
+                const full = await api.getEvent(event.event_id);
+                setSheetEvent(full);
+            } catch {
+                toast.error('Failed to load event details');
+            } finally {
+                setSheetLoading(false);
+            }
+        }
+    };
 
-      <Tabs defaultValue="active">
-        <TabsList>
-          <TabsTrigger value="active">
-            Active ({activeEvents.length})
-          </TabsTrigger>
-          <TabsTrigger value="voted">
-            Voted ({votedEvents.length})
-          </TabsTrigger>
-          <TabsTrigger value="completed">
-            Completed ({completedEvents.length})
-          </TabsTrigger>
-        </TabsList>
+    // ── Open results sheet ────────────────────────────────────────────────────
 
-        <TabsContent value="active" className="mt-6">
-          {activeEvents.length === 0 ? (
-            <Card>
-              <CardContent className="py-12 text-center text-muted-foreground">
-                No active voting events at the moment
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {activeEvents.map((event) => (
-                <EventCard key={event.id} event={event} />
-              ))}
-            </div>
-          )}
-        </TabsContent>
+    const handleViewResults = async (event: VotingEvent) => {
+        setSheetMode('results');
+        setSheetEvent(event);
 
-        <TabsContent value="voted" className="mt-6">
-          {votedEvents.length === 0 ? (
-            <Card>
-              <CardContent className="py-12 text-center text-muted-foreground">
-                You haven't voted in any events yet
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {votedEvents.map((event) => (
-                <EventCard key={event.id} event={event} />
-              ))}
-            </div>
-          )}
-        </TabsContent>
+        // Fetch fresh results if not available
+        if (!event.results || event.results.length === 0) {
+            setSheetLoading(true);
+            try {
+                const results = await api.getResults(event.event_id);
+                const updated = {...event, results: results.results};
+                setSheetEvent(updated);
+                updateEventInList(event.event_id, {results: results.results});
+            } catch (e: any) {
+                toast.error(e.message ?? 'Results not available yet');
+            } finally {
+                setSheetLoading(false);
+            }
+        }
+    };
 
-        <TabsContent value="completed" className="mt-6">
-          {completedEvents.length === 0 ? (
-            <Card>
-              <CardContent className="py-12 text-center text-muted-foreground">
-                No completed events
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {completedEvents.map((event) => (
-                <EventCard key={event.id} event={event} />
-              ))}
-            </div>
-          )}
-        </TabsContent>
-      </Tabs>
+    // ── Submit vote ───────────────────────────────────────────────────────────
 
-      {/* Voting Sheet */}
-      <Sheet open={!!selectedEvent} onOpenChange={() => setSelectedEvent(null)}>
-        <SheetContent side="right" className="w-full sm:max-w-2xl overflow-y-auto">
-          {selectedEvent && (
-            <>
-              <SheetHeader>
-                <SheetTitle>{selectedEvent.title}</SheetTitle>
-              </SheetHeader>
+    const handleSubmitVote = async () => {
+        if (!sheetEvent || selectedCandidate === null) return;
 
-              <div className="mt-6 space-y-6">
+        setSubmitting(true);
+        try {
+            const res = await api.castVote({
+                event_id: sheetEvent.event_id,
+                candidate_id: selectedCandidate,
+            });
+
+            updateEventInList(sheetEvent.event_id, {
+                has_voted: true,
+                results: res.live_results ?? sheetEvent.results,
+            });
+
+            setConfirmOpen(false);
+            setSheetEvent(null);
+
+            toast.success('Your vote has been submitted!');
+            await loadEvents();
+        } catch (e: any) {
+            toast.error(e.message ?? 'Failed to submit vote');
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    const selectedCandidateName = sheetEvent?.candidates?.find(
+        (c) => c.candidate_id === selectedCandidate,
+    )?.candidate_name;
+
+    // ── Render ────────────────────────────────────────────────────────────────
+    const activeEvents    = filterVoterOnly(events.active_pending);
+    const votedEvents     = filterVoterOnly(events.voted);
+    const completedEvents = filterVoterOnly(events.completed);
+    const commonGridProps = {onVote: handleVote, onViewResults: handleViewResults, canVote, loading};
+
+    return (
+        <div className="max-w-7xl mx-auto space-y-6">
+            {/* Header */}
+            <div className="flex items-start justify-between gap-4">
                 <div>
-                  <h3 className="mb-2">Event Description</h3>
-                  <p className="text-muted-foreground">{selectedEvent.description}</p>
+                    <h1 className="text-2xl font-semibold tracking-tight">My Voting Events</h1>
+                    <p className="text-muted-foreground text-sm mt-1">
+                        View and participate in events you're eligible for
+                    </p>
                 </div>
-
-                <div>
-                  <h3 className="mb-4">Select a Candidate</h3>
-                  <RadioGroup value={selectedCandidate} onValueChange={setSelectedCandidate}>
-                    <div className="space-y-4">
-                      {selectedEvent.candidates.map((candidate) => (
-                        <Card
-                          key={candidate.id}
-                          className={`cursor-pointer transition-all ${
-                            selectedCandidate === candidate.id
-                              ? 'border-[#1e40af] bg-blue-50'
-                              : 'hover:border-gray-300'
-                          }`}
-                          onClick={() => setSelectedCandidate(candidate.id)}
-                        >
-                          <CardContent className="p-4">
-                            <div className="flex items-start gap-4">
-                              <RadioGroupItem value={candidate.id} id={candidate.id} />
-                              {candidate.imageUrl && (
-                                <ImageWithFallback
-                                  src={candidate.imageUrl}
-                                  alt={candidate.name}
-                                  className="w-16 h-16 rounded-full object-cover"
-                                />
-                              )}
-                              <div className="flex-1">
-                                <Label
-                                  htmlFor={candidate.id}
-                                  className="cursor-pointer text-base"
-                                >
-                                  {candidate.name}
-                                </Label>
-                                {candidate.bio && (
-                                  <p className="text-sm text-muted-foreground mt-1">
-                                    {candidate.bio}
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      ))}
-                    </div>
-                  </RadioGroup>
-                </div>
-
-                <div className="flex gap-3">
-                  <Button
+                <Button
                     variant="outline"
-                    onClick={() => setSelectedEvent(null)}
-                    className="flex-1"
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    onClick={handleConfirmVote}
-                    disabled={!selectedCandidate}
-                    className="flex-1"
-                  >
-                    Confirm Vote
-                  </Button>
-                </div>
-              </div>
-            </>
-          )}
-        </SheetContent>
-      </Sheet>
+                    size="sm"
+                    onClick={loadEvents}
+                    disabled={loading}
+                    className="shrink-0"
+                >
+                    <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`}/>
+                    Refresh
+                </Button>
+            </div>
 
-      {/* Confirmation Dialog */}
-      <AlertDialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Confirm Your Vote</AlertDialogTitle>
-            <AlertDialogDescription>
-              You are about to cast your vote for{' '}
-              <strong>
-                {selectedEvent?.candidates.find((c) => c.id === selectedCandidate)?.name}
-              </strong>{' '}
-              in {selectedEvent?.title}. This action cannot be undone. Are you sure you want to
-              proceed?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Go Back</AlertDialogCancel>
-            <AlertDialogAction onClick={handleSubmitVote}>Submit Vote</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
-  );
+            {/* Error */}
+            {error && (
+                <div
+                    className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md px-4 py-3">
+                    <AlertCircle className="h-4 w-4 shrink-0"/>
+                    {error}
+                </div>
+            )}
+
+            {/* GOV session notice */}
+            {session?.type === 'GOV' && (
+                <div
+                    className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-4 py-3">
+                    <AlertCircle className="h-4 w-4 shrink-0"/>
+                    Government (GOV) sessions cannot cast votes. Switch to an ORG or UNIFIED session to vote.
+                </div>
+            )}
+
+            {/* Tabs */}
+            <Tabs defaultValue="active">
+                <TabsList className="h-9">
+                    <TabsTrigger value="active" className="text-sm">
+                        Active
+                        {activeEvents.length > 0 && (
+                            <span
+                                className="ml-2 bg-primary text-primary-foreground text-xs rounded-full px-1.5 py-0.5 leading-none">
+                {activeEvents.length}
+              </span>
+                        )}
+                    </TabsTrigger>
+                    <TabsTrigger value="voted" className="text-sm">
+                        Voted
+                        {votedEvents.length > 0 && (
+                            <span
+                                className="ml-2 bg-muted text-muted-foreground text-xs rounded-full px-1.5 py-0.5 leading-none">
+                {votedEvents.length}
+              </span>
+                        )}
+                    </TabsTrigger>
+                    <TabsTrigger value="completed" className="text-sm">
+                        Completed
+                        {completedEvents.length > 0 && (
+                            <span
+                                className="ml-2 bg-muted text-muted-foreground text-xs rounded-full px-1.5 py-0.5 leading-none">
+                {completedEvents.length}
+              </span>
+                        )}
+                    </TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="active" className="mt-5">
+                    <EventGrid
+                        events={filterVoterOnly(events.active_pending)}
+                        emptyMsg="No active or upcoming voting events right now"
+                        {...commonGridProps}
+                    />
+                </TabsContent>
+
+                <TabsContent value="voted" className="mt-5">
+                    <EventGrid
+                        events={filterVoterOnly(events.voted)}
+                        emptyMsg="You haven't voted in any events yet"
+                        {...commonGridProps}
+                    />
+                </TabsContent>
+
+                <TabsContent value="completed" className="mt-5">
+                    <EventGrid
+                        events={filterVoterOnly(events.completed)}
+                        emptyMsg="No completed events"
+                        {...commonGridProps}
+                    />
+                </TabsContent>
+            </Tabs>
+
+            {/* ── Vote / Results Sheet ─────────────────────────────────────────────── */}
+            <Sheet open={!!sheetEvent} onOpenChange={(open) => !open && setSheetEvent(null)}>
+                <SheetContent side="right" className="w-full sm:max-w-lg flex flex-col gap-0 p-0">
+                    {sheetEvent && (
+                        <>
+                            {/* Sheet header */}
+                            <SheetHeader className="px-6 py-5 border-b">
+                                <div className="flex items-center gap-2 mb-1">
+                                    <StatusBadge event={sheetEvent}/>
+                                    {sheetMode === 'results' && (
+                                        <Badge variant="outline" className="text-xs">
+                                            <BarChart3 className="h-3 w-3 mr-1"/> Results
+                                        </Badge>
+                                    )}
+                                </div>
+                                <SheetTitle className="text-left leading-snug">{sheetEvent.title}</SheetTitle>
+                                {sheetEvent.description && (
+                                    <SheetDescription className="text-left">
+                                        {sheetEvent.description}
+                                    </SheetDescription>
+                                )}
+                                <div className="flex items-center gap-4 text-xs text-muted-foreground mt-1 flex-wrap">
+                                    <span className="flex items-center gap-1">
+                                        <Clock className="h-3 w-3" />
+                                        {formatEventTime(sheetEvent?.start_time, sheetEvent?.end_time)}
+                                    </span>
+                                    <span className="flex items-center gap-1">
+                    <Building2 className="h-3 w-3"/>
+                                        {sheetEvent.orgid}
+                  </span>
+                                </div>
+                            </SheetHeader>
+
+                            {/* Sheet body */}
+                            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+                                {sheetLoading ? (
+                                    <div className="space-y-4">
+                                        {[1, 2, 3].map((i) => (
+                                            <div key={i} className="flex items-center gap-3 p-4 border rounded-lg">
+                                                <Skeleton className="h-4 w-4 rounded-full"/>
+                                                <div className="flex-1 space-y-1.5">
+                                                    <Skeleton className="h-4 w-1/2"/>
+                                                    <Skeleton className="h-3 w-3/4"/>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : sheetMode === 'vote' ? (
+                                    <>
+                                        <div>
+                                            <p className="text-sm font-semibold mb-3">Select a candidate</p>
+                                            {(!sheetEvent.candidates || sheetEvent.candidates.length === 0) ? (
+                                                <p className="text-sm text-muted-foreground">No candidates
+                                                    available.</p>
+                                            ) : (
+                                                <RadioGroup
+                                                    value={selectedCandidate?.toString() ?? ''}
+                                                    onValueChange={(v) => setSelectedCandidate(Number(v))}
+                                                    className="space-y-3"
+                                                >
+                                                    {sheetEvent.candidates.map((candidate) => {
+                                                        const isSelected = selectedCandidate === candidate.candidate_id;
+                                                        return (
+                                                            <label
+                                                                key={candidate.candidate_id}
+                                                                htmlFor={`c-${candidate.candidate_id}`}
+                                                                className={`flex items-start gap-3 p-4 rounded-lg border cursor-pointer transition-all ${
+                                                                    isSelected
+                                                                        ? 'border-primary bg-primary/5 shadow-sm'
+                                                                        : 'border-border hover:border-muted-foreground/40'
+                                                                }`}
+                                                            >
+                                                                <RadioGroupItem
+                                                                    value={candidate.candidate_id.toString()}
+                                                                    id={`c-${candidate.candidate_id}`}
+                                                                    className="mt-0.5 shrink-0"
+                                                                />
+                                                                <div>
+                                                                    <p className="text-sm font-medium">{candidate.candidate_name}</p>
+                                                                    {candidate.description && (
+                                                                        <p className="text-xs text-muted-foreground mt-0.5">
+                                                                            {candidate.description}
+                                                                        </p>
+                                                                    )}
+                                                                </div>
+                                                            </label>
+                                                        );
+                                                    })}
+                                                </RadioGroup>
+                                            )}
+                                        </div>
+                                    </>
+                                ) : (
+                                    /* Results mode */
+                                    <>
+                                        {sheetEvent.results && sheetEvent.results.length > 0 ? (
+                                            <div className="space-y-5">
+                                                <div className="grid grid-cols-2 gap-3">
+                                                    <div className="bg-muted/50 rounded-lg p-3 text-center">
+                                                        <p className="text-2xl font-bold">
+                                                            {sheetEvent.results.reduce((s, r) => s + r.vote_count, 0)}
+                                                        </p>
+                                                        <p className="text-xs text-muted-foreground mt-0.5">Total
+                                                            votes</p>
+                                                    </div>
+                                                    <div className="bg-muted/50 rounded-lg p-3 text-center">
+                                                        <p className="text-2xl font-bold">
+                                                            {sheetEvent.candidates?.length ?? sheetEvent.results.length}
+                                                        </p>
+                                                        <p className="text-xs text-muted-foreground mt-0.5">Candidates</p>
+                                                    </div>
+                                                </div>
+
+                                                <div className="space-y-4">
+                                                    {[...sheetEvent.results]
+                                                        .sort((a, b) => b.vote_count - a.vote_count)
+                                                        .map((r, i) => (
+                                                            <div key={r.candidate_id} className="space-y-1.5">
+                                                                <div
+                                                                    className="flex items-center justify-between text-sm">
+                                                                    <div className="flex items-center gap-2">
+                                                                        {i === 0 && (
+                                                                            <span
+                                                                                className="text-amber-500 text-xs font-bold">
+                                        #1
+                                      </span>
+                                                                        )}
+                                                                        <span
+                                                                            className="font-medium">{r.candidate_name}</span>
+                                                                    </div>
+                                                                    <div
+                                                                        className="flex items-center gap-3 text-muted-foreground shrink-0">
+                                                                        <span
+                                                                            className="text-xs">{r.vote_count} votes</span>
+                                                                        <span
+                                                                            className="font-semibold text-foreground w-12 text-right">
+                                      {r.percentage.toFixed(1)}%
+                                    </span>
+                                                                    </div>
+                                                                </div>
+                                                                <div
+                                                                    className="h-2.5 bg-muted rounded-full overflow-hidden">
+                                                                    <div
+                                                                        className={`h-full rounded-full transition-all duration-700 ${
+                                                                            i === 0 ? 'bg-primary' : 'bg-primary/40'
+                                                                        }`}
+                                                                        style={{width: `${r.percentage}%`}}
+                                                                    />
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="text-center py-8 text-muted-foreground text-sm">
+                                                Results are not available yet
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+                            </div>
+
+                            {/* Sheet footer */}
+                            {sheetMode === 'vote' && !sheetLoading && (
+                                <div className="px-6 py-4 border-t flex gap-3">
+                                    <Button
+                                        variant="outline"
+                                        onClick={() => setSheetEvent(null)}
+                                        className="flex-1"
+                                    >
+                                        Cancel
+                                    </Button>
+                                    <Button
+                                        onClick={() => setConfirmOpen(true)}
+                                        disabled={selectedCandidate === null}
+                                        className="flex-1"
+                                    >
+                                        Confirm Vote
+                                    </Button>
+                                </div>
+                            )}
+                        </>
+                    )}
+                </SheetContent>
+            </Sheet>
+
+            {/* ── Confirm Dialog ────────────────────────────────────────────────────── */}
+            <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Confirm your vote</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            You're about to vote for{' '}
+                            <strong className="text-foreground">{selectedCandidateName}</strong> in{' '}
+                            <strong className="text-foreground">{sheetEvent?.title}</strong>.{' '}
+                            This cannot be undone.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={submitting}>Go back</AlertDialogCancel>
+                        <AlertDialogAction onClick={handleSubmitVote} disabled={submitting}>
+                            {submitting ? 'Submitting…' : 'Submit vote'}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+        </div>
+    );
 }

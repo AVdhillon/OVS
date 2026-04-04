@@ -1,4 +1,3 @@
-// dto/update-event.dto.ts
 import {
   IsString,
   IsOptional,
@@ -32,4 +31,11 @@ export class UpdateEventDto {
   @IsOptional()
   @IsBoolean()
   visible_upward?: boolean;
+
+  /**
+   * Mutually exclusive with visible_upward.
+   */
+  @IsOptional()
+  @IsBoolean()
+  scope_only?: boolean;
 }

@@ -1,5 +1,3 @@
-
-
 import { JwtUser } from 'src/common/decorators/current-user.decorator';
 
 declare global {

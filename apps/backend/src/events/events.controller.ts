@@ -1,6 +1,13 @@
 import {
-  Controller, Get, Post, Patch, Delete,
-  Param, Body, ParseIntPipe, UseGuards,
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Param,
+  Body,
+  ParseIntPipe,
+  UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -11,7 +18,7 @@ import { EventsService } from './events.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
 
-@UseGuards(JwtAuthGuard)          // all routes require a valid session
+@UseGuards(JwtAuthGuard) // all routes require a valid session
 @Controller('events')
 export class EventsController {
   constructor(private eventsService: EventsService) {}
@@ -39,23 +46,22 @@ export class EventsController {
   // (trg_check_event_creator) which already validates scope hierarchy.
   @Post()
   @UseGuards(RolesGuard)
-  @RequireOrganizer('orgid')        // reads orgid from body, uid from JWT or body
-  createEvent(
-    @CurrentUser() user: JwtUser,
-    @Body() dto: CreateEventDto,
-  ) {
+  @RequireOrganizer('orgid') // reads orgid from body, uid from JWT or body
+  createEvent(@CurrentUser() user: JwtUser, @Body() dto: CreateEventDto) {
     return this.eventsService.createEvent(user, dto);
   }
 
   // ── PATCH /events/:eventId ─────────────────────────────────────────────────
   // Creator-only check is done inside the service (compares created_by_uid).
   // RolesGuard still ensures caller is at least an organizer.
-  @Patch(':eventId')
+  @Patch(':orgId/:eventId/:actingUid')
   @UseGuards(RolesGuard)
-  @RequireOrganizer('orgid')
+  @RequireOrganizer('orgId') // match the param name exactly
   updateEvent(
     @CurrentUser() user: JwtUser,
+    //@Param('orgId', ParseIntPipe) orgId: string, // extract it
     @Param('eventId', ParseIntPipe) eventId: number,
+    //@Param('actingUid', ParseIntPipe) actingUid: string,
     @Body() dto: UpdateEventDto,
   ) {
     return this.eventsService.updateEvent(user, eventId, dto);

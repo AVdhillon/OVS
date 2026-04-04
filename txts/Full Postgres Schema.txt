@@ -1,3 +1,7 @@
+DROP SCHEMA public CASCADE;
+CREATE SCHEMA public;
+ALTER DATABASE serv1 SET app.voter_hash_salt = 'mzalpqnxskowcbjdeirvbhftugy';
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 -- =========================
 -- DATABASE: ONLINE VOTING PLATFORM
 -- =========================
@@ -33,6 +37,9 @@ CREATE TABLE organization (
     is_deleted BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+ALTER TABLE organization
+ADD CONSTRAINT chk_orgid_format
+CHECK (orgid ~ '^[A-Z]{3}[0-9]{4}$');
 
 -- =========================
 -- 3. ORG MEMBERS (MASTER)
@@ -61,23 +68,7 @@ CHECK (
     OR email IS NOT NULL
 )
 );
-
--- =========================
--- 4. USER ↔ ORG LINK (STRICT)
--- =========================
-CREATE TABLE user_org (
-    pid BIGINT,
-    orgid VARCHAR(20),
-    uid VARCHAR(20),
-
-    PRIMARY KEY (pid, orgid, uid),
-
-    FOREIGN KEY (pid) REFERENCES uaccount(pid),
-    FOREIGN KEY (orgid, uid)
-        REFERENCES org_members(orgid, uid)
-        ON DELETE CASCADE
-);
-
+CREATE INDEX idx_org_members_active ON org_members(orgid) WHERE is_deleted = FALSE;
 -- =========================
 -- 5. SCOPE TREE (SAFE)
 -- =========================
@@ -120,6 +111,23 @@ BEFORE INSERT OR UPDATE ON org_scope
 FOR EACH ROW
 EXECUTE FUNCTION prevent_scope_cycle();
 
+
+
+
+-- =========================
+-- 5b. SCOPE CLOSURE TABLE
+-- =========================
+CREATE TABLE scope_closure (
+    ancestor_id   INT NOT NULL,
+    descendant_id INT NOT NULL,
+    depth         INT NOT NULL DEFAULT 0,  -- 0 = self-reference
+
+    PRIMARY KEY (ancestor_id, descendant_id),
+    FOREIGN KEY (ancestor_id)   REFERENCES org_scope(scope_id) ON DELETE CASCADE,
+    FOREIGN KEY (descendant_id) REFERENCES org_scope(scope_id) ON DELETE CASCADE
+);
+CREATE INDEX idx_closure_ancestor   ON scope_closure(ancestor_id);
+CREATE INDEX idx_closure_descendant ON scope_closure(descendant_id);
 -- =========================
 -- 6. MEMBER ROLES
 -- =========================
@@ -141,6 +149,86 @@ CREATE TABLE member_roles (
         REFERENCES org_scope(scope_id)
 );
 
+CREATE OR REPLACE FUNCTION check_member_scope_org()
+RETURNS TRIGGER AS $$
+DECLARE
+    scope_org VARCHAR(20);
+BEGIN
+    SELECT orgid INTO scope_org
+    FROM org_scope
+    WHERE scope_id = NEW.scope_id;
+
+    IF scope_org IS NULL OR scope_org <> NEW.orgid THEN
+        RAISE EXCEPTION 'Scope % does not belong to org %', NEW.scope_id, NEW.orgid;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_check_member_scope_org
+BEFORE INSERT OR UPDATE ON member_roles
+FOR EACH ROW
+EXECUTE FUNCTION check_member_scope_org();
+
+-- FUNCTION: ADD NEW MEMBER TO ONGOING EVENTS
+
+CREATE OR REPLACE FUNCTION add_member_to_ongoing_events()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Only proceed if the new member has voter role
+    IF NEW.is_voter = FALSE THEN
+        RETURN NEW;
+    END IF;
+
+    INSERT INTO event_participants (event_id, orgid, uid)
+    SELECT e.event_id, NEW.orgid, NEW.uid
+    FROM events e
+    WHERE e.orgid = NEW.orgid
+      AND e.status = 'ACTIVE'
+      AND e.start_time <= CURRENT_TIMESTAMP
+      AND e.end_time   >= CURRENT_TIMESTAMP
+      AND e.is_deleted = FALSE
+      AND (
+          -- Downward: event is at this scope or an ancestor scope
+          (
+              e.scope_only = FALSE
+              AND e.scope_id IN (
+                  SELECT scope_id FROM get_scope_ancestors(NEW.scope_id)
+              )
+          )
+          OR
+          -- Scope only: event scope must exactly match member scope
+          (
+              e.scope_only = TRUE
+              AND e.scope_id = NEW.scope_id
+          )
+          OR
+          -- Upward: event is in a descendant scope with upward flag
+          (
+              e.visibility_upward = TRUE
+              AND e.scope_only = FALSE
+              AND e.scope_id IN (
+                  SELECT scope_id FROM get_scope_descendants(NEW.scope_id)
+              )
+          )
+      )
+    ON CONFLICT (event_id, orgid, uid) DO NOTHING;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_add_member_to_ongoing_events
+AFTER INSERT ON member_roles
+FOR EACH ROW
+EXECUTE FUNCTION add_member_to_ongoing_events();
+
+CREATE TRIGGER trg_add_member_to_ongoing_events_update
+AFTER UPDATE OF is_voter ON member_roles
+FOR EACH ROW
+WHEN (OLD.is_voter = FALSE AND NEW.is_voter = TRUE)
+EXECUTE FUNCTION add_member_to_ongoing_events();
 -- =========================
 -- 7. GOVERNMENT IDENTITY
 -- =========================
@@ -183,7 +271,7 @@ BEGIN
     IF NEW.identity_type = 'ORG' THEN
         -- org must exist
         IF NOT EXISTS (
-            SELECT 1 FROM organization 
+            SELECT 1 FROM organization
             WHERE orgid = NEW.identity_id
         ) THEN
             RAISE EXCEPTION 'Invalid organization identity';
@@ -200,7 +288,7 @@ BEGIN
 
     ELSIF NEW.identity_type = 'GOV' THEN
         IF NOT EXISTS (
-            SELECT 1 FROM gov_identity 
+            SELECT 1 FROM gov_identity
             WHERE epic_id = NEW.identity_id
         ) THEN
             RAISE EXCEPTION 'Invalid government identity';
@@ -216,6 +304,24 @@ BEFORE INSERT OR UPDATE ON identity_wallet
 FOR EACH ROW
 EXECUTE FUNCTION validate_identity_wallet();
 
+CREATE OR REPLACE FUNCTION cleanup_org_wallet_on_member_delete()
+RETURNS TRIGGER AS $$
+BEGIN
+    DELETE FROM identity_wallet
+    WHERE pid = OLD.pid          -- OLD.pid is directly available, no subquery needed
+    AND identity_type = 'ORG'
+    AND identity_id = OLD.orgid
+    AND uid = OLD.uid;
+
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_cleanup_org_wallet
+AFTER DELETE ON org_members
+FOR EACH ROW
+EXECUTE FUNCTION cleanup_org_wallet_on_member_delete();
+
 -- =========================
 -- 9. OTP (SECURE)
 -- =========================
@@ -225,12 +331,14 @@ CREATE TABLE otp_verification (
     otp_code TEXT NOT NULL,
     attempts INT DEFAULT 0,
 
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP NOT NULL,
-    is_verified BOOLEAN DEFAULT FALSE,
-
-    CHECK (expires_at > created_at)
+    is_verified BOOLEAN DEFAULT FALSE
 );
+
+ALTER TABLE otp_verification
+ADD CONSTRAINT chk_otp_expiry
+CHECK (expires_at > created_at);
 
 CREATE UNIQUE INDEX unique_active_otp
 ON otp_verification(identifier)
@@ -255,6 +363,7 @@ CREATE TABLE events (
 
     show_live_results BOOLEAN DEFAULT FALSE,
     visibility_upward BOOLEAN DEFAULT FALSE,
+    scope_only        BOOLEAN DEFAULT FALSE,
 
     status VARCHAR(20) DEFAULT 'ACTIVE',
     is_deleted BOOLEAN DEFAULT FALSE,
@@ -262,11 +371,21 @@ CREATE TABLE events (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
     FOREIGN KEY (orgid) REFERENCES organization(orgid),
-    FOREIGN KEY (scope_id) REFERENCES org_scope(scope_id),
-
-    CHECK (end_time > start_time),
-    CHECK (status IN ('ACTIVE', 'COMPLETED', 'CANCELLED'))
+    FOREIGN KEY (scope_id) REFERENCES org_scope(scope_id)
 );
+ALTER TABLE events
+ADD CONSTRAINT chk_scope_flags CHECK (
+    NOT (scope_only = TRUE AND visibility_upward = TRUE)
+);
+-- Ensure event time validity
+ALTER TABLE events
+ADD CONSTRAINT chk_event_time
+CHECK (end_time > start_time);
+
+-- Ensure valid event status
+ALTER TABLE events
+ADD CONSTRAINT chk_event_status
+CHECK (status IN ('ACTIVE', 'COMPLETED', 'CANCELLED'));
 
 -- Only organizer can create event
 CREATE OR REPLACE FUNCTION check_event_creator()
@@ -292,7 +411,7 @@ BEGIN
 
     -- enforce scope hierarchy
     IF NEW.scope_id NOT IN (
-        SELECT scope_id 
+        SELECT scope_id
         FROM get_scope_descendants(user_scope)
     ) THEN
         RAISE EXCEPTION 'Cannot create event outside your scope';
@@ -440,6 +559,10 @@ CREATE TABLE user_sessions (
 
     FOREIGN KEY (pid) REFERENCES uaccount(pid)
 );
+ALTER TABLE user_sessions
+ADD CONSTRAINT chk_session_identity_type
+CHECK (identity_type IN ('ORG', 'GOV', 'UNIFIED'));
+
 -- =========================
 -- INDEXES (PERFORMANCE)
 -- =========================
@@ -458,56 +581,73 @@ CREATE INDEX idx_events_orgid ON events(orgid);
 CREATE INDEX idx_votes_uid ON votes(uid);
 CREATE INDEX idx_active_sessions ON user_sessions(pid, identity_type, is_active);
 
--- =========================
--- END OF FILE
--- =========================
--- =========================
--- ADVANCED CONSTRAINTS
--- =========================
-
--- Ensure event time validity
-ALTER TABLE events
-ADD CONSTRAINT chk_event_time
-CHECK (end_time > start_time);
-
--- Ensure valid event status
-ALTER TABLE events
-ADD CONSTRAINT chk_event_status
-CHECK (status IN ('ACTIVE', 'COMPLETED', 'CANCELLED'));
-
-
--- Ensure OTP expiry logic
-ALTER TABLE otp_verification
-ADD CONSTRAINT chk_otp_expiry
-CHECK (expires_at > created_at);
-
 -- =========================================
 -- SCOPE FUNCTIONS
 -- =========================================
+CREATE OR REPLACE FUNCTION maintain_closure_insert()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Self-reference row
+    INSERT INTO scope_closure (ancestor_id, descendant_id, depth)
+    VALUES (NEW.scope_id, NEW.scope_id, 0);
+
+    -- Connect all ancestors of parent to this new node
+    IF NEW.parent_scope_id IS NOT NULL THEN
+        INSERT INTO scope_closure (ancestor_id, descendant_id, depth)
+        SELECT c.ancestor_id, NEW.scope_id, c.depth + 1
+        FROM scope_closure c
+        WHERE c.descendant_id = NEW.parent_scope_id;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_closure_insert
+AFTER INSERT ON org_scope
+FOR EACH ROW
+EXECUTE FUNCTION maintain_closure_insert();
+
+
 CREATE OR REPLACE FUNCTION get_scope_descendants(p_scope INT)
 RETURNS TABLE(scope_id INT) AS $$
-WITH RECURSIVE st AS (
-    SELECT scope_id FROM org_scope WHERE scope_id = p_scope
-    UNION ALL
-    SELECT s.scope_id FROM org_scope s
-    JOIN st ON s.parent_scope_id = st.scope_id
-)
-SELECT scope_id FROM st;
+    SELECT descendant_id FROM scope_closure WHERE ancestor_id = p_scope;
 $$ LANGUAGE sql;
 
 CREATE OR REPLACE FUNCTION get_scope_ancestors(p_scope INT)
 RETURNS TABLE(scope_id INT) AS $$
-WITH RECURSIVE st AS (
-    SELECT scope_id, parent_scope_id FROM org_scope WHERE scope_id = p_scope
-    UNION ALL
-    SELECT s.scope_id, s.parent_scope_id
-    FROM org_scope s
-    JOIN st ON st.parent_scope_id = s.scope_id
-)
-SELECT scope_id FROM st;
+    SELECT ancestor_id FROM scope_closure WHERE descendant_id = p_scope;
 $$ LANGUAGE sql;
--- check_scope_permission removed
 
+CREATE OR REPLACE FUNCTION prevent_nonempty_scope_delete()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM org_scope
+        WHERE parent_scope_id = OLD.scope_id
+    ) THEN
+        RAISE EXCEPTION
+            'Cannot delete scope % — it has child scopes. Delete children first.',
+            OLD.scope_name;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM member_roles
+        WHERE scope_id = OLD.scope_id
+    ) THEN
+        RAISE EXCEPTION
+            'Cannot delete scope % — members are assigned to it. Transfer members first.',
+            OLD.scope_name;
+    END IF;
+
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_prevent_nonempty_scope_delete
+BEFORE DELETE ON org_scope
+FOR EACH ROW
+EXECUTE FUNCTION prevent_nonempty_scope_delete();
 -- =========================
 -- FUNCTION: CHECK VOTING ELIGIBILITY
 -- =========================
@@ -516,15 +656,24 @@ RETURNS TABLE(event_id INT) AS $$
 SELECT e.event_id
 FROM events e
 WHERE e.orgid = p_orgid
+AND e.is_deleted = FALSE
 AND (
-    -- Downward visibility
-    e.scope_id IN (SELECT scope_id FROM get_scope_descendants(p_scope))
-
+    -- Scope only: exact match only
+    (
+        e.scope_only = TRUE
+        AND e.scope_id = p_scope
+    )
     OR
-
+    -- Downward visibility (default)
+    (
+        e.scope_only = FALSE
+        AND e.scope_id IN (SELECT scope_id FROM get_scope_descendants(p_scope))
+    )
+    OR
     -- Upward visibility if allowed
     (
-        e.visibility_upward = TRUE
+        e.scope_only = FALSE
+        AND e.visibility_upward = TRUE
         AND e.scope_id IN (SELECT scope_id FROM get_scope_ancestors(p_scope))
     )
 );
@@ -545,8 +694,23 @@ BEGIN
     FROM member_roles
     WHERE orgid = NEW.orgid AND uid = NEW.uid;
 
+    -- scope_only: must be exact match
+    IF ev.scope_only = TRUE THEN
+        IF user_scope <> ev.scope_id THEN
+            RAISE EXCEPTION 'Not eligible';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    -- Default: check descendants, and optionally ancestors
     IF user_scope NOT IN (
         SELECT scope_id FROM get_scope_descendants(ev.scope_id)
+    )
+    AND NOT (
+        ev.visibility_upward = TRUE
+        AND user_scope IN (
+            SELECT scope_id FROM get_scope_ancestors(ev.scope_id)
+        )
     ) THEN
         RAISE EXCEPTION 'Not eligible';
     END IF;
@@ -612,8 +776,29 @@ BEGIN
     FROM org_members om
     JOIN member_roles mr ON mr.orgid = om.orgid AND mr.uid = om.uid
     WHERE om.orgid = NEW.orgid AND mr.is_voter = TRUE
-      AND mr.scope_id IN (
-          SELECT scope_id FROM get_scope_descendants(NEW.scope_id)
+      AND (
+          -- Scope only: exact match, no descendants
+          (
+              NEW.scope_only = TRUE
+              AND mr.scope_id = NEW.scope_id
+          )
+          OR
+          -- Downward: voters in descendant scopes (default)
+          (
+              NEW.scope_only = FALSE
+              AND mr.scope_id IN (
+                  SELECT scope_id FROM get_scope_descendants(NEW.scope_id)
+              )
+          )
+          OR
+          -- Upward: ancestor scopes, only if flag is set
+          (
+              NEW.visibility_upward = TRUE
+              AND NEW.scope_only = FALSE
+              AND mr.scope_id IN (
+                  SELECT scope_id FROM get_scope_ancestors(NEW.scope_id)
+              )
+          )
       )
     ON CONFLICT (event_id, orgid, uid) DO NOTHING;
 
@@ -705,7 +890,11 @@ CREATE OR REPLACE FUNCTION generate_voter_hash(p_event INT, p_org VARCHAR, p_uid
 RETURNS TEXT AS $$
 BEGIN
     RETURN encode(
-        digest(p_event || '-' || p_org || '-' || p_uid || '-' || clock_timestamp()::TEXT, 'sha256'),
+        digest(
+            p_event::TEXT || '-' || p_org || '-' || p_uid
+            || '-' || current_setting('app.voter_hash_salt'),
+            'sha256'
+        ),
         'hex'
     );
 END;
@@ -766,7 +955,7 @@ BEGIN
     WHERE event_id = NEW.event_id
       AND device_fingerprint = NEW.device_fingerprint;
 
-    IF ip_count > 5 THEN
+    IF ip_count > 4 THEN
         INSERT INTO fraud_logs(event_id, orgid, uid, ip_address, device_fingerprint, reason)
         VALUES (NEW.event_id, NEW.orgid, NEW.uid, NEW.ip_address, NEW.device_fingerprint,
                 'Too many votes from same IP');
@@ -820,6 +1009,9 @@ BEGIN
     INSERT INTO audit_logs(table_name, operation, record_id, changed_data, changed_by)
     VALUES (TG_TABLE_NAME, TG_OP, rec_id, data, current_user);
 
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -868,8 +1060,122 @@ AFTER INSERT ON votes
 FOR EACH ROW
 EXECUTE FUNCTION remove_uid_after_vote();
 */
+-- =========================
+-- FUNCTION: REFRESH PARTICIPANTS ON VISIBILITY CHANGE
+-- =========================
+CREATE OR REPLACE FUNCTION refresh_event_participants_on_visibility_change()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- -------------------------------------------------------
+    -- STEP 1: Remove participants who no longer qualify
+    --         SAFETY: never touch rows where has_voted = TRUE
+    -- -------------------------------------------------------
+    DELETE FROM event_participants ep
+    WHERE ep.event_id = NEW.event_id
+      AND ep.has_voted = FALSE
+      AND NOT EXISTS (
+          SELECT 1
+          FROM member_roles mr
+          WHERE mr.orgid = ep.orgid
+            AND mr.uid   = ep.uid
+            AND mr.is_voter = TRUE
+            AND (
+                -- scope_only ON: exact scope match only
+                (
+                    NEW.scope_only = TRUE
+                    AND mr.scope_id = NEW.scope_id
+                )
+                OR
+                -- Default downward: voter is in a descendant scope
+                (
+                    NEW.scope_only = FALSE
+                    AND mr.scope_id IN (
+                        SELECT scope_id FROM get_scope_descendants(NEW.scope_id)
+                    )
+                )
+                OR
+                -- Upward: voter is in an ancestor scope, flag must be on
+                (
+                    NEW.scope_only = FALSE
+                    AND NEW.visibility_upward = TRUE
+                    AND mr.scope_id IN (
+                        SELECT scope_id FROM get_scope_ancestors(NEW.scope_id)
+                    )
+                )
+            )
+      );
 
+    -- -------------------------------------------------------
+    -- STEP 2: Add participants who newly qualify
+    -- -------------------------------------------------------
+    INSERT INTO event_participants (event_id, orgid, uid)
+    SELECT NEW.event_id, om.orgid, om.uid
+    FROM org_members om
+    JOIN member_roles mr
+      ON mr.orgid = om.orgid
+     AND mr.uid   = om.uid
+    WHERE om.orgid      = NEW.orgid
+      AND om.is_deleted = FALSE
+      AND mr.is_voter   = TRUE
+      AND (
+          -- scope_only ON: exact scope match only
+          (
+              NEW.scope_only = TRUE
+              AND mr.scope_id = NEW.scope_id
+          )
+          OR
+          -- Default downward: voter is in a descendant scope
+          (
+              NEW.scope_only = FALSE
+              AND mr.scope_id IN (
+                  SELECT scope_id FROM get_scope_descendants(NEW.scope_id)
+              )
+          )
+          OR
+          -- Upward: voter is in an ancestor scope, flag must be on
+          (
+              NEW.scope_only = FALSE
+              AND NEW.visibility_upward = TRUE
+              AND mr.scope_id IN (
+                  SELECT scope_id FROM get_scope_ancestors(NEW.scope_id)
+              )
+          )
+      )
+    ON CONFLICT (event_id, orgid, uid) DO NOTHING;
 
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Fires only when the three relevant columns are touched
+CREATE TRIGGER trg_refresh_event_participants_on_visibility
+AFTER UPDATE OF visibility_upward, scope_only, scope_id ON events
+FOR EACH ROW
+WHEN (
+    OLD.visibility_upward IS DISTINCT FROM NEW.visibility_upward
+    OR OLD.scope_only     IS DISTINCT FROM NEW.scope_only
+    OR OLD.scope_id       IS DISTINCT FROM NEW.scope_id
+)
+EXECUTE FUNCTION refresh_event_participants_on_visibility_change();
+
+CREATE OR REPLACE FUNCTION block_vote_on_deleted_event()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM events
+        WHERE event_id = NEW.event_id
+          AND is_deleted = TRUE
+    ) THEN
+        RAISE EXCEPTION 'Cannot vote on a deleted event';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_block_vote_deleted_event
+BEFORE INSERT ON votes
+FOR EACH ROW
+EXECUTE FUNCTION block_vote_on_deleted_event();
 -- =========================
 -- INDEXES FOR FRAUD + AUDIT
 -- =========================

@@ -1,45 +1,49 @@
-import { NestFactory, Reflector } from '@nestjs/core';
+import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
 import { BigIntInterceptor } from './common/interceptors/bigint.interceptor';
 
-
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // ── 1. Global Validation Pipe ──────────────────────────────────────────────
+  // ── 1. Global prefix ───────────────────────────────────────────────────────
+  //app.setGlobalPrefix('api/v1');
+
+  // ── 2. Graceful shutdown ───────────────────────────────────────────────────
+  app.enableShutdownHooks();
+
+  // ── 3. Validation Pipe ─────────────────────────────────────────────────────
   app.useGlobalPipes(
     new ValidationPipe({
-      whitelist: true,          // strip unknown fields from body
-      forbidNonWhitelisted: true, // throw if unknown fields are sent
-      transform: true,          // auto-transform @Param / @Query to declared types
-      transformOptions: {
-        enableImplicitConversion: true, // e.g. '123' → number for @Query params
-      },
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+      transformOptions: { enableImplicitConversion: true },
     }),
   );
 
-  // ── 2. Global Exception Filters ────────────────────────────────────────────
-  // Order matters: NestJS applies filters last-to-first.
-  // PrismaExceptionFilter must be registered BEFORE HttpExceptionFilter
-  // so Prisma errors are caught before the generic HTTP handler runs.
-  app.useGlobalFilters(
-    new PrismaExceptionFilter(),
-    new HttpExceptionFilter(),
-  );
+  // ── 4. Exception Filters (applied first-to-last globally) ──────────────────
+  app.useGlobalFilters(new PrismaExceptionFilter(), new HttpExceptionFilter());
 
-  // ── 3. Global Interceptor — BigInt serialization ───────────────────────────
+  // ── 5. Interceptors ────────────────────────────────────────────────────────
   app.useGlobalInterceptors(new BigIntInterceptor());
 
-  // ── 4. CORS (adjust origins for production) ────────────────────────────────
-  app.enableCors({
-    origin: process.env.ALLOWED_ORIGINS?.split(',') ?? '*',
-    credentials: true,
-  });
+  // ── 6. CORS ────────────────────────────────────────────────────────────────
+  const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',');
+  if (!allowedOrigins && process.env.NODE_ENV === 'production') {
+    throw new Error('ALLOWED_ORIGINS must be set in production');
+  }
+  app.enableCors({ origin: allowedOrigins ?? '*', credentials: true });
 
-  await app.listen(process.env.PORT ?? 3000);
+  // ── 7. Start ───────────────────────────────────────────────────────────────
+  const port = parseInt(process.env.PORT ?? '3000', 10);
+  await app.listen(port);
+  console.log(`Application running on: ${await app.getUrl()}`);
 }
 
-bootstrap();
+bootstrap().catch((err) => {
+  console.error('Fatal error during bootstrap:', err);
+  process.exit(1);
+});
