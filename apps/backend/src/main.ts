@@ -31,11 +31,33 @@ async function bootstrap() {
   app.useGlobalInterceptors(new BigIntInterceptor());
 
   // ── 6. CORS ────────────────────────────────────────────────────────────────
-  const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',');
-  if (!allowedOrigins && process.env.NODE_ENV === 'production') {
+  const allowedOrigins =
+    process.env.ALLOWED_ORIGINS?.split(',').map((o) => o.trim()) ?? [];
+
+  if (!allowedOrigins.length && process.env.NODE_ENV === 'production') {
     throw new Error('ALLOWED_ORIGINS must be set in production');
   }
-  app.enableCors({ origin: allowedOrigins ?? '*', credentials: true });
+
+  app.enableCors({
+    origin: (origin, callback) => {
+      // allow non-browser requests
+      if (!origin) return callback(null, true);
+
+      // exact match
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      // allow all Vercel previews (VERY useful)
+      if (origin.includes('vercel.app')) {
+        return callback(null, true);
+      }
+
+      console.error('CORS BLOCKED:', origin);
+      return callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true,
+  });
 
   // ── 7. Start ───────────────────────────────────────────────────────────────
   const port = parseInt(process.env.PORT ?? '3000', 10);
