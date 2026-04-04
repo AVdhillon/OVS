@@ -1,92 +1,93 @@
 // src/common/filters/prisma-exception.filter.ts
 
 import {
-    ExceptionFilter,
-    Catch,
-    ArgumentsHost,
-    HttpStatus,
-    Logger,
-  } from '@nestjs/common';
-  import { Prisma } from '@prisma/client';
-  import type { Request, Response } from 'express';
-  
-  @Catch(
-    Prisma.PrismaClientKnownRequestError,
-    Prisma.PrismaClientUnknownRequestError,
-    Prisma.PrismaClientValidationError,
-  )
-  export class PrismaExceptionFilter implements ExceptionFilter {
-    private readonly logger = new Logger(PrismaExceptionFilter.name);
-  
-    catch(
-      exception:
-        | Prisma.PrismaClientKnownRequestError
-        | Prisma.PrismaClientUnknownRequestError
-        | Prisma.PrismaClientValidationError,
-      host: ArgumentsHost,
-    ) {
-      const ctx      = host.switchToHttp();
-      const response = ctx.getResponse<Response>();
-      const request  = ctx.getRequest<Request>();
-  
-      let status  = HttpStatus.INTERNAL_SERVER_ERROR;
-      let message = 'Database error';
-  
-      if (exception instanceof Prisma.PrismaClientKnownRequestError) {
-        switch (exception.code) {
-          // Unique constraint violation
-          case 'P2002': {
-            status  = HttpStatus.CONFLICT;
-            const fields = (exception.meta?.target as string[])?.join(', ') ?? 'field';
-            message = `Duplicate value on: ${fields}`;
-            break;
-          }
-          // Record not found (findUniqueOrThrow / updateOrThrow)
-          case 'P2025':
-            status  = HttpStatus.NOT_FOUND;
-            message = 'Record not found';
-            break;
-          // Foreign key constraint failed
-          case 'P2003':
-            status  = HttpStatus.BAD_REQUEST;
-            message = 'Referenced record does not exist';
-            break;
-          // Required field missing
-          case 'P2011':
-            status  = HttpStatus.BAD_REQUEST;
-            message = 'Required field missing';
-            break;
-          default:
-            this.logger.error(
-              `Unhandled Prisma error ${exception.code}: ${exception.message}`,
-            );
+  ExceptionFilter,
+  Catch,
+  ArgumentsHost,
+  HttpStatus,
+  Logger,
+} from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import type { Request, Response } from 'express';
+
+@Catch(
+  Prisma.PrismaClientKnownRequestError,
+  Prisma.PrismaClientUnknownRequestError,
+  Prisma.PrismaClientValidationError,
+)
+export class PrismaExceptionFilter implements ExceptionFilter {
+  private readonly logger = new Logger(PrismaExceptionFilter.name);
+
+  catch(
+    exception:
+      | Prisma.PrismaClientKnownRequestError
+      | Prisma.PrismaClientUnknownRequestError
+      | Prisma.PrismaClientValidationError,
+    host: ArgumentsHost,
+  ) {
+    const ctx = host.switchToHttp();
+    const response = ctx.getResponse<Response>();
+    const request = ctx.getRequest<Request>();
+
+    let status = HttpStatus.INTERNAL_SERVER_ERROR;
+    let message = 'Database error';
+
+    if (exception instanceof Prisma.PrismaClientKnownRequestError) {
+      switch (exception.code) {
+        // Unique constraint violation
+        case 'P2002': {
+          status = HttpStatus.CONFLICT;
+          const fields =
+            (exception.meta?.target as string[])?.join(', ') ?? 'field';
+          message = `Duplicate value on: ${fields}`;
+          break;
         }
+        // Record not found (findUniqueOrThrow / updateOrThrow)
+        case 'P2025':
+          status = HttpStatus.NOT_FOUND;
+          message = 'Record not found';
+          break;
+        // Foreign key constraint failed
+        case 'P2003':
+          status = HttpStatus.BAD_REQUEST;
+          message = 'Referenced record does not exist';
+          break;
+        // Required field missing
+        case 'P2011':
+          status = HttpStatus.BAD_REQUEST;
+          message = 'Required field missing';
+          break;
+        default:
+          this.logger.error(
+            `Unhandled Prisma error ${exception.code}: ${exception.message}`,
+          );
       }
-  
-      if (exception instanceof Prisma.PrismaClientValidationError) {
-        status  = HttpStatus.BAD_REQUEST;
-        message = 'Invalid data sent to database';
-      }
-  
-      // Postgres-level RAISE EXCEPTION from triggers comes through as
-      // PrismaClientUnknownRequestError with the message in exception.message
-      if (exception instanceof Prisma.PrismaClientUnknownRequestError) {
-        // Extract the user-facing message from Postgres trigger exceptions.
-        // Format: "... ERROR: <our message>\nDETAIL: ..."
-        const match = exception.message.match(/ERROR:\s*(.+?)(?:\n|$)/);
-        if (match) {
-          status  = HttpStatus.BAD_REQUEST;
-          message = match[1].trim();
-        } else {
-          this.logger.error(`Unknown Prisma error: ${exception.message}`);
-        }
-      }
-  
-      response.status(status).json({
-        statusCode: status,
-        message,
-        path:      request.url,
-        timestamp: new Date().toISOString(),
-      });
     }
+
+    if (exception instanceof Prisma.PrismaClientValidationError) {
+      status = HttpStatus.BAD_REQUEST;
+      message = 'Invalid data sent to database';
+    }
+
+    // Postgres-level RAISE EXCEPTION from triggers comes through as
+    // PrismaClientUnknownRequestError with the message in exception.message
+    if (exception instanceof Prisma.PrismaClientUnknownRequestError) {
+      // Extract the user-facing message from Postgres trigger exceptions.
+      // Format: "... ERROR: <our message>\nDETAIL: ..."
+      const match = exception.message.match(/ERROR:\s*(.+?)(?:\n|$)/);
+      if (match) {
+        status = HttpStatus.BAD_REQUEST;
+        message = match[1].trim();
+      } else {
+        this.logger.error(`Unknown Prisma error: ${exception.message}`);
+      }
+    }
+
+    response.status(status).json({
+      statusCode: status,
+      message,
+      path: request.url,
+      timestamp: new Date().toISOString(),
+    });
   }
+}

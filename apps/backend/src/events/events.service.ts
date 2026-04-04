@@ -7,21 +7,11 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
-
-/**
- * Shape of the JWT payload after JwtStrategy.validate() runs.
- * UNIFIED  → { pid, type:'UNIFIED', session_id }
- * ORG      → { pid, orgid, uid, type:'ORG', session_id }
- * GOV      → { epic_id, type:'GOV', session_id }
- */
-interface JwtUser {
-  pid?: number;
-  orgid?: string;
-  uid?: string;
-  epic_id?: string;
-  type: 'UNIFIED' | 'ORG' | 'GOV';
-  session_id: string;
-}
+// FIX: import canonical JwtUser instead of redefining locally with wrong pid type.
+//      JWT payload stores pid as string (auth.service: payload = { pid: user.pid.toString() }).
+//      The local interface had pid?: number which is incorrect.
+import type { JwtUser } from '../common/decorators/current-user.decorator';
+import type { events as PrismaEvent } from '@prisma/client';
 
 @Injectable()
 export class EventsService {
@@ -29,11 +19,8 @@ export class EventsService {
 
   // ─────────────────────────────────────────────────────────────────────────
   // GET VISIBLE EVENTS
-  // Returns events visible to ALL identities the caller holds,
-  // segmented into active_pending / voted / completed.
   // ─────────────────────────────────────────────────────────────────────────
   async getVisibleEvents(user: JwtUser) {
-    // 1. Collect every (orgid, uid, scope_id) the caller has
     const identities = await this.resolveOrgIdentities(user);
 
     if (identities.length === 0) {
@@ -45,40 +32,57 @@ export class EventsService {
     const voted: any[] = [];
     const completed: any[] = [];
 
-    // 2. For each identity pull visible, non-deleted events
     for (const { orgid, uid, scope_id } of identities) {
       const rows = await this.prisma.$queryRaw<any[]>`
-        SELECT
-          e.event_id,
-          e.orgid,
-          e.title,
-          e.description,
-          e.start_time,
-          e.end_time,
-          e.status,
-          e.show_live_results,
-          e.visibility_upward,
-          e.scope_id,
-          ep.has_voted
+        SELECT e.event_id,
+               e.orgid,
+               e.title,
+               e.description,
+               e.start_time,
+               e.end_time,
+               e.status,
+               e.show_live_results,
+               e.visibility_upward,
+               e.scope_only,
+               e.scope_id,
+               e.created_by_uid,
+               ep.has_voted,
+               CASE WHEN ep.uid IS NOT NULL THEN TRUE ELSE FALSE END AS is_voter,
+               COALESCE(mr.is_organizer, FALSE)                      AS is_organizer
         FROM events e
-        LEFT JOIN event_participants ep
-          ON ep.event_id = e.event_id
-         AND ep.orgid    = ${orgid}
-         AND ep.uid      = ${uid}
+               LEFT JOIN event_participants ep
+                         ON ep.event_id = e.event_id
+                           AND ep.orgid = ${orgid}
+                           AND ep.uid = ${uid}
+               LEFT JOIN member_roles mr
+                         ON mr.orgid = ${orgid}
+                           AND mr.uid = ${uid}
         WHERE e.orgid = ${orgid}
           AND e.is_deleted = FALSE
           AND (
-            -- Downward visibility: event scope is same or below caller scope
-            e.scope_id IN (
-              SELECT scope_id FROM get_scope_descendants(${scope_id}::int)
+          -- Organizer can always see events within their scope downward (manages them)
+          (
+            mr.is_organizer = TRUE
+              AND e.scope_id IN (SELECT scope_id FROM get_scope_descendants(${scope_id}::int))
             )
             OR
-            -- Upward visibility: event explicitly allows it and is above caller
-            (
-              e.visibility_upward = TRUE
-              AND e.scope_id IN (
-                SELECT scope_id FROM get_scope_ancestors(${scope_id}::int)
-              )
+            -- Default downward visibility for voters
+          (
+            e.scope_only = FALSE
+              AND e.scope_id IN (SELECT scope_id FROM get_scope_descendants(${scope_id}::int))
+            )
+            OR
+            -- scope_only: exact scope match for voters
+          (
+            e.scope_only = TRUE
+              AND e.scope_id = ${scope_id}::int
+            )
+            OR
+            -- Upward visibility if flag is set
+          (
+            e.visibility_upward = TRUE
+              AND e.scope_only = FALSE
+              AND e.scope_id IN (SELECT scope_id FROM get_scope_ancestors(${scope_id}::int))
             )
           )
         ORDER BY e.start_time DESC
@@ -87,13 +91,18 @@ export class EventsService {
       for (const ev of rows) {
         const entry = {
           ...ev,
+          start_time: ev.start_time?.toISOString(),
+          end_time: ev.end_time?.toISOString(),
           orgid,
           acting_uid: uid,
-          start_time: ev.start_time,
-          end_time: ev.end_time,
+          created_by_uid: ev.created_by_uid,
+          is_voter: ev.is_voter,
+          is_organizer: ev.is_organizer,
         };
 
-        if (ev.status === 'COMPLETED' || ev.end_time < now) {
+        const end = new Date(ev.end_time);
+
+        if (ev.status === 'COMPLETED' || end < now) {
           completed.push(entry);
         } else if (ev.has_voted) {
           voted.push(entry);
@@ -103,7 +112,6 @@ export class EventsService {
       }
     }
 
-    // Deduplicate by event_id (a user may share scopes across identities)
     const dedup = (arr: any[]) => {
       const seen = new Set<number>();
       return arr.filter((e) => {
@@ -128,12 +136,11 @@ export class EventsService {
       where: { event_id: eventId, is_deleted: false },
       include: { candidates: true },
     });
+
     if (!event) throw new NotFoundException('Event not found');
 
-    // Verify caller has visibility into this event
     await this.assertEventVisible(user, event);
 
-    // Attach has_voted for the calling identity (if ORG participant)
     let has_voted = false;
     if (user.type === 'ORG' && user.uid) {
       const ep = await this.prisma.event_participants.findFirst({
@@ -142,10 +149,11 @@ export class EventsService {
       has_voted = ep?.has_voted ?? false;
     }
 
-    // Live results: include if event completed OR show_live_results=true
     const now = new Date();
     const showResults =
-      event.show_live_results || event.end_time < now || event.status === 'COMPLETED';
+      event.show_live_results ||
+      event.end_time < now ||
+      event.status === 'COMPLETED';
 
     let results: any[] | null = null;
     if (showResults) {
@@ -154,9 +162,10 @@ export class EventsService {
         select: { candidate_id: true, vote_count: true },
       });
     }
-
     return {
       ...event,
+      start_time: event.start_time?.toISOString() ?? null,
+      end_time: event.end_time?.toISOString() ?? null,
       has_voted,
       results,
     };
@@ -166,25 +175,32 @@ export class EventsService {
   // CREATE EVENT
   // ─────────────────────────────────────────────────────────────────────────
   async createEvent(user: JwtUser, dto: CreateEventDto) {
-    // 1. The caller must present matching orgid+uid
+    // FIX: validate scope flag mutual exclusion before hitting the DB constraint
+    if (dto.scope_only && dto.visible_upward) {
+      throw new BadRequestException(
+        'scope_only and visible_upward cannot both be true',
+      );
+    }
+    if (new Date(dto.start_time) < new Date()) {
+      throw new BadRequestException('start_time cannot be in the past');
+    }
     this.assertOrgIdentity(user, dto.orgid, dto.uid);
 
-    // 2. Must be an organizer in that org
     const role = await this.prisma.member_roles.findFirst({
       where: { orgid: dto.orgid, uid: dto.uid, is_organizer: true },
     });
-    if (!role) throw new ForbiddenException('You are not an organizer in this org');
+    if (!role)
+      throw new ForbiddenException('You are not an organizer in this org');
 
-    // 3. Scope must belong to the org and be within the organizer's scope tree
     await this.assertScopeInOrg(dto.orgid, dto.scope_id);
     await this.assertScopeReachable(role.scope_id, dto.scope_id);
 
-    // 4. Time sanity
     const start = new Date(dto.start_time);
     const end = new Date(dto.end_time);
-    if (end <= start) throw new BadRequestException('end_time must be after start_time');
+    if (end <= start)
+      throw new BadRequestException('end_time must be after start_time');
 
-    // 5. Create event (DB trigger trg_populate_event_participants runs after insert)
+    // DB trigger trg_populate_event_participants runs after insert
     const event = await this.prisma.events.create({
       data: {
         orgid: dto.orgid,
@@ -196,12 +212,13 @@ export class EventsService {
         end_time: end,
         show_live_results: dto.show_live_results ?? false,
         visibility_upward: dto.visible_upward ?? false,
+        // FIX: scope_only was silently dropped — now passed through from DTO
+        scope_only: dto.scope_only ?? false,
         status: 'ACTIVE',
       },
     });
 
-    // 6. Create candidates
-    const candidates = await this.prisma.candidates.createMany({
+    await this.prisma.candidates.createMany({
       data: dto.candidates.map((c) => ({
         event_id: event.event_id,
         candidate_name: c.candidate_name,
@@ -209,7 +226,7 @@ export class EventsService {
       })),
     });
 
-    // 7. Seed vote_results rows (count = 0) for each candidate
+    // Seed vote_results rows so all candidates appear in results even with 0 votes
     const createdCandidates = await this.prisma.candidates.findMany({
       where: { event_id: event.event_id },
     });
@@ -222,10 +239,7 @@ export class EventsService {
       skipDuplicates: true,
     });
 
-    return {
-      ...event,
-      candidates: createdCandidates,
-    };
+    return { ...event, candidates: createdCandidates };
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -237,9 +251,27 @@ export class EventsService {
     this.assertOrgIdentity(user, event.orgid ?? '', event.created_by_uid ?? '');
     this.assertEventNotStarted(event);
 
+    // FIX: validate mutual exclusion. Resolve effective values (dto may only
+    //      supply one of the two) against the existing event state.
+    const effectiveScopeOnly =
+      dto.scope_only !== undefined
+        ? dto.scope_only
+        : (event.scope_only ?? false);
+    const effectiveVisibleUpward =
+      dto.visible_upward !== undefined
+        ? dto.visible_upward
+        : (event.visibility_upward ?? false);
+
+    if (effectiveScopeOnly && effectiveVisibleUpward) {
+      throw new BadRequestException(
+        'scope_only and visible_upward cannot both be true',
+      );
+    }
+
     const start = dto.start_time ? new Date(dto.start_time) : event.start_time;
     const end = dto.end_time ? new Date(dto.end_time) : event.end_time;
-    if (end <= start) throw new BadRequestException('end_time must be after start_time');
+    if (end <= start)
+      throw new BadRequestException('end_time must be after start_time');
 
     const updated = await this.prisma.events.update({
       where: { event_id: eventId },
@@ -248,8 +280,14 @@ export class EventsService {
         ...(dto.description !== undefined && { description: dto.description }),
         ...(dto.start_time !== undefined && { start_time: start }),
         ...(dto.end_time !== undefined && { end_time: end }),
-        ...(dto.show_live_results !== undefined && { show_live_results: dto.show_live_results }),
-        ...(dto.visible_upward !== undefined && { visibility_upward: dto.visible_upward }),
+        ...(dto.show_live_results !== undefined && {
+          show_live_results: dto.show_live_results,
+        }),
+        ...(dto.visible_upward !== undefined && {
+          visibility_upward: dto.visible_upward,
+        }),
+        // FIX: scope_only was never passed through in updates
+        ...(dto.scope_only !== undefined && { scope_only: dto.scope_only }),
       },
     });
 
@@ -287,15 +325,15 @@ export class EventsService {
       event.status === 'COMPLETED';
 
     if (!canSee) {
-      throw new ForbiddenException('Live results are not enabled for this event');
+      throw new ForbiddenException(
+        'Live results are not enabled for this event',
+      );
     }
 
     const results = await this.prisma.vote_results.findMany({
       where: { event_id: eventId },
       include: {
-        candidates: {
-          select: { candidate_name: true, description: true },
-        },
+        candidates: { select: { candidate_name: true, description: true } },
       },
       orderBy: { vote_count: 'desc' },
     });
@@ -309,9 +347,10 @@ export class EventsService {
       total_votes: total,
       results: results.map((r) => ({
         candidate_id: r.candidate_id,
-        candidate_name: (r as any).candidates?.candidate_name,
+        candidate_name: r.candidates?.candidate_name,
         vote_count: r.vote_count,
-        percentage: total > 0 ? +(((r.vote_count ?? 0) / total) * 100).toFixed(2) : 0,
+        percentage:
+          total > 0 ? +(((r.vote_count ?? 0) / total) * 100).toFixed(2) : 0,
       })),
     };
   }
@@ -322,16 +361,14 @@ export class EventsService {
   async getParticipants(user: JwtUser, eventId: number) {
     const event = await this.getEventOrThrow(eventId);
 
-    // Must be organizer in that org
     if (user.type !== 'ORG' || user.orgid !== event.orgid) {
       throw new ForbiddenException('Organizer access required');
     }
     const role = await this.prisma.member_roles.findFirst({
-      where: { orgid: user.orgid!, uid: user.uid!, is_organizer: true },
+      where: { orgid: user.orgid, uid: user.uid!, is_organizer: true },
     });
     if (!role) throw new ForbiddenException('Not an organizer');
 
-    // Can only see participants within their scope or below
     const participants = await this.prisma.$queryRaw<any[]>`
       SELECT
         ep.uid,
@@ -356,7 +393,7 @@ export class EventsService {
   // HELPERS
   // ─────────────────────────────────────────────────────────────────────────
 
-  private async getEventOrThrow(eventId: number) {
+  private async getEventOrThrow(eventId: number): Promise<PrismaEvent> {
     const event = await this.prisma.events.findFirst({
       where: { event_id: eventId, is_deleted: false },
     });
@@ -364,17 +401,14 @@ export class EventsService {
     return event;
   }
 
-  private assertEventNotStarted(event: any) {
+  private assertEventNotStarted(event: PrismaEvent) {
     if (new Date() >= new Date(event.start_time)) {
-      throw new BadRequestException('Cannot modify an event that has already started');
+      throw new BadRequestException(
+        'Cannot modify an event that has already started',
+      );
     }
   }
 
-  /**
-   * Asserts the logged-in user is acting as the given orgid+uid combo.
-   * For UNIFIED users who may have multiple ORG identities, we check
-   * their identity_wallet or user_org linkage.
-   */
   private assertOrgIdentity(user: JwtUser, orgid: string, uid: string) {
     if (user.type === 'ORG') {
       if (user.orgid !== orgid || user.uid !== uid) {
@@ -383,23 +417,21 @@ export class EventsService {
         );
       }
     }
-    // UNIFIED users pass — service-level ownership check (created_by_uid) is enough
+    // UNIFIED users pass — ownership is verified via created_by_uid comparison
   }
 
-  /**
-   * Checks that scope_id belongs to orgid.
-   */
   private async assertScopeInOrg(orgid: string, scopeId: number) {
     const scope = await this.prisma.org_scope.findFirst({
       where: { scope_id: scopeId, orgid },
     });
-    if (!scope) throw new BadRequestException('Scope does not belong to this org');
+    if (!scope)
+      throw new BadRequestException('Scope does not belong to this org');
   }
 
-  /**
-   * Checks that targetScope is within the descendant tree of organizerScope.
-   */
-  private async assertScopeReachable(organizerScopeId: number, targetScopeId: number) {
+  private async assertScopeReachable(
+    organizerScopeId: number,
+    targetScopeId: number,
+  ) {
     const rows = await this.prisma.$queryRaw<{ scope_id: number }[]>`
       SELECT scope_id FROM get_scope_descendants(${organizerScopeId}::int)
     `;
@@ -409,9 +441,6 @@ export class EventsService {
     }
   }
 
-  /**
-   * Verifies the calling user can see the given event.
-   */
   private async assertEventVisible(user: JwtUser, event: any) {
     const identities = await this.resolveOrgIdentities(user);
     for (const { orgid, scope_id } of identities) {
@@ -421,19 +450,20 @@ export class EventsService {
         SELECT event_id FROM get_visible_events(${orgid}::varchar, ${scope_id}::int)
         WHERE event_id = ${event.event_id}
       `;
-      if (rows.length > 0) return; // visible — allow
+      if (rows.length > 0) return;
     }
     throw new ForbiddenException('Event not visible to your account');
   }
 
   /**
    * Resolves all (orgid, uid, scope_id) pairs the calling user can act as.
+   * Exported so CandidatesService can reuse it without duplication.
    *
    * - ORG session    → single identity from JWT
-   * - UNIFIED session → all ORG identities linked via identity_wallet / user_org
+   * - UNIFIED session → all ORG memberships linked via org_members.pid
    * - GOV session    → no org identities (returns empty)
    */
-  private async resolveOrgIdentities(
+  async resolveOrgIdentities(
     user: JwtUser,
   ): Promise<{ orgid: string; uid: string; scope_id: number }[]> {
     if (user.type === 'ORG' && user.orgid && user.uid) {
@@ -445,8 +475,9 @@ export class EventsService {
     }
 
     if (user.type === 'UNIFIED' && user.pid) {
-      // All ORG memberships linked to this pid
-      const links = await this.prisma.user_org.findMany({
+      // FIX: pid is string in JWT — BigInt() accepts string, but explicit cast
+      //      makes the intent clear and guards against accidental number coercion.
+      const links = await this.prisma.org_members.findMany({
         where: { pid: BigInt(user.pid) },
         select: { orgid: true, uid: true },
       });

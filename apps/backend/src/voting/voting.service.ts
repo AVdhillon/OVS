@@ -7,34 +7,59 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CastVoteDto } from './dto/cast-vote.dto';
+// FIX: removed local JwtUser interface (had pid?: number — wrong; JWT stores pid
+//      as a string via user.pid.toString() in auth.service.ts).
+//      Import canonical JwtUser from the decorator instead.
+import type { JwtUser } from '../common/decorators/current-user.decorator';
 import type { Request } from 'express';
-
-interface JwtUser {
-  pid?: number;
-  orgid?: string;
-  uid?: string;
-  epic_id?: string;
-  type: 'UNIFIED' | 'ORG' | 'GOV';
-  session_id: string;
-}
 
 @Injectable()
 export class VotingService {
   constructor(private prisma: PrismaService) {}
 
   async castVote(user: JwtUser, dto: CastVoteDto, req: Request) {
-    // ── 1. Resolve the identity being used to vote ───────────────────────
-    //
-    // The session type tells us how the user logged in.
-    // We validate they have the right to vote as dto.orgid + dto.uid.
-    await this.assertVotingIdentity(user, dto.orgid, dto.uid);
+    // ── 1. Validate the identity being used to vote ──────────────────────
+    // Ensures the session is permitted to act as member.orgid + member.uid.
 
     // ── 2. Load the event ────────────────────────────────────────────────
     const event = await this.prisma.events.findFirst({
       where: { event_id: dto.event_id, is_deleted: false },
     });
     if (!event) throw new NotFoundException('Event not found');
+    // ── Resolve org member from JWT ─────────────────────────────
+    if (user.type === 'GOV') {
+      throw new ForbiddenException('Government identity cannot vote');
+    }
+    if (!event.orgid) {
+      throw new BadRequestException('Event is not linked to an organization');
+    }
+    let member;
+    if (user.type === 'ORG') {
+      member = await this.prisma.org_members.findFirst({
+        where: {
+          orgid: user.orgid,
+          uid: user.uid,
+          is_deleted: false,
+        },
+      });
+    } else if (user.type === 'UNIFIED' && user.pid) {
+      member = await this.prisma.org_members.findFirst({
+        where: {
+          orgid: event.orgid,
+          pid: BigInt(user.pid),
+          is_deleted: false,
+        },
+      });
+    }
 
+    if (!member) {
+      throw new ForbiddenException('You are not a member of this organization');
+    }
+    if (member.orgid !== event.orgid) {
+      throw new ForbiddenException(
+        'You are not part of this event organization',
+      );
+    }
     // ── 3. Check event is currently open ────────────────────────────────
     const now = new Date();
     if (now < event.start_time) {
@@ -47,26 +72,24 @@ export class VotingService {
       throw new BadRequestException('Event has been cancelled');
     }
 
-    // ── 4. Check caller is a participant ────────────────────────────────
+    // ── 4. Check caller is a registered participant ──────────────────────
     const participant = await this.prisma.event_participants.findFirst({
-      where: {
-        event_id: dto.event_id,
-        orgid: dto.orgid,
-        uid: dto.uid,
-      },
+      where: { event_id: dto.event_id, orgid: member.orgid, uid: member.uid },
     });
     if (!participant) {
       throw new ForbiddenException('You are not a participant in this event');
     }
 
     // ── 5. Check not already voted ───────────────────────────────────────
+    // Primary check via event_participants.has_voted (fast).
     if (participant.has_voted) {
       throw new ConflictException('You have already voted in this event');
     }
 
-    // Double-check via votes table as well (race condition guard)
+    // Secondary check via votes table as a race-condition guard.
+    // The UNIQUE(event_id, orgid, uid) DB constraint is the final safety net.
     const existingVote = await this.prisma.votes.findFirst({
-      where: { event_id: dto.event_id, orgid: dto.orgid, uid: dto.uid },
+      where: { event_id: dto.event_id, orgid: member.orgid, uid: member.uid },
     });
     if (existingVote) {
       throw new ConflictException('You have already voted in this event');
@@ -80,23 +103,29 @@ export class VotingService {
       throw new BadRequestException('Candidate does not belong to this event');
     }
 
-    // ── 7. Check voter has the voter role ────────────────────────────────
+    // ── 7. Check voter role ──────────────────────────────────────────────
     const role = await this.prisma.member_roles.findFirst({
-      where: { orgid: dto.orgid, uid: dto.uid, is_voter: true },
+      where: { orgid: member.orgid, uid: member.uid, is_voter: true },
     });
     if (!role) {
-      throw new ForbiddenException('Your account does not have voter permissions');
+      throw new ForbiddenException(
+        'Your account does not have voter permissions',
+      );
     }
 
     // ── 8. Check scope eligibility ───────────────────────────────────────
-    //   Voter's scope must be within descendants of the event's scope.
-    const scopeCheck = await this.prisma.$queryRaw<{ scope_id: number }[]>`
-      SELECT scope_id FROM get_scope_descendants(${event.scope_id}::int)
-    `;
-    const eligibleScopes = scopeCheck.map((r) => r.scope_id);
-    if (!eligibleScopes.includes(role.scope_id)) {
-      throw new ForbiddenException('Your scope is not eligible for this event');
-    }
+    // Mirrors the DB trigger check_vote_validity exactly.
+    // Three cases based on event visibility flags:
+    //
+    //   scope_only = TRUE  → voter's scope must exactly match event scope
+    //   default (downward) → voter's scope must be a descendant of event scope
+    //   visibility_upward  → additionally allow voters in ancestor scopes
+    //
+    // FIX: the previous code only checked get_scope_descendants(), which:
+    //   • incorrectly allowed ALL descendants when scope_only = TRUE
+    //     (only the exact scope should be eligible)
+    //   • incorrectly rejected ancestor scopes when visibility_upward = TRUE
+    await this.assertScopeEligibility(event, role.scope_id);
 
     // ── 9. Extract IP ────────────────────────────────────────────────────
     const ip =
@@ -104,17 +133,20 @@ export class VotingService {
       req.socket.remoteAddress ||
       null;
 
-    // ── 10. Insert vote ───────────────────────────────────────────────────
-    //  DB triggers will:
-    //   • anonymize_vote      — set voter_hash
-    //   • trg_vote_count      — increment vote_results
-    //   • trg_mark_participant_voted — flip has_voted
-    //   • trg_detect_vote_fraud     — log suspicious patterns
+    // ── 10. Insert vote ──────────────────────────────────────────────────
+    // DB triggers fire after insert:
+    //   trg_anonymize_vote          — sets voter_hash from uid + salt
+    //   trg_validate_vote_candidate — confirms candidate belongs to event
+    //   trg_check_voter_role        — confirms is_voter = true
+    //   trg_vote_validity           — final scope eligibility check
+    //   trg_vote_count              — increments vote_results
+    //   trg_mark_participant_voted  — flips event_participants.has_voted
+    //   trg_detect_vote_fraud       — logs suspicious IP/device patterns
     const vote = await this.prisma.votes.create({
       data: {
         event_id: dto.event_id,
-        orgid: dto.orgid,
-        uid: dto.uid,
+        orgid: member.orgid,
+        uid: member.uid,
         candidate_id: dto.candidate_id,
         ip_address: ip,
         device_fingerprint: dto.device_fingerprint ?? null,
@@ -124,11 +156,11 @@ export class VotingService {
         event_id: true,
         candidate_id: true,
         voted_at: true,
-        voter_hash: true, // anonymized hash — not uid
+        voter_hash: true, // anonymised hash — uid is never returned
       },
     });
 
-    // ── 11. Optionally return live results if enabled ─────────────────────
+    // ── 11. Optionally return live results ───────────────────────────────
     let live_results: any[] | null = null;
     if (event.show_live_results) {
       live_results = await this.prisma.vote_results.findMany({
@@ -150,49 +182,72 @@ export class VotingService {
   // ─────────────────────────────────────────────────────────────────────────
   // HELPERS
   // ─────────────────────────────────────────────────────────────────────────
-
   /**
-   * Validates that the calling JWT session is permitted to vote as
-   * the supplied orgid + uid.
+   * Checks the voter's scope against the event's visibility configuration.
    *
-   * Rules:
-   *  - ORG session   → must match JWT orgid + uid exactly
-   *  - UNIFIED session → pid must be linked to orgid+uid via user_org
-   *  - GOV session   → never allowed to vote in org events
+   * Mirrors the DB trigger check_vote_validity (Full_Postgres_Schema.txt) so
+   * that the application returns a readable 403 rather than a raw Postgres
+   * exception when scope eligibility fails.
+   *
+   * Three cases (mutually exclusive by DB constraint):
+   *
+   *   scope_only = TRUE
+   *     → voter scope must exactly equal event scope_id.
+   *       No descendants, no ancestors.
+   *
+   *   default (scope_only = FALSE, visibility_upward = FALSE)
+   *     → voter scope must be a descendant of (or equal to) event scope_id.
+   *       This is the standard downward-visibility case.
+   *
+   *   visibility_upward = TRUE (scope_only implicitly FALSE per DB constraint)
+   *     → voter scope may be a descendant OR an ancestor of event scope_id.
+   *
+   * FIX: the previous implementation only called get_scope_descendants(),
+   *      which modelled only the default downward case and got the other two
+   *      wrong — silently allowing ineligible descendants under scope_only,
+   *      and silently rejecting eligible ancestors under visibility_upward.
    */
-  private async assertVotingIdentity(
-    user: JwtUser,
-    orgid: string,
-    uid: string,
+  private async assertScopeEligibility(
+    event: {
+      scope_id: number | null;
+      scope_only: boolean | null;
+      visibility_upward: boolean | null;
+    },
+    voterScopeId: number,
   ) {
-    if (user.type === 'GOV') {
-      throw new ForbiddenException(
-        'Government identity cannot vote in org events',
-      );
-    }
+    const eventScopeId = event.scope_id;
+    if (eventScopeId === null) return; // org-wide event — always eligible
 
-    if (user.type === 'ORG') {
-      if (user.orgid !== orgid || user.uid !== uid) {
+    // ── Case 1: scope_only ───────────────────────────────────────────────
+    if (event.scope_only) {
+      if (voterScopeId !== eventScopeId) {
         throw new ForbiddenException(
-          'Voting identity does not match your session',
+          'This event is restricted to a specific scope. Your scope is not eligible.',
         );
       }
       return;
     }
 
-    // UNIFIED — check pid → orgid+uid linkage
-    if (user.type === 'UNIFIED' && user.pid) {
-      const link = await this.prisma.user_org.findFirst({
-        where: { pid: BigInt(user.pid), orgid, uid },
-      });
-      if (!link) {
-        throw new ForbiddenException(
-          'Your unified account is not linked to this org identity',
-        );
-      }
-      return;
+    // ── Case 2 & 3: downward (always) + upward (optional) ───────────────
+    const descendantRows = await this.prisma.$queryRaw<{ scope_id: number }[]>`
+      SELECT scope_id FROM get_scope_descendants(${eventScopeId}::int)
+    `;
+    const descendants = descendantRows.map((r) => Number(r.scope_id));
+
+    if (descendants.includes(voterScopeId)) return; // eligible via downward
+
+    // ── Case 3: check ancestors if visibility_upward is set ─────────────
+    if (event.visibility_upward) {
+      const ancestorRows = await this.prisma.$queryRaw<{ scope_id: number }[]>`
+        SELECT scope_id FROM get_scope_ancestors(${eventScopeId}::int)
+      `;
+      const ancestors = ancestorRows.map((r) => Number(r.scope_id));
+
+      if (ancestors.includes(voterScopeId)) return; // eligible via upward
     }
 
-    throw new ForbiddenException('Unable to verify voting identity');
+    throw new ForbiddenException(
+      'Your scope is not eligible to vote in this event',
+    );
   }
 }

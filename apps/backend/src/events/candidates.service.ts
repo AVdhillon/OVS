@@ -6,26 +6,30 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AddCandidateDto } from './dto/add-candidate.dto';
-
-interface JwtUser {
-  pid?: number;
-  orgid?: string;
-  uid?: string;
-  type: 'UNIFIED' | 'ORG' | 'GOV';
-}
+// FIX: removed local JwtUser interface (had pid?: number — wrong; JWT stores it as string).
+//      Import canonical JwtUser from the decorator instead.
+import type { JwtUser } from '../common/decorators/current-user.decorator';
+import { EventsService } from './events.service';
 
 @Injectable()
 export class CandidatesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    // FIX: inject EventsService to reuse resolveOrgIdentities for UNIFIED sessions
+    //      rather than duplicating or mishandling the logic.
+    private eventsService: EventsService,
+  ) {}
 
   async addCandidate(user: JwtUser, eventId: number, dto: AddCandidateDto) {
-    const event = await this.assertOrganizerAndNotStarted(user, eventId);
+    await this.assertOrganizerAndNotStarted(user, eventId);
 
-    // Check name uniqueness within event
     const dup = await this.prisma.candidates.findFirst({
       where: { event_id: eventId, candidate_name: dto.candidate_name },
     });
-    if (dup) throw new BadRequestException('Candidate name already exists in this event');
+    if (dup)
+      throw new BadRequestException(
+        'Candidate name already exists in this event',
+      );
 
     const candidate = await this.prisma.candidates.create({
       data: {
@@ -35,9 +39,13 @@ export class CandidatesService {
       },
     });
 
-    // Seed vote_results row
+    // Seed vote_results row so this candidate appears in results with 0 votes
     await this.prisma.vote_results.create({
-      data: { event_id: eventId, candidate_id: candidate.candidate_id, vote_count: 0 },
+      data: {
+        event_id: eventId,
+        candidate_id: candidate.candidate_id,
+        vote_count: 0,
+      },
     });
 
     return candidate;
@@ -52,7 +60,9 @@ export class CandidatesService {
     if (!candidate) throw new NotFoundException('Candidate not found');
 
     // Ensure at least 2 candidates remain after deletion
-    const count = await this.prisma.candidates.count({ where: { event_id: eventId } });
+    const count = await this.prisma.candidates.count({
+      where: { event_id: eventId },
+    });
     if (count <= 2) {
       throw new BadRequestException('An event must have at least 2 candidates');
     }
@@ -60,7 +70,9 @@ export class CandidatesService {
     await this.prisma.vote_results.deleteMany({
       where: { event_id: eventId, candidate_id: candidateId },
     });
-    await this.prisma.candidates.delete({ where: { candidate_id: candidateId } });
+    await this.prisma.candidates.delete({
+      where: { candidate_id: candidateId },
+    });
 
     return { message: 'Candidate removed' };
   }
@@ -91,6 +103,21 @@ export class CandidatesService {
 
   // ─── Helper ──────────────────────────────────────────────────────────────
 
+  /**
+   * Asserts:
+   *   1. The event exists and has not yet started.
+   *   2. The calling user is an organizer in the event's org.
+   *
+   * FIX: the previous implementation had a broken UNIFIED session path:
+   *   - actingUid was set to null for non-ORG sessions
+   *   - the ORG ownership check was silently skipped
+   *   - the organizer role lookup then used event.created_by_uid as the uid,
+   *     meaning any UNIFIED session passed as long as the creator had a role
+   *
+   * New approach: use EventsService.resolveOrgIdentities to get all (orgid, uid)
+   * pairs the caller can act as, then check organizer role for any match on
+   * the event's org. This handles both ORG and UNIFIED sessions correctly.
+   */
   private async assertOrganizerAndNotStarted(user: JwtUser, eventId: number) {
     const event = await this.prisma.events.findFirst({
       where: { event_id: eventId, is_deleted: false },
@@ -98,29 +125,31 @@ export class CandidatesService {
     if (!event) throw new NotFoundException('Event not found');
 
     if (new Date() >= event.start_time) {
-      throw new BadRequestException('Cannot modify candidates after event has started');
+      throw new BadRequestException(
+        'Cannot modify candidates after event has started',
+      );
     }
 
-    // Must be the creator's org and have organizer role
-    const actingUid = user.type === 'ORG' ? user.uid : null;
-    const actingOrgid = user.type === 'ORG' ? user.orgid : null;
+    // Resolve all (orgid, uid) pairs this caller can act as
+    const identities = await this.eventsService.resolveOrgIdentities(user);
 
-    // For UNIFIED sessions, allow if they created the event
-    if (
-      user.type === 'ORG' &&
-      (actingOrgid !== event.orgid || actingUid !== event.created_by_uid)
-    ) {
-      throw new ForbiddenException('Only the event creator can modify candidates');
-    }
+    // Find a matching identity that is also an organizer in event.orgid
+    const matched = await Promise.all(
+      identities
+        .filter((id) => id.orgid === event.orgid)
+        .map(async (id) => {
+          const role = await this.prisma.member_roles.findFirst({
+            where: { orgid: id.orgid, uid: id.uid, is_organizer: true },
+          });
+          return role ? id : null;
+        }),
+    );
 
-    const role = actingUid
-      ? await this.prisma.member_roles.findFirst({
-          where: { orgid: event.orgid ?? '', uid: actingUid ?? event.created_by_uid ?? '', is_organizer: true },
-        })
-      : null;
-
-    if (user.type === 'ORG' && !role) {
-      throw new ForbiddenException('Organizer role required');
+    const authorized = matched.find(Boolean);
+    if (!authorized) {
+      throw new ForbiddenException(
+        "You must be an organizer in this event's org to manage candidates",
+      );
     }
 
     return event;

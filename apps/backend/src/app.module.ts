@@ -14,7 +14,10 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { CommonModule } from './common/common.module';
 @Module({
   imports: [
-    CommonModule, AuthModule, UsersModule, IdentityModule, 
+    CommonModule,
+    AuthModule,
+    UsersModule,
+    IdentityModule,
     ScheduleModule.forRoot(),
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,

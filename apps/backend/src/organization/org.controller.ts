@@ -9,7 +9,7 @@ import {
   Query,
   UseGuards,
   ParseIntPipe,
-  Req
+  Req,
 } from '@nestjs/common';
 import { OrgService } from './org.service';
 import { ScopeService } from './scope.service';
@@ -25,10 +25,9 @@ import type { JwtUser } from '../common/decorators/current-user.decorator';
 
 // ─── Helper: resolve caller uid ───────────────────────────────────────────────
 // ORG sessions: uid is baked into JWT.
-// UNIFIED sessions: caller passes uid via x-caller-uid header.
+// UNIFIED sessions: caller passes uid via x-caller-uid header or query param.
 function resolveCallerUid(user: JwtUser, req: any): string {
   if (user.uid) return user.uid;
-  // check header, then query param
   const fromHeader = req.headers?.['x-caller-uid'];
   if (typeof fromHeader === 'string' && fromHeader.trim())
     return fromHeader.trim().toUpperCase();
@@ -37,6 +36,7 @@ function resolveCallerUid(user: JwtUser, req: any): string {
     return fromQuery.trim().toUpperCase();
   return '';
 }
+
 @UseGuards(JwtAuthGuard)
 @Controller('org')
 export class OrgController {
@@ -55,17 +55,21 @@ export class OrgController {
   @Post('register')
   registerOrg(
     @CurrentUser() user: JwtUser,
-    @Body() dto: RegisterOrgDto & { caller_uid?: string },
+    // FIX: removed the `& { caller_uid?: string }` intersection type —
+    //      caller_uid is now a proper validated field on RegisterOrgDto itself.
+    @Body() dto: RegisterOrgDto,
+    @Req() req: any,
   ) {
     const pid = BigInt(user.pid!);
-    const callerUid = user.uid ?? dto.caller_uid;
-    return this.orgService.registerOrg(pid, callerUid, dto);
+    // ORG session → uid from JWT. UNIFIED → from DTO body field (now validated).
+    const callerUid = user.uid ?? dto.caller_uid ?? resolveCallerUid(user, req);
+    const callerIdentifier = dto.caller_identifier;
+    return this.orgService.registerOrg(pid, callerUid, callerIdentifier, dto);
   }
 
   /**
    * GET /org/mine
    * Returns all orgs where the caller has an organizer role.
-   * No RolesGuard — just needs a valid session.
    */
   @Get('mine')
   getMyOrgs(@CurrentUser() user: JwtUser) {
@@ -118,17 +122,18 @@ export class OrgController {
    * PATCH /org/:orgid/members/:uid
    * Organizer-only. Update role or scope of a member.
    */
-  @Patch(':orgid/members/:uid')
+  @Patch(':orgid/members/:targetUid')
   @UseGuards(RolesGuard)
   @RequireOrganizer('orgid')
   updateMember(
     @CurrentUser() user: JwtUser,
     @Param('orgid') orgid: string,
-    @Param('uid') targetUid: string,
+    @Param('targetUid') targetUid: string,
     @Body() dto: UpdateMemberDto,
     @Req() req: any,
   ) {
     const callerUid = resolveCallerUid(user, req);
+
     return this.orgService.updateMember(
       BigInt(user.pid!),
       orgid,
@@ -197,7 +202,8 @@ export class OrgController {
 
   /**
    * PATCH /org/:orgid/scope/:scope_id
-   * Organizer-only. Rename / reattach a scope node.
+   * Organizer-only. Rename a scope node.
+   * FIX: was documented as "rename / reattach" — reattachment removed per design.
    */
   @Patch(':orgid/scope/:scope_id')
   @UseGuards(RolesGuard)
@@ -215,7 +221,7 @@ export class OrgController {
 
   /**
    * DELETE /org/:orgid/scope/:scope_id
-   * Organizer-only. Delete a scope node (no members/events assigned).
+   * Organizer-only. Delete a leaf scope node (no members/children assigned).
    */
   @Delete(':orgid/scope/:scope_id')
   @UseGuards(RolesGuard)

@@ -19,7 +19,6 @@ model uaccount {
   created_at      DateTime?         @default(now()) @db.Timestamp(6)
   identity_wallet identity_wallet[]
   org_members     org_members[]
-  user_org        user_org[]
   user_sessions   user_sessions[]
 }
 
@@ -46,7 +45,6 @@ model org_members {
   member_roles       member_roles?
   organization       organization         @relation(fields: [orgid], references: [orgid], onDelete: NoAction, onUpdate: NoAction)
   uaccount           uaccount?            @relation(fields: [pid], references: [pid], onUpdate: NoAction)
-  user_org           user_org[]
   votes              votes[]
 
   @@id([orgid, uid])
@@ -54,6 +52,7 @@ model org_members {
   @@unique([orgid, mobile], map: "unique_org_mobile")
   @@index([orgid], map: "idx_org_members_orgid")
   @@index([pid], map: "idx_org_members_pid")
+  @@index([orgid], map: "idx_org_members_active", where: raw("(is_deleted = false)"))
 }
 
 model member_roles {
@@ -81,6 +80,7 @@ model events {
   end_time           DateTime             @db.Timestamp(6)
   show_live_results  Boolean?             @default(false)
   visibility_upward  Boolean?             @default(false)
+  scope_only         Boolean?             @default(false)
   status             String?              @default("ACTIVE") @db.VarChar(20)
   is_deleted         Boolean?             @default(false)
   created_at         DateTime?            @default(now()) @db.Timestamp(6)
@@ -190,15 +190,17 @@ model identity_wallet {
 }
 
 model org_scope {
-  scope_id        Int            @id @default(autoincrement())
-  orgid           String         @db.VarChar(20)
-  scope_name      String         @db.VarChar(100)
-  parent_scope_id Int?
-  events          events[]
-  member_roles    member_roles[]
-  organization    organization   @relation(fields: [orgid], references: [orgid], onDelete: NoAction, onUpdate: NoAction)
-  org_scope       org_scope?     @relation("org_scopeToorg_scope", fields: [parent_scope_id], references: [scope_id], onDelete: NoAction, onUpdate: NoAction)
-  other_org_scope org_scope[]    @relation("org_scopeToorg_scope")
+  scope_id                                             Int             @id @default(autoincrement())
+  orgid                                                String          @db.VarChar(20)
+  scope_name                                           String          @db.VarChar(100)
+  parent_scope_id                                      Int?
+  events                                               events[]
+  member_roles                                         member_roles[]
+  organization                                         organization    @relation(fields: [orgid], references: [orgid], onDelete: NoAction, onUpdate: NoAction)
+  org_scope                                            org_scope?      @relation("org_scopeToorg_scope", fields: [parent_scope_id], references: [scope_id], onDelete: NoAction, onUpdate: NoAction)
+  other_org_scope                                      org_scope[]     @relation("org_scopeToorg_scope")
+  scope_closure_scope_closure_ancestor_idToorg_scope   scope_closure[] @relation("scope_closure_ancestor_idToorg_scope")
+  scope_closure_scope_closure_descendant_idToorg_scope scope_closure[] @relation("scope_closure_descendant_idToorg_scope")
 
   @@unique([orgid, parent_scope_id, scope_name], map: "unique_scope_name")
   @@index([parent_scope_id], map: "idx_scope_parent")
@@ -215,18 +217,9 @@ model otp_verification {
   is_verified Boolean?  @default(false)
 }
 
-model user_org {
-  pid         BigInt
-  orgid       String      @db.VarChar(20)
-  uid         String      @db.VarChar(20)
-  org_members org_members @relation(fields: [orgid, uid], references: [orgid, uid], onDelete: Cascade, onUpdate: NoAction)
-  uaccount    uaccount    @relation(fields: [pid], references: [pid], onDelete: NoAction, onUpdate: NoAction)
-
-  @@id([pid, orgid, uid])
-}
-
 model user_sessions {
   session_id    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  token         String?
   pid           BigInt?
   identity_type String?   @db.VarChar(10)
   identity_id   String?   @db.VarChar(20)
@@ -236,7 +229,6 @@ model user_sessions {
   is_active     Boolean?  @default(true)
   ip_address    String?   @db.Inet
   user_agent    String?
-  token         String?
   uaccount      uaccount? @relation(fields: [pid], references: [pid], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([pid, identity_type, is_active], map: "idx_active_sessions")
@@ -250,4 +242,16 @@ model vote_results {
   events       events     @relation(fields: [event_id], references: [event_id], onDelete: NoAction, onUpdate: NoAction)
 
   @@id([event_id, candidate_id])
+}
+
+model scope_closure {
+  ancestor_id                                      Int
+  descendant_id                                    Int
+  depth                                            Int       @default(0)
+  org_scope_scope_closure_ancestor_idToorg_scope   org_scope @relation("scope_closure_ancestor_idToorg_scope", fields: [ancestor_id], references: [scope_id], onDelete: Cascade, onUpdate: NoAction)
+  org_scope_scope_closure_descendant_idToorg_scope org_scope @relation("scope_closure_descendant_idToorg_scope", fields: [descendant_id], references: [scope_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([ancestor_id, descendant_id])
+  @@index([ancestor_id], map: "idx_closure_ancestor")
+  @@index([descendant_id], map: "idx_closure_descendant")
 }

@@ -47,9 +47,9 @@ import {
   IsArray,
   ValidateNested,
   IsIn,
-  ArrayMinSize,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { IsEmailOrPhone } from '../../common/decorators/org-context.decorator';
 
 // ─── Participant row (used in table input) ────────────────────────────────────
 export class ParticipantRowDto {
@@ -60,13 +60,8 @@ export class ParticipantRowDto {
   })
   uid: string;
 
-  @IsOptional()
-  @Matches(/^[0-9]{10}$/, { message: 'mobile must be 10 digits' })
-  mobile?: string;
-
-  @IsOptional()
-  @IsEmail()
-  email?: string;
+  @IsEmailOrPhone()
+  participant_identifier?: string;
 
   /**
    * 'v' = voter only (default), 'vo' = voter + organizer
@@ -88,11 +83,33 @@ export class RegisterOrgDto {
   org_email?: string;
 
   /**
+   * The caller's own contact (mobile or email) used to bind them
+   * as first member. Required for UNIFIED sessions registering a new org.
+   */
+  @IsEmailOrPhone()
+  caller_identifier?: string;
+
+  /**
+   * The caller's desired uid within this org.
+   * Required when the session is UNIFIED (user.uid is absent from JWT).
+   * ORG sessions already carry uid in the JWT and may omit this.
+   */
+  // FIX: added — controller references dto.caller_uid but it was never declared
+  //      or validated in the DTO, causing silent undefined at runtime for UNIFIED sessions.
+  @IsOptional()
+  @Matches(/^[A-Z0-9]{4,20}$/, {
+    message: 'caller_uid must be 4–20 uppercase alphanumeric characters',
+  })
+  caller_uid?: string;
+
+  /**
    * Optional preferred prefix (3 uppercase letters).
    * If not provided, first 3 letters of org_name are used.
    */
   @IsOptional()
-  @Matches(/^[A-Z]{3}$/, { message: 'org_prefix must be exactly 3 uppercase letters' })
+  @Matches(/^[A-Z]{3}$/, {
+    message: 'org_prefix must be exactly 3 uppercase letters',
+  })
   org_prefix?: string;
 
   /**
@@ -103,12 +120,12 @@ export class RegisterOrgDto {
   @Matches(/^[0-9]{4}$/, { message: 'org_suffix must be exactly 4 digits' })
   org_suffix?: string;
 
-  
   @IsOptional()
   @Matches(/^[A-Z]{3}[0-9]{4}$/, {
     message: 'preferred_orgid must be in format ABC1234',
   })
   preferred_orgid?: string;
+
   /**
    * Participants to seed into org_members.
    * The submitter is always added as voter+organizer at ROOT scope.
@@ -121,7 +138,7 @@ export class RegisterOrgDto {
 
   /**
    * Alternatively, paste/import raw CSV text.
-   * Header row: uid,mobile,email,role
+   * Header row: uid,contact,role
    * role defaults to 'v' if absent.
    */
   @IsOptional()
@@ -148,26 +165,22 @@ export class CreateScopeDto {
   scope_name: string;
 
   /**
-   * Parent scope node. If null, attaches to ROOT.
+   * Parent scope node. If null/omitted, attaches as child of caller's scope node.
    */
   @IsOptional()
   @IsNumber()
   parent_scope_id?: number;
 }
 
+// FIX: removed parent_scope_id entirely.
+// Project design: "Scope is a fixed tree — nodes are not moved."
+// Node reattachment is explicitly not supported to keep the tree stable
+// and avoid expensive subtree restructuring. Only renaming is allowed.
 export class UpdateScopeDto {
   @IsOptional()
   @IsString()
   @Length(1, 100)
   scope_name?: string;
-
-  /**
-   * Reattach: provide new parent_scope_id.
-   * Pass null explicitly to make it a top-level child of ROOT.
-   */
-  @IsOptional()
-  @IsNumber()
-  parent_scope_id?: number | null;
 }
 
 
@@ -236,7 +249,7 @@ import {
   Query,
   UseGuards,
   ParseIntPipe,
-  Req
+  Req,
 } from '@nestjs/common';
 import { OrgService } from './org.service';
 import { ScopeService } from './scope.service';
@@ -252,10 +265,9 @@ import type { JwtUser } from '../common/decorators/current-user.decorator';
 
 // ─── Helper: resolve caller uid ───────────────────────────────────────────────
 // ORG sessions: uid is baked into JWT.
-// UNIFIED sessions: caller passes uid via x-caller-uid header.
+// UNIFIED sessions: caller passes uid via x-caller-uid header or query param.
 function resolveCallerUid(user: JwtUser, req: any): string {
   if (user.uid) return user.uid;
-  // check header, then query param
   const fromHeader = req.headers?.['x-caller-uid'];
   if (typeof fromHeader === 'string' && fromHeader.trim())
     return fromHeader.trim().toUpperCase();
@@ -264,6 +276,7 @@ function resolveCallerUid(user: JwtUser, req: any): string {
     return fromQuery.trim().toUpperCase();
   return '';
 }
+
 @UseGuards(JwtAuthGuard)
 @Controller('org')
 export class OrgController {
@@ -282,17 +295,21 @@ export class OrgController {
   @Post('register')
   registerOrg(
     @CurrentUser() user: JwtUser,
-    @Body() dto: RegisterOrgDto & { caller_uid?: string },
+    // FIX: removed the `& { caller_uid?: string }` intersection type —
+    //      caller_uid is now a proper validated field on RegisterOrgDto itself.
+    @Body() dto: RegisterOrgDto,
+    @Req() req: any,
   ) {
     const pid = BigInt(user.pid!);
-    const callerUid = user.uid ?? dto.caller_uid;
-    return this.orgService.registerOrg(pid, callerUid, dto);
+    // ORG session → uid from JWT. UNIFIED → from DTO body field (now validated).
+    const callerUid = user.uid ?? dto.caller_uid ?? resolveCallerUid(user, req);
+    const callerIdentifier = dto.caller_identifier;
+    return this.orgService.registerOrg(pid, callerUid, callerIdentifier, dto);
   }
 
   /**
    * GET /org/mine
    * Returns all orgs where the caller has an organizer role.
-   * No RolesGuard — just needs a valid session.
    */
   @Get('mine')
   getMyOrgs(@CurrentUser() user: JwtUser) {
@@ -424,7 +441,8 @@ export class OrgController {
 
   /**
    * PATCH /org/:orgid/scope/:scope_id
-   * Organizer-only. Rename / reattach a scope node.
+   * Organizer-only. Rename a scope node.
+   * FIX: was documented as "rename / reattach" — reattachment removed per design.
    */
   @Patch(':orgid/scope/:scope_id')
   @UseGuards(RolesGuard)
@@ -442,7 +460,7 @@ export class OrgController {
 
   /**
    * DELETE /org/:orgid/scope/:scope_id
-   * Organizer-only. Delete a scope node (no members/events assigned).
+   * Organizer-only. Delete a leaf scope node (no members/children assigned).
    */
   @Delete(':orgid/scope/:scope_id')
   @UseGuards(RolesGuard)
@@ -457,6 +475,7 @@ export class OrgController {
     return this.scopeService.deleteScope(orgid, callerUid, scopeId);
   }
 }
+
 
 
 --- organization\org.module.ts ---
@@ -513,9 +532,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RegisterOrgDto, ParticipantRowDto } from './dto/register-org.dto';
 import { AddMembersDto } from './dto/add-members.dto';
 import { UpdateMemberDto } from './dto/update-member.dto';
+import { splitIdentifier } from '../common/utils/check.utilities';
 
 // ─── CSV Parser ───────────────────────────────────────────────────────────────
-// Parses: uid,mobile,email,role  (header row required)
+// Parses: uid,contact,role  (header row required)
 export function parseCsvParticipants(csv: string): ParticipantRowDto[] {
   const lines = csv
     .split('\n')
@@ -526,8 +546,7 @@ export function parseCsvParticipants(csv: string): ParticipantRowDto[] {
 
   const header = lines[0].split(',').map((h) => h.trim().toLowerCase());
   const uidIdx = header.indexOf('uid');
-  const mobileIdx = header.indexOf('mobile');
-  const emailIdx = header.indexOf('email');
+  const contactIdx = header.indexOf('contact');
   const roleIdx = header.indexOf('role');
 
   if (uidIdx === -1) {
@@ -540,9 +559,9 @@ export function parseCsvParticipants(csv: string): ParticipantRowDto[] {
     if (!uid) throw new BadRequestException(`Row ${i + 2}: uid is required`);
 
     const row: ParticipantRowDto = { uid: uid.toUpperCase() };
-    if (mobileIdx !== -1 && cols[mobileIdx]) row.mobile = cols[mobileIdx];
-    if (emailIdx !== -1 && cols[emailIdx]) row.email = cols[emailIdx];
-
+    if (!cols[contactIdx])
+      throw new BadRequestException(`Row ${i + 2}: contact is required`);
+    row.participant_identifier = cols[contactIdx];
     const role = roleIdx !== -1 ? cols[roleIdx] : 'v';
     row.role = role === 'vo' ? 'vo' : 'v';
 
@@ -556,25 +575,58 @@ function generateOrgId(
   prefix?: string,
   suffix?: string,
 ): string {
-  const p = prefix ?? orgName.replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase();
+  const p =
+    prefix ??
+    orgName
+      .replace(/[^A-Za-z]/g, '')
+      .slice(0, 3)
+      .toUpperCase();
   const s = suffix ?? String(Math.floor(1000 + Math.random() * 9000));
   return `${p}${s}`;
 }
 
 @Injectable()
 export class OrgService {
-  constructor(private prisma: PrismaService) { }
+  constructor(private prisma: PrismaService) {}
 
   // ─── Register Organization ──────────────────────────────────────────────────
   async registerOrg(
     pid: bigint,
     callerUid: string | undefined,
+    // FIX: typed as string | undefined — it is optional in the DTO and must be
+    //      guarded before use; the previous code passed it straight to splitIdentifier.
+    callerIdentifier: string | undefined,
     dto: RegisterOrgDto,
   ) {
+    if (!callerUid) {
+      throw new BadRequestException(
+        'caller_uid is required. Supply it in the request body (UNIFIED session) ' +
+          'or log in with an ORG session.',
+      );
+    }
+    const callerUidNorm = callerUid.trim().toUpperCase();
+
+    if (!/^[A-Z0-9]{4,20}$/.test(callerUidNorm)) {
+      throw new BadRequestException(
+        'Invalid caller_uid format. Must be 4–20 uppercase alphanumeric characters.',
+      );
+    }
+
+    // FIX: null guard for callerIdentifier — it is optional in the DTO but
+    //      splitIdentifier cannot accept undefined.
+    if (!callerIdentifier) {
+      throw new BadRequestException(
+        'caller_identifier (mobile or email) is required to register an organization.',
+      );
+    }
+
     // Merge participants from table input and CSV
     let participants: ParticipantRowDto[] = dto.participants ?? [];
     if (dto.participants_csv) {
-      participants = [...participants, ...parseCsvParticipants(dto.participants_csv)];
+      participants = [
+        ...participants,
+        ...parseCsvParticipants(dto.participants_csv),
+      ];
     }
 
     // Deduplicate by uid
@@ -593,53 +645,35 @@ export class OrgService {
       const exists = await this.prisma.organization.findUnique({
         where: { orgid: preferredOrgId },
       });
-
       if (exists) {
         throw new ConflictException(
-          `Organization ID "${preferredOrgId}" is already taken.`
+          `Organization ID "${preferredOrgId}" is already taken.`,
         );
       }
-
       orgid = preferredOrgId;
     } else {
-      // fallback to generated ID with retry
       orgid = generateOrgId(dto.org_name, dto.org_prefix, dto.org_suffix);
 
       for (let i = 0; i < 5; i++) {
         const exists = await this.prisma.organization.findUnique({
           where: { orgid },
         });
-
         if (!exists) break;
-
         orgid = generateOrgId(dto.org_name, dto.org_prefix);
-
         if (i === 4) {
           throw new ConflictException(
-            'Could not generate unique org ID. Try again.'
+            'Could not generate unique org ID. Try again.',
           );
         }
       }
     }
 
-    // The caller must supply their own uid for this org.
-    // We use callerUid if provided (ORG login context) or derive one from pid.
-    // For a fresh org registration from a UNIFIED account, the caller provides their desired uid.
-    if (!callerUid) {
-      throw new BadRequestException(
-        'Uid Not Supplied',
-      );
-    }
-
-    const callerUidNorm = callerUid.trim().toUpperCase();
-
-    if (!/^[A-Z0-9]{4,20}$/.test(callerUidNorm)) {
-      throw new BadRequestException(
-        'Invalid Organizer Uid format. Must be 4–20 uppercase alphanumeric characters.'
-      );
-    }
     // Run everything in a transaction
     const result = await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`
+        SELECT set_config('app.current_uid', ${callerUidNorm}, true)
+      `;
+
       // 1. Create org (trigger auto-creates ROOT scope)
       const org = await tx.organization.create({
         data: {
@@ -656,12 +690,16 @@ export class OrgService {
       });
       if (!rootScope) throw new Error('ROOT scope not created');
 
-      // 3. Insert caller as member with vo role
+      // 3. Insert caller as member with voter + organizer role
+      const { email, mobile } = splitIdentifier(callerIdentifier);
+
       await tx.org_members.create({
         data: {
           orgid,
           uid: callerUidNorm,
           pid,
+          email,
+          mobile,
           is_deleted: false,
         },
       });
@@ -677,25 +715,34 @@ export class OrgService {
         },
       });
 
-      // 5. Bind orgid to caller's account via user_org
-      await tx.user_org.create({
-        data: { pid, orgid, uid: callerUidNorm },
-      });
-      // add organizer identity to wallet
+      // 5. Add organizer identity to wallet
       await tx.identity_wallet.create({
-        data: { pid, identity_type:"ORG",identity_id:orgid, uid: callerUidNorm },
+        data: {
+          pid,
+          identity_type: 'ORG',
+          identity_id: orgid,
+          uid: callerUidNorm,
+        },
       });
 
       // 6. Insert participants (skip if uid === caller)
       for (const p of deduped) {
         if (p.uid === callerUidNorm) continue; // already added
+        if (!p.participant_identifier)
+          throw new BadRequestException(
+            `Participant ${p.uid}: contact is required`,
+          );
+
+        // FIX: use splitIdentifier — ParticipantRowDto only has participant_identifier,
+        //      not separate mobile/email fields.
+        const { email, mobile } = splitIdentifier(p.participant_identifier);
 
         await tx.org_members.create({
           data: {
             orgid,
             uid: p.uid,
-            mobile: p.mobile ?? null,
-            email: p.email ?? null,
+            mobile,
+            email,
             is_deleted: false,
           },
         });
@@ -724,7 +771,7 @@ export class OrgService {
 
   // ─── Get orgs where user is organizer ──────────────────────────────────────
   async getMyOrgs(pid: bigint) {
-    const links = await this.prisma.user_org.findMany({
+    const links = await this.prisma.org_members.findMany({
       where: { pid },
       select: { orgid: true, uid: true },
     });
@@ -739,11 +786,19 @@ export class OrgService {
       }),
     );
 
-    const validLinks = organizerLinks.filter(Boolean) as { orgid: string; uid: string }[];
-    const orgIdToUid = Object.fromEntries(validLinks.map((l) => [l.orgid, l.uid]));
+    const validLinks = organizerLinks.filter(Boolean) as {
+      orgid: string;
+      uid: string;
+    }[];
+    const orgIdToUid = Object.fromEntries(
+      validLinks.map((l) => [l.orgid, l.uid]),
+    );
 
     const orgs = await this.prisma.organization.findMany({
-      where: { orgid: { in: validLinks.map((l) => l.orgid) }, is_deleted: false },
+      where: {
+        orgid: { in: validLinks.map((l) => l.orgid) },
+        is_deleted: false,
+      },
       select: {
         orgid: true,
         org_name: true,
@@ -753,7 +808,6 @@ export class OrgService {
       },
     });
 
-    // ✅ attach uid so frontend can pass it back as org context
     return orgs.map((o) => ({ ...o, uid: orgIdToUid[o.orgid] }));
   }
 
@@ -781,12 +835,12 @@ export class OrgService {
         },
         ...(filters?.search
           ? {
-            OR: [
-              { uid: { contains: filters.search, mode: 'insensitive' } },
-              { email: { contains: filters.search, mode: 'insensitive' } },
-              { mobile: { contains: filters.search } },
-            ],
-          }
+              OR: [
+                { uid: { contains: filters.search, mode: 'insensitive' } },
+                { email: { contains: filters.search, mode: 'insensitive' } },
+                { mobile: { contains: filters.search } },
+              ],
+            }
           : {}),
       },
       select: {
@@ -816,21 +870,30 @@ export class OrgService {
   }
 
   // ─── Add members ────────────────────────────────────────────────────────────
-  async addMembers(pid: bigint, orgid: string, callerUid: string, dto: AddMembersDto) {
+  async addMembers(
+    pid: bigint,
+    orgid: string,
+    callerUid: string,
+    dto: AddMembersDto,
+  ) {
     await this.assertOrganizerAccess(orgid, callerUid);
 
     const callerScope = await this.getCallerScope(orgid, callerUid);
     const visibleScopes = await this.getDescendantScopeIds(callerScope);
 
-    // Determine target scope
     let targetScopeId = dto.scope_id ?? callerScope;
     if (!visibleScopes.includes(targetScopeId)) {
-      throw new ForbiddenException('Cannot assign members to a scope outside your jurisdiction');
+      throw new ForbiddenException(
+        'Cannot assign members to a scope outside your jurisdiction',
+      );
     }
 
     let participants: ParticipantRowDto[] = dto.participants ?? [];
     if (dto.participants_csv) {
-      participants = [...participants, ...parseCsvParticipants(dto.participants_csv)];
+      participants = [
+        ...participants,
+        ...parseCsvParticipants(dto.participants_csv),
+      ];
     }
     if (participants.length === 0) {
       throw new BadRequestException('No participants provided');
@@ -840,19 +903,33 @@ export class OrgService {
 
     for (const p of participants) {
       try {
+        // FIX: use splitIdentifier(p.participant_identifier) in all branches.
+        //      The previous code referenced p.mobile and p.email which do not exist
+        //      on ParticipantRowDto — only participant_identifier does.
+        if (!p.participant_identifier) {
+          results.push({
+            uid: p.uid,
+            status: 'error',
+            error: 'contact is required',
+          });
+          continue;
+        }
+        const { email, mobile } = splitIdentifier(p.participant_identifier);
+
         const existing = await this.prisma.org_members.findUnique({
           where: { orgid_uid: { orgid, uid: p.uid } },
         });
 
         if (existing) {
           if (existing.is_deleted) {
-            // Reactivate
+            // Reactivate: restore contact info and role
             await this.prisma.org_members.update({
               where: { orgid_uid: { orgid, uid: p.uid } },
               data: {
                 is_deleted: false,
-                mobile: p.mobile ?? existing.mobile,
-                email: p.email ?? existing.email,
+                // FIX: was p.mobile / p.email (undefined). Now uses splitIdentifier result.
+                mobile: mobile ?? existing.mobile,
+                email: email ?? existing.email,
               },
             });
             await this.prisma.member_roles.update({
@@ -865,13 +942,18 @@ export class OrgService {
             });
             results.push({ uid: p.uid, status: 'reactivated' });
           } else {
-            results.push({ uid: p.uid, status: 'skipped', error: 'Already exists' });
+            results.push({
+              uid: p.uid,
+              status: 'skipped',
+              error: 'Already exists',
+            });
           }
           continue;
         }
 
+        // FIX: was p.mobile / p.email (undefined). Now uses splitIdentifier result.
         await this.prisma.org_members.create({
-          data: { orgid, uid: p.uid, mobile: p.mobile ?? null, email: p.email ?? null },
+          data: { orgid, uid: p.uid, mobile, email },
         });
         await this.prisma.member_roles.create({
           data: {
@@ -905,27 +987,28 @@ export class OrgService {
     const callerScope = await this.getCallerScope(orgid, callerUid);
     const visibleScopes = await this.getDescendantScopeIds(callerScope);
 
-    // Get target's current scope
     const targetRole = await this.prisma.member_roles.findUnique({
       where: { orgid_uid: { orgid, uid: targetUid } },
     });
     if (!targetRole) throw new NotFoundException('Member not found');
 
-    // Caller can only edit members within their scope
     if (!visibleScopes.includes(targetRole.scope_id)) {
       throw new ForbiddenException('Cannot edit member outside your scope');
     }
 
-    // If moving scope, check new scope is within caller's tree
     if (dto.scope_id !== undefined && !visibleScopes.includes(dto.scope_id)) {
-      throw new ForbiddenException('Cannot move member to a scope outside your jurisdiction');
+      throw new ForbiddenException(
+        'Cannot move member to a scope outside your jurisdiction',
+      );
     }
 
     const updated = await this.prisma.member_roles.update({
       where: { orgid_uid: { orgid, uid: targetUid } },
       data: {
         ...(dto.is_voter !== undefined && { is_voter: dto.is_voter }),
-        ...(dto.is_organizer !== undefined && { is_organizer: dto.is_organizer }),
+        ...(dto.is_organizer !== undefined && {
+          is_organizer: dto.is_organizer,
+        }),
         ...(dto.scope_id !== undefined && { scope_id: dto.scope_id }),
       },
     });
@@ -934,7 +1017,12 @@ export class OrgService {
   }
 
   // ─── Soft-delete member ─────────────────────────────────────────────────────
-  async removeMember(pid: bigint, orgid: string, callerUid: string, targetUid: string) {
+  async removeMember(
+    pid: bigint,
+    orgid: string,
+    callerUid: string,
+    targetUid: string,
+  ) {
     await this.assertOrganizerAccess(orgid, callerUid);
 
     const callerScope = await this.getCallerScope(orgid, callerUid);
@@ -977,7 +1065,6 @@ export class OrgService {
   }
 
   async getDescendantScopeIds(scopeId: number): Promise<number[]> {
-    // Use the DB function get_scope_descendants via raw query
     const rows = await this.prisma.$queryRaw<{ scope_id: number }[]>`
       SELECT scope_id FROM get_scope_descendants(${scopeId})
     `;
@@ -1036,18 +1123,19 @@ export class ScopeService {
     const callerScope = await this.orgService.getCallerScope(orgid, callerUid);
     const visibleIds = await this.orgService.getDescendantScopeIds(callerScope);
 
-    // Default parent = caller's own scope node
     const parentId = dto.parent_scope_id ?? callerScope;
 
     if (!visibleIds.includes(parentId)) {
       throw new ForbiddenException('Cannot create scope outside your subtree');
     }
 
-    // Ensure name is unique within same parent
     const conflict = await this.prisma.org_scope.findFirst({
       where: { orgid, parent_scope_id: parentId, scope_name: dto.scope_name },
     });
-    if (conflict) throw new BadRequestException('A scope with this name already exists at that level');
+    if (conflict)
+      throw new BadRequestException(
+        'A scope with this name already exists at that level',
+      );
 
     const created = await this.prisma.org_scope.create({
       data: { orgid, scope_name: dto.scope_name, parent_scope_id: parentId },
@@ -1056,7 +1144,11 @@ export class ScopeService {
     return created;
   }
 
-  // ─── Rename / reattach scope node ───────────────────────────────────────────
+  // ─── Rename scope node ───────────────────────────────────────────────────────
+  // FIX: renamed from "updateScope (rename / reattach)" to rename-only.
+  // Project design: "Scope is a fixed tree — nodes are not moved."
+  // Removed: parent_scope_id acceptance, reattachment cycle check, and the
+  //          closure-table rebuild that would have been required for reattachment.
   async updateScope(
     orgid: string,
     callerUid: string,
@@ -1072,33 +1164,48 @@ export class ScopeService {
       throw new ForbiddenException('Cannot edit a scope outside your subtree');
     }
 
-    // Prevent moving to outside of caller's tree
-    if (dto.parent_scope_id !== undefined && dto.parent_scope_id !== null) {
-      if (!visibleIds.includes(dto.parent_scope_id)) {
-        throw new ForbiddenException('Cannot reattach scope to a node outside your subtree');
-      }
-    }
-
-    // Prevent moving ROOT
-    const node = await this.prisma.org_scope.findUnique({ where: { scope_id: scopeId } });
+    const node = await this.prisma.org_scope.findUnique({
+      where: { scope_id: scopeId },
+    });
     if (!node) throw new NotFoundException('Scope node not found');
+
+    // ROOT node has no parent — prevent renaming it to avoid confusion
     if (node.parent_scope_id === null) {
-      throw new BadRequestException('Cannot move or rename the ROOT scope');
+      throw new BadRequestException('Cannot rename the ROOT scope');
     }
 
-    // DB trigger will detect cycle — just pass through
+    if (!dto.scope_name) {
+      throw new BadRequestException(
+        'scope_name is required to rename a scope node',
+      );
+    }
+
+    // Ensure uniqueness within the same parent
+    const conflict = await this.prisma.org_scope.findFirst({
+      where: {
+        orgid,
+        parent_scope_id: node.parent_scope_id,
+        scope_name: dto.scope_name,
+        NOT: { scope_id: scopeId },
+      },
+    });
+    if (conflict)
+      throw new BadRequestException(
+        'A sibling scope with this name already exists',
+      );
+
     const updated = await this.prisma.org_scope.update({
       where: { scope_id: scopeId },
-      data: {
-        ...(dto.scope_name !== undefined && { scope_name: dto.scope_name }),
-        ...(dto.parent_scope_id !== undefined && { parent_scope_id: dto.parent_scope_id }),
-      },
+      data: { scope_name: dto.scope_name },
     });
 
     return updated;
   }
 
   // ─── Delete scope node ───────────────────────────────────────────────────────
+  // The DB trigger (trg_prevent_nonempty_scope_delete) enforces that the node
+  // has no direct children and no members assigned. The application-level
+  // events check here is an additional safety layer not covered by the trigger.
   async deleteScope(orgid: string, callerUid: string, scopeId: number) {
     await this.orgService.assertOrganizerAccess(orgid, callerUid);
 
@@ -1106,36 +1213,30 @@ export class ScopeService {
     const visibleIds = await this.orgService.getDescendantScopeIds(callerScope);
 
     if (!visibleIds.includes(scopeId)) {
-      throw new ForbiddenException('Cannot delete a scope outside your subtree');
+      throw new ForbiddenException(
+        'Cannot delete a scope outside your subtree',
+      );
     }
 
-    const node = await this.prisma.org_scope.findUnique({ where: { scope_id: scopeId } });
+    const node = await this.prisma.org_scope.findUnique({
+      where: { scope_id: scopeId },
+    });
     if (!node) throw new NotFoundException('Scope node not found');
     if (node.parent_scope_id === null) {
       throw new BadRequestException('Cannot delete the ROOT scope');
     }
 
-    // Check if any members or events are assigned to this scope or descendants
-    const descendants = await this.orgService.getDescendantScopeIds(scopeId);
-
-    const membersInScope = await this.prisma.member_roles.count({
-      where: { orgid, scope_id: { in: descendants } },
-    });
-    if (membersInScope > 0) {
-      throw new BadRequestException(
-        `Cannot delete: ${membersInScope} member(s) are assigned to this scope or its children. Reassign them first.`,
-      );
-    }
-
+    // Application-level event guard (not covered by the DB delete trigger)
     const eventsInScope = await this.prisma.events.count({
-      where: { orgid, scope_id: { in: descendants }, is_deleted: false },
+      where: { orgid, scope_id: scopeId, is_deleted: false },
     });
     if (eventsInScope > 0) {
       throw new BadRequestException(
-        `Cannot delete: ${eventsInScope} event(s) exist in this scope or its children.`,
+        `Cannot delete: ${eventsInScope} event(s) exist in this scope.`,
       );
     }
 
+    // DB trigger will raise if node has child scopes or assigned members
     await this.prisma.org_scope.delete({ where: { scope_id: scopeId } });
 
     return { message: `Scope node ${scopeId} deleted` };
@@ -1144,7 +1245,11 @@ export class ScopeService {
 
 // ─── Tree builder ─────────────────────────────────────────────────────────────
 function buildTree(
-  nodes: { scope_id: number; scope_name: string; parent_scope_id: number | null }[],
+  nodes: {
+    scope_id: number;
+    scope_name: string;
+    parent_scope_id: number | null;
+  }[],
   rootId: number,
 ): ScopeNode[] {
   const map = new Map<number, ScopeNode>();
@@ -1163,7 +1268,7 @@ function buildTree(
       if (parent) {
         parent.children.push(node);
       } else {
-        // Parent is outside caller's visible tree — treat as root of visible subtree
+        // Parent is outside caller's visible subtree — treat as root of visible slice
         roots.push(node);
       }
     }

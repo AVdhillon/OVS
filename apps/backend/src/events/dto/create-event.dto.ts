@@ -1,4 +1,3 @@
-// dto/create-event.dto.ts
 import {
   IsString,
   IsNotEmpty,
@@ -8,7 +7,6 @@ import {
   IsDateString,
   IsArray,
   ValidateNested,
-  MinLength,
   MaxLength,
   ArrayMinSize,
 } from 'class-validator';
@@ -62,12 +60,24 @@ export class CreateEventDto {
   show_live_results?: boolean;
 
   /**
-   * If true, the event is also visible to scopes ABOVE the event scope
-   * (visibility_upward in DB).
+   * If true, event is also visible to scopes ABOVE the event scope.
+   * Maps to visibility_upward in DB.
+   * Mutually exclusive with scope_only — both cannot be true simultaneously.
    */
   @IsOptional()
   @IsBoolean()
   visible_upward?: boolean;
+
+  /**
+   * If true, event is visible ONLY to members assigned to the exact event scope.
+   * No downward propagation.
+   * FIX: added — was in DB schema and project design ("Restrict visibility to
+   *      current scope only") but missing from the DTO entirely.
+   * Mutually exclusive with visible_upward.
+   */
+  @IsOptional()
+  @IsBoolean()
+  scope_only?: boolean;
 
   @IsArray()
   @ArrayMinSize(2)

@@ -15,6 +15,7 @@ import { PrismaService } from './prisma.service';
 export class PrismaModule {}
 
 
+
 --- prisma\prisma.service.ts ---
 
 import { Injectable, OnModuleInit } from '@nestjs/common';

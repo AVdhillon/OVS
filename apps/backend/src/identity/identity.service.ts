@@ -15,7 +15,6 @@ export class IdentityService {
 
   // ─── List all identities in a user's wallet ───────────────────────────────
   async getWallet(pid: bigint) {
-    // Require unified account
     await this.requireUnifiedAccount(pid);
 
     const entries = await this.prisma.identity_wallet.findMany({
@@ -45,7 +44,6 @@ export class IdentityService {
       });
       if (!gov) throw new NotFoundException('Government identity not found');
 
-      // Check the identifier belongs to this GOV record
       const contact = dto.identifier.includes('@') ? 'email' : 'mobile';
       if (gov[contact] !== dto.identifier) {
         throw new ForbiddenException(
@@ -64,7 +62,6 @@ export class IdentityService {
       });
       if (!member) throw new NotFoundException('Org member not found');
 
-      // Check the identifier belongs to this member
       const identifierIsEmail = dto.identifier.includes('@');
       const match = identifierIsEmail
         ? member.email === dto.identifier
@@ -88,7 +85,7 @@ export class IdentityService {
     });
     if (existing) throw new BadRequestException('Identity already in wallet');
 
-    // 5. Insert
+    // 5. Insert into identity_wallet
     const entry = await this.prisma.identity_wallet.create({
       data: {
         pid,
@@ -103,29 +100,13 @@ export class IdentityService {
       },
     });
 
-    // 6. If ORG — also bind pid to org_members row so the org can resolve
-    //    the unified account from their roster
+    // 6. If ORG — also bind pid to org_members so the org can resolve
+    //    the unified account from their roster.
+    //    org_members.pid is the authoritative link; no separate join table exists.
     if (dto.identity_type === 'ORG' && dto.uid) {
       await this.prisma.org_members.updateMany({
         where: { orgid: dto.identity_id, uid: dto.uid, pid: null },
         data: { pid },
-      });
-
-      // Ensure user_org link exists
-      await this.prisma.user_org.upsert({
-        where: {
-          pid_orgid_uid: {
-            pid,
-            orgid: dto.identity_id,
-            uid: dto.uid,
-          },
-        },
-        update: {},
-        create: {
-          pid,
-          orgid: dto.identity_id,
-          uid: dto.uid,
-        },
       });
     }
 
@@ -155,7 +136,8 @@ export class IdentityService {
       where: { identifier, is_verified: false },
     });
 
-    if (!record) throw new UnauthorizedException('OTP not found or already used');
+    if (!record)
+      throw new UnauthorizedException('OTP not found or already used');
 
     if (record.expires_at < new Date()) {
       throw new UnauthorizedException('OTP expired');
@@ -175,7 +157,7 @@ export class IdentityService {
       throw new UnauthorizedException('Invalid OTP');
     }
 
-    // Mark as verified then delete (consumed)
+    // Consumed — delete the record
     await this.prisma.otp_verification.delete({
       where: { otp_id: record.otp_id },
     });

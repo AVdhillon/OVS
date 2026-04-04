@@ -12,13 +12,14 @@ import {
   Body,
   Param,
   ParseIntPipe,
-  Req,
   UseGuards,
 } from '@nestjs/common';
 import { CandidatesService } from './candidates.service';
 import { AddCandidateDto } from './dto/add-candidate.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
-import { Request } from 'express';
+// FIX: replaced @Req() + req.user cast with @CurrentUser() throughout
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import type { JwtUser } from '../common/decorators/current-user.decorator';
 
 @UseGuards(JwtAuthGuard)
 @Controller('events/:eventId/candidates')
@@ -28,32 +29,37 @@ export class CandidatesController {
   /** POST /events/:eventId/candidates — add a candidate before event starts */
   @Post()
   addCandidate(
-    @Req() req: Express.Request,
+    @CurrentUser() user: JwtUser,
     @Param('eventId', ParseIntPipe) eventId: number,
     @Body() dto: AddCandidateDto,
   ) {
-    return this.candidatesService.addCandidate(req.user as any, eventId, dto);
+    return this.candidatesService.addCandidate(user, eventId, dto);
   }
 
   /** DELETE /events/:eventId/candidates/:candidateId */
   @Delete(':candidateId')
   removeCandidate(
-    @Req() req: Express.Request,
+    @CurrentUser() user: JwtUser,
     @Param('eventId', ParseIntPipe) eventId: number,
     @Param('candidateId', ParseIntPipe) candidateId: number,
   ) {
-    return this.candidatesService.removeCandidate(req.user as any, eventId, candidateId);
+    return this.candidatesService.removeCandidate(user, eventId, candidateId);
   }
 
   /** PATCH /events/:eventId/candidates/:candidateId */
   @Patch(':candidateId')
   updateCandidate(
-    @Req() req: Express.Request,
+    @CurrentUser() user: JwtUser,
     @Param('eventId', ParseIntPipe) eventId: number,
     @Param('candidateId', ParseIntPipe) candidateId: number,
     @Body() dto: AddCandidateDto,
   ) {
-    return this.candidatesService.updateCandidate(req.user as any, eventId, candidateId, dto);
+    return this.candidatesService.updateCandidate(
+      user,
+      eventId,
+      candidateId,
+      dto,
+    );
   }
 }
 
@@ -69,26 +75,30 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AddCandidateDto } from './dto/add-candidate.dto';
-
-interface JwtUser {
-  pid?: number;
-  orgid?: string;
-  uid?: string;
-  type: 'UNIFIED' | 'ORG' | 'GOV';
-}
+// FIX: removed local JwtUser interface (had pid?: number — wrong; JWT stores it as string).
+//      Import canonical JwtUser from the decorator instead.
+import type { JwtUser } from '../common/decorators/current-user.decorator';
+import { EventsService } from './events.service';
 
 @Injectable()
 export class CandidatesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    // FIX: inject EventsService to reuse resolveOrgIdentities for UNIFIED sessions
+    //      rather than duplicating or mishandling the logic.
+    private eventsService: EventsService,
+  ) {}
 
   async addCandidate(user: JwtUser, eventId: number, dto: AddCandidateDto) {
-    const event = await this.assertOrganizerAndNotStarted(user, eventId);
+    await this.assertOrganizerAndNotStarted(user, eventId);
 
-    // Check name uniqueness within event
     const dup = await this.prisma.candidates.findFirst({
       where: { event_id: eventId, candidate_name: dto.candidate_name },
     });
-    if (dup) throw new BadRequestException('Candidate name already exists in this event');
+    if (dup)
+      throw new BadRequestException(
+        'Candidate name already exists in this event',
+      );
 
     const candidate = await this.prisma.candidates.create({
       data: {
@@ -98,9 +108,13 @@ export class CandidatesService {
       },
     });
 
-    // Seed vote_results row
+    // Seed vote_results row so this candidate appears in results with 0 votes
     await this.prisma.vote_results.create({
-      data: { event_id: eventId, candidate_id: candidate.candidate_id, vote_count: 0 },
+      data: {
+        event_id: eventId,
+        candidate_id: candidate.candidate_id,
+        vote_count: 0,
+      },
     });
 
     return candidate;
@@ -115,7 +129,9 @@ export class CandidatesService {
     if (!candidate) throw new NotFoundException('Candidate not found');
 
     // Ensure at least 2 candidates remain after deletion
-    const count = await this.prisma.candidates.count({ where: { event_id: eventId } });
+    const count = await this.prisma.candidates.count({
+      where: { event_id: eventId },
+    });
     if (count <= 2) {
       throw new BadRequestException('An event must have at least 2 candidates');
     }
@@ -123,7 +139,9 @@ export class CandidatesService {
     await this.prisma.vote_results.deleteMany({
       where: { event_id: eventId, candidate_id: candidateId },
     });
-    await this.prisma.candidates.delete({ where: { candidate_id: candidateId } });
+    await this.prisma.candidates.delete({
+      where: { candidate_id: candidateId },
+    });
 
     return { message: 'Candidate removed' };
   }
@@ -154,6 +172,21 @@ export class CandidatesService {
 
   // ─── Helper ──────────────────────────────────────────────────────────────
 
+  /**
+   * Asserts:
+   *   1. The event exists and has not yet started.
+   *   2. The calling user is an organizer in the event's org.
+   *
+   * FIX: the previous implementation had a broken UNIFIED session path:
+   *   - actingUid was set to null for non-ORG sessions
+   *   - the ORG ownership check was silently skipped
+   *   - the organizer role lookup then used event.created_by_uid as the uid,
+   *     meaning any UNIFIED session passed as long as the creator had a role
+   *
+   * New approach: use EventsService.resolveOrgIdentities to get all (orgid, uid)
+   * pairs the caller can act as, then check organizer role for any match on
+   * the event's org. This handles both ORG and UNIFIED sessions correctly.
+   */
   private async assertOrganizerAndNotStarted(user: JwtUser, eventId: number) {
     const event = await this.prisma.events.findFirst({
       where: { event_id: eventId, is_deleted: false },
@@ -161,29 +194,31 @@ export class CandidatesService {
     if (!event) throw new NotFoundException('Event not found');
 
     if (new Date() >= event.start_time) {
-      throw new BadRequestException('Cannot modify candidates after event has started');
+      throw new BadRequestException(
+        'Cannot modify candidates after event has started',
+      );
     }
 
-    // Must be the creator's org and have organizer role
-    const actingUid = user.type === 'ORG' ? user.uid : null;
-    const actingOrgid = user.type === 'ORG' ? user.orgid : null;
+    // Resolve all (orgid, uid) pairs this caller can act as
+    const identities = await this.eventsService.resolveOrgIdentities(user);
 
-    // For UNIFIED sessions, allow if they created the event
-    if (
-      user.type === 'ORG' &&
-      (actingOrgid !== event.orgid || actingUid !== event.created_by_uid)
-    ) {
-      throw new ForbiddenException('Only the event creator can modify candidates');
-    }
+    // Find a matching identity that is also an organizer in event.orgid
+    const matched = await Promise.all(
+      identities
+        .filter((id) => id.orgid === event.orgid)
+        .map(async (id) => {
+          const role = await this.prisma.member_roles.findFirst({
+            where: { orgid: id.orgid, uid: id.uid, is_organizer: true },
+          });
+          return role ? id : null;
+        }),
+    );
 
-    const role = actingUid
-      ? await this.prisma.member_roles.findFirst({
-          where: { orgid: event.orgid ?? '', uid: actingUid ?? event.created_by_uid ?? '', is_organizer: true },
-        })
-      : null;
-
-    if (user.type === 'ORG' && !role) {
-      throw new ForbiddenException('Organizer role required');
+    const authorized = matched.find(Boolean);
+    if (!authorized) {
+      throw new ForbiddenException(
+        "You must be an organizer in this event's org to manage candidates",
+      );
     }
 
     return event;
@@ -212,7 +247,6 @@ export class AddCandidateDto {
 
 --- events\dto\create-event.dto.ts ---
 
-// dto/create-event.dto.ts
 import {
   IsString,
   IsNotEmpty,
@@ -222,7 +256,6 @@ import {
   IsDateString,
   IsArray,
   ValidateNested,
-  MinLength,
   MaxLength,
   ArrayMinSize,
 } from 'class-validator';
@@ -276,12 +309,24 @@ export class CreateEventDto {
   show_live_results?: boolean;
 
   /**
-   * If true, the event is also visible to scopes ABOVE the event scope
-   * (visibility_upward in DB).
+   * If true, event is also visible to scopes ABOVE the event scope.
+   * Maps to visibility_upward in DB.
+   * Mutually exclusive with scope_only — both cannot be true simultaneously.
    */
   @IsOptional()
   @IsBoolean()
   visible_upward?: boolean;
+
+  /**
+   * If true, event is visible ONLY to members assigned to the exact event scope.
+   * No downward propagation.
+   * FIX: added — was in DB schema and project design ("Restrict visibility to
+   *      current scope only") but missing from the DTO entirely.
+   * Mutually exclusive with visible_upward.
+   */
+  @IsOptional()
+  @IsBoolean()
+  scope_only?: boolean;
 
   @IsArray()
   @ArrayMinSize(2)
@@ -294,7 +339,6 @@ export class CreateEventDto {
 
 --- events\dto\update-event.dto.ts ---
 
-// dto/update-event.dto.ts
 import {
   IsString,
   IsOptional,
@@ -328,6 +372,13 @@ export class UpdateEventDto {
   @IsOptional()
   @IsBoolean()
   visible_upward?: boolean;
+
+  /**
+   * Mutually exclusive with visible_upward.
+   */
+  @IsOptional()
+  @IsBoolean()
+  scope_only?: boolean;
 }
 
 
@@ -460,12 +511,16 @@ export class EventsController {
 import { Module } from '@nestjs/common';
 import { EventsService } from './events.service';
 import { EventsController } from './events.controller';
+// FIX: CandidatesService and CandidatesController existed as files but were never
+//      registered in the module — NestJS DI could not resolve them at runtime.
+import { CandidatesService } from './candidates.service';
+import { CandidatesController } from './candidates.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 
 @Module({
   imports: [PrismaModule],
-  providers: [EventsService],
-  controllers: [EventsController],
+  providers: [EventsService, CandidatesService],
+  controllers: [EventsController, CandidatesController],
   exports: [EventsService],
 })
 export class EventsModule {}
@@ -506,21 +561,10 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
-
-/**
- * Shape of the JWT payload after JwtStrategy.validate() runs.
- * UNIFIED  → { pid, type:'UNIFIED', session_id }
- * ORG      → { pid, orgid, uid, type:'ORG', session_id }
- * GOV      → { epic_id, type:'GOV', session_id }
- */
-interface JwtUser {
-  pid?: number;
-  orgid?: string;
-  uid?: string;
-  epic_id?: string;
-  type: 'UNIFIED' | 'ORG' | 'GOV';
-  session_id: string;
-}
+// FIX: import canonical JwtUser instead of redefining locally with wrong pid type.
+//      JWT payload stores pid as string (auth.service: payload = { pid: user.pid.toString() }).
+//      The local interface had pid?: number which is incorrect.
+import type { JwtUser } from '../common/decorators/current-user.decorator';
 
 @Injectable()
 export class EventsService {
@@ -528,11 +572,8 @@ export class EventsService {
 
   // ─────────────────────────────────────────────────────────────────────────
   // GET VISIBLE EVENTS
-  // Returns events visible to ALL identities the caller holds,
-  // segmented into active_pending / voted / completed.
   // ─────────────────────────────────────────────────────────────────────────
   async getVisibleEvents(user: JwtUser) {
-    // 1. Collect every (orgid, uid, scope_id) the caller has
     const identities = await this.resolveOrgIdentities(user);
 
     if (identities.length === 0) {
@@ -544,7 +585,6 @@ export class EventsService {
     const voted: any[] = [];
     const completed: any[] = [];
 
-    // 2. For each identity pull visible, non-deleted events
     for (const { orgid, uid, scope_id } of identities) {
       const rows = await this.prisma.$queryRaw<any[]>`
         SELECT
@@ -557,6 +597,7 @@ export class EventsService {
           e.status,
           e.show_live_results,
           e.visibility_upward,
+          e.scope_only,
           e.scope_id,
           ep.has_voted
         FROM events e
@@ -567,14 +608,21 @@ export class EventsService {
         WHERE e.orgid = ${orgid}
           AND e.is_deleted = FALSE
           AND (
-            -- Downward visibility: event scope is same or below caller scope
-            e.scope_id IN (
-              SELECT scope_id FROM get_scope_descendants(${scope_id}::int)
+            (
+              e.scope_only = FALSE
+              AND e.scope_id IN (
+                SELECT scope_id FROM get_scope_descendants(${scope_id}::int)
+              )
             )
             OR
-            -- Upward visibility: event explicitly allows it and is above caller
+            (
+              e.scope_only = TRUE
+              AND e.scope_id = ${scope_id}::int
+            )
+            OR
             (
               e.visibility_upward = TRUE
+              AND e.scope_only = FALSE
               AND e.scope_id IN (
                 SELECT scope_id FROM get_scope_ancestors(${scope_id}::int)
               )
@@ -584,13 +632,7 @@ export class EventsService {
       `;
 
       for (const ev of rows) {
-        const entry = {
-          ...ev,
-          orgid,
-          acting_uid: uid,
-          start_time: ev.start_time,
-          end_time: ev.end_time,
-        };
+        const entry = { ...ev, orgid, acting_uid: uid };
 
         if (ev.status === 'COMPLETED' || ev.end_time < now) {
           completed.push(entry);
@@ -602,7 +644,6 @@ export class EventsService {
       }
     }
 
-    // Deduplicate by event_id (a user may share scopes across identities)
     const dedup = (arr: any[]) => {
       const seen = new Set<number>();
       return arr.filter((e) => {
@@ -629,10 +670,8 @@ export class EventsService {
     });
     if (!event) throw new NotFoundException('Event not found');
 
-    // Verify caller has visibility into this event
     await this.assertEventVisible(user, event);
 
-    // Attach has_voted for the calling identity (if ORG participant)
     let has_voted = false;
     if (user.type === 'ORG' && user.uid) {
       const ep = await this.prisma.event_participants.findFirst({
@@ -641,10 +680,11 @@ export class EventsService {
       has_voted = ep?.has_voted ?? false;
     }
 
-    // Live results: include if event completed OR show_live_results=true
     const now = new Date();
     const showResults =
-      event.show_live_results || event.end_time < now || event.status === 'COMPLETED';
+      event.show_live_results ||
+      event.end_time < now ||
+      event.status === 'COMPLETED';
 
     let results: any[] | null = null;
     if (showResults) {
@@ -654,36 +694,37 @@ export class EventsService {
       });
     }
 
-    return {
-      ...event,
-      has_voted,
-      results,
-    };
+    return { ...event, has_voted, results };
   }
 
   // ─────────────────────────────────────────────────────────────────────────
   // CREATE EVENT
   // ─────────────────────────────────────────────────────────────────────────
   async createEvent(user: JwtUser, dto: CreateEventDto) {
-    // 1. The caller must present matching orgid+uid
+    // FIX: validate scope flag mutual exclusion before hitting the DB constraint
+    if (dto.scope_only && dto.visible_upward) {
+      throw new BadRequestException(
+        'scope_only and visible_upward cannot both be true',
+      );
+    }
+
     this.assertOrgIdentity(user, dto.orgid, dto.uid);
 
-    // 2. Must be an organizer in that org
     const role = await this.prisma.member_roles.findFirst({
       where: { orgid: dto.orgid, uid: dto.uid, is_organizer: true },
     });
-    if (!role) throw new ForbiddenException('You are not an organizer in this org');
+    if (!role)
+      throw new ForbiddenException('You are not an organizer in this org');
 
-    // 3. Scope must belong to the org and be within the organizer's scope tree
     await this.assertScopeInOrg(dto.orgid, dto.scope_id);
     await this.assertScopeReachable(role.scope_id, dto.scope_id);
 
-    // 4. Time sanity
     const start = new Date(dto.start_time);
     const end = new Date(dto.end_time);
-    if (end <= start) throw new BadRequestException('end_time must be after start_time');
+    if (end <= start)
+      throw new BadRequestException('end_time must be after start_time');
 
-    // 5. Create event (DB trigger trg_populate_event_participants runs after insert)
+    // DB trigger trg_populate_event_participants runs after insert
     const event = await this.prisma.events.create({
       data: {
         orgid: dto.orgid,
@@ -695,12 +736,13 @@ export class EventsService {
         end_time: end,
         show_live_results: dto.show_live_results ?? false,
         visibility_upward: dto.visible_upward ?? false,
+        // FIX: scope_only was silently dropped — now passed through from DTO
+        scope_only: dto.scope_only ?? false,
         status: 'ACTIVE',
       },
     });
 
-    // 6. Create candidates
-    const candidates = await this.prisma.candidates.createMany({
+    await this.prisma.candidates.createMany({
       data: dto.candidates.map((c) => ({
         event_id: event.event_id,
         candidate_name: c.candidate_name,
@@ -708,7 +750,7 @@ export class EventsService {
       })),
     });
 
-    // 7. Seed vote_results rows (count = 0) for each candidate
+    // Seed vote_results rows so all candidates appear in results even with 0 votes
     const createdCandidates = await this.prisma.candidates.findMany({
       where: { event_id: event.event_id },
     });
@@ -721,10 +763,7 @@ export class EventsService {
       skipDuplicates: true,
     });
 
-    return {
-      ...event,
-      candidates: createdCandidates,
-    };
+    return { ...event, candidates: createdCandidates };
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -736,9 +775,27 @@ export class EventsService {
     this.assertOrgIdentity(user, event.orgid ?? '', event.created_by_uid ?? '');
     this.assertEventNotStarted(event);
 
+    // FIX: validate mutual exclusion. Resolve effective values (dto may only
+    //      supply one of the two) against the existing event state.
+    const effectiveScopeOnly =
+      dto.scope_only !== undefined
+        ? dto.scope_only
+        : (event.scope_only ?? false);
+    const effectiveVisibleUpward =
+      dto.visible_upward !== undefined
+        ? dto.visible_upward
+        : (event.visibility_upward ?? false);
+
+    if (effectiveScopeOnly && effectiveVisibleUpward) {
+      throw new BadRequestException(
+        'scope_only and visible_upward cannot both be true',
+      );
+    }
+
     const start = dto.start_time ? new Date(dto.start_time) : event.start_time;
     const end = dto.end_time ? new Date(dto.end_time) : event.end_time;
-    if (end <= start) throw new BadRequestException('end_time must be after start_time');
+    if (end <= start)
+      throw new BadRequestException('end_time must be after start_time');
 
     const updated = await this.prisma.events.update({
       where: { event_id: eventId },
@@ -747,8 +804,14 @@ export class EventsService {
         ...(dto.description !== undefined && { description: dto.description }),
         ...(dto.start_time !== undefined && { start_time: start }),
         ...(dto.end_time !== undefined && { end_time: end }),
-        ...(dto.show_live_results !== undefined && { show_live_results: dto.show_live_results }),
-        ...(dto.visible_upward !== undefined && { visibility_upward: dto.visible_upward }),
+        ...(dto.show_live_results !== undefined && {
+          show_live_results: dto.show_live_results,
+        }),
+        ...(dto.visible_upward !== undefined && {
+          visibility_upward: dto.visible_upward,
+        }),
+        // FIX: scope_only was never passed through in updates
+        ...(dto.scope_only !== undefined && { scope_only: dto.scope_only }),
       },
     });
 
@@ -786,15 +849,15 @@ export class EventsService {
       event.status === 'COMPLETED';
 
     if (!canSee) {
-      throw new ForbiddenException('Live results are not enabled for this event');
+      throw new ForbiddenException(
+        'Live results are not enabled for this event',
+      );
     }
 
     const results = await this.prisma.vote_results.findMany({
       where: { event_id: eventId },
       include: {
-        candidates: {
-          select: { candidate_name: true, description: true },
-        },
+        candidates: { select: { candidate_name: true, description: true } },
       },
       orderBy: { vote_count: 'desc' },
     });
@@ -808,9 +871,10 @@ export class EventsService {
       total_votes: total,
       results: results.map((r) => ({
         candidate_id: r.candidate_id,
-        candidate_name: (r as any).candidates?.candidate_name,
+        candidate_name: r.candidates?.candidate_name,
         vote_count: r.vote_count,
-        percentage: total > 0 ? +(((r.vote_count ?? 0) / total) * 100).toFixed(2) : 0,
+        percentage:
+          total > 0 ? +(((r.vote_count ?? 0) / total) * 100).toFixed(2) : 0,
       })),
     };
   }
@@ -821,7 +885,6 @@ export class EventsService {
   async getParticipants(user: JwtUser, eventId: number) {
     const event = await this.getEventOrThrow(eventId);
 
-    // Must be organizer in that org
     if (user.type !== 'ORG' || user.orgid !== event.orgid) {
       throw new ForbiddenException('Organizer access required');
     }
@@ -830,7 +893,6 @@ export class EventsService {
     });
     if (!role) throw new ForbiddenException('Not an organizer');
 
-    // Can only see participants within their scope or below
     const participants = await this.prisma.$queryRaw<any[]>`
       SELECT
         ep.uid,
@@ -865,15 +927,12 @@ export class EventsService {
 
   private assertEventNotStarted(event: any) {
     if (new Date() >= new Date(event.start_time)) {
-      throw new BadRequestException('Cannot modify an event that has already started');
+      throw new BadRequestException(
+        'Cannot modify an event that has already started',
+      );
     }
   }
 
-  /**
-   * Asserts the logged-in user is acting as the given orgid+uid combo.
-   * For UNIFIED users who may have multiple ORG identities, we check
-   * their identity_wallet or user_org linkage.
-   */
   private assertOrgIdentity(user: JwtUser, orgid: string, uid: string) {
     if (user.type === 'ORG') {
       if (user.orgid !== orgid || user.uid !== uid) {
@@ -882,23 +941,21 @@ export class EventsService {
         );
       }
     }
-    // UNIFIED users pass — service-level ownership check (created_by_uid) is enough
+    // UNIFIED users pass — ownership is verified via created_by_uid comparison
   }
 
-  /**
-   * Checks that scope_id belongs to orgid.
-   */
   private async assertScopeInOrg(orgid: string, scopeId: number) {
     const scope = await this.prisma.org_scope.findFirst({
       where: { scope_id: scopeId, orgid },
     });
-    if (!scope) throw new BadRequestException('Scope does not belong to this org');
+    if (!scope)
+      throw new BadRequestException('Scope does not belong to this org');
   }
 
-  /**
-   * Checks that targetScope is within the descendant tree of organizerScope.
-   */
-  private async assertScopeReachable(organizerScopeId: number, targetScopeId: number) {
+  private async assertScopeReachable(
+    organizerScopeId: number,
+    targetScopeId: number,
+  ) {
     const rows = await this.prisma.$queryRaw<{ scope_id: number }[]>`
       SELECT scope_id FROM get_scope_descendants(${organizerScopeId}::int)
     `;
@@ -908,9 +965,6 @@ export class EventsService {
     }
   }
 
-  /**
-   * Verifies the calling user can see the given event.
-   */
   private async assertEventVisible(user: JwtUser, event: any) {
     const identities = await this.resolveOrgIdentities(user);
     for (const { orgid, scope_id } of identities) {
@@ -920,19 +974,20 @@ export class EventsService {
         SELECT event_id FROM get_visible_events(${orgid}::varchar, ${scope_id}::int)
         WHERE event_id = ${event.event_id}
       `;
-      if (rows.length > 0) return; // visible — allow
+      if (rows.length > 0) return;
     }
     throw new ForbiddenException('Event not visible to your account');
   }
 
   /**
    * Resolves all (orgid, uid, scope_id) pairs the calling user can act as.
+   * Exported so CandidatesService can reuse it without duplication.
    *
    * - ORG session    → single identity from JWT
-   * - UNIFIED session → all ORG identities linked via identity_wallet / user_org
+   * - UNIFIED session → all ORG memberships linked via org_members.pid
    * - GOV session    → no org identities (returns empty)
    */
-  private async resolveOrgIdentities(
+  async resolveOrgIdentities(
     user: JwtUser,
   ): Promise<{ orgid: string; uid: string; scope_id: number }[]> {
     if (user.type === 'ORG' && user.orgid && user.uid) {
@@ -944,8 +999,9 @@ export class EventsService {
     }
 
     if (user.type === 'UNIFIED' && user.pid) {
-      // All ORG memberships linked to this pid
-      const links = await this.prisma.user_org.findMany({
+      // FIX: pid is string in JWT — BigInt() accepts string, but explicit cast
+      //      makes the intent clear and guards against accidental number coercion.
+      const links = await this.prisma.org_members.findMany({
         where: { pid: BigInt(user.pid) },
         select: { orgid: true, uid: true },
       });

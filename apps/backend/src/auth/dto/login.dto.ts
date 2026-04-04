@@ -1,39 +1,43 @@
-import { IsIn, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsIn, IsOptional, IsString } from 'class-validator';
 
 export class LoginDto {
   /**
-   * Login type: UNIFIED (mobile/email), ORG (orgid+uid), GOV (epic_id)
+   * Login type: UNIFIED (mobile/email), ORG (orgid+uid), GOV (epic_id).
    */
   @IsIn(['UNIFIED', 'ORG', 'GOV'])
   type: 'UNIFIED' | 'ORG' | 'GOV';
 
   /**
-   * The contact identifier the OTP was sent to.
-   * UNIFIED → mobile or email
-   * ORG     → the mobile/email on file for that org member
-   * GOV     → the mobile/email on file for that EPIC ID
+   * UNIFIED only — the mobile number or email the account is registered with.
+   * OTP will be sent to this address.
+   * Not used for ORG or GOV logins; contact is resolved server-side from the
+   * identity record (org_members.email/mobile or gov_identity.email/mobile).
    */
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  identifier: string;
+  identifier?: string;
 
   /**
-   * The 6-digit OTP received on the identifier above.
+   * The 6-digit OTP received at the resolved contact address.
+   * Omit when calling /auth/send-login-otp (OTP not yet issued).
    */
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  otp: string;
+  otp?: string;
 
-  // ── ORG-specific ──────────────────────────────────────────────────────
+  // ── ORG-specific ──────────────────────────────────────────────────────────
+  /** Organization ID (e.g. ABC1234). Required when type === 'ORG'. */
   @IsOptional()
   @IsString()
   orgid?: string;
 
+  /** Member's personal ID within the org. Required when type === 'ORG'. */
   @IsOptional()
   @IsString()
   uid?: string;
 
-  // ── GOV-specific ──────────────────────────────────────────────────────
+  // ── GOV-specific ──────────────────────────────────────────────────────────
+  /** Voter EPIC ID. Required when type === 'GOV'. */
   @IsOptional()
   @IsString()
   epic_id?: string;

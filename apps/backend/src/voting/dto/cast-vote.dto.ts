@@ -1,5 +1,5 @@
 // dto/cast-vote.dto.ts
-import { IsInt, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsInt, IsOptional, IsString } from 'class-validator';
 
 export class CastVoteDto {
   @IsInt()
@@ -7,19 +7,6 @@ export class CastVoteDto {
 
   @IsInt()
   candidate_id: number;
-
-  /**
-   * The org + uid the caller is voting as.
-   * Required — a user may belong to multiple orgs so must declare context.
-   */
-  @IsString()
-  @IsNotEmpty()
-  orgid: string;
-
-  @IsString()
-  @IsNotEmpty()
-  uid: string;
-
   /**
    * Optional client-side device fingerprint for fraud detection.
    */

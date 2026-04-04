@@ -1,582 +1,640 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { Input } from '../components/ui/input';
-import { Label } from '../components/ui/label';
-import { Button } from '../components/ui/button';
+import {useRef, useState} from 'react';
+import {useNavigate} from 'react-router';
+import {Card, CardContent, CardDescription, CardHeader, CardTitle} from '../components/ui/card';
+import {Tabs, TabsContent, TabsList, TabsTrigger} from '../components/ui/tabs';
+import {Input} from '../components/ui/input';
+import {Label} from '../components/ui/label';
+import {Button} from '../components/ui/button';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
 } from '../components/ui/select';
-import { OTPVerificationModal } from '../components/otp-verification-modal';
+import {OTPVerificationModal} from '../components/otp-verification-modal';
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
 } from "../components/ui/dialog";
-import { useAppContext, OrgType } from '../context/app-context';
-import { Shield, Info } from 'lucide-react';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip';
-import { ImageWithFallback } from '../components/figma/ImageWithFallback';
-import { api, setToken } from '../../lib/api';
-import { countryStateMap } from '../../constants/location';
+import {useAppContext, type SessionType} from '../context/app-context';
+import {Shield, Info} from 'lucide-react';
+import {Tooltip, TooltipContent, TooltipProvider, TooltipTrigger} from '../components/ui/tooltip';
+import {ImageWithFallback} from '../components/figma/ImageWithFallback';
+import {api, setToken, type LoginBody} from '../../lib/api';
+import {countryStateMap} from '../../constants/location';
+
+type LoginMode = 'UNIFIED' | 'ORG' | 'GOV';
 
 export function AuthPage() {
-  const navigate = useNavigate();
-  const { setUser, addIdentity, setActiveIdentity } = useAppContext();
+    const navigate = useNavigate();
+    const {setUser, setSession} = useAppContext();
 
-  // Register form state
-  const [email, setEmail] = useState('');
-  const [firstName, setFirstName] = useState('');
-  const [middleName, setMiddleName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [state, setState] = useState('');
-  const [country, setCountry] = useState('');
+    // ── Refs ───────────────────────────────────────────────────────────────────
+    const refRegContact = useRef<HTMLInputElement>(null);
+    const refFirstName = useRef<HTMLInputElement>(null);
+    const refMiddleName = useRef<HTMLInputElement>(null);
+    const refLastName = useRef<HTMLInputElement>(null);
+    const refOrgId = useRef<HTMLInputElement>(null);
+    const refUid = useRef<HTMLInputElement>(null);
+    const refEpicId = useRef<HTMLInputElement>(null);
+    const refCountry = useRef<HTMLButtonElement>(null);
+    const refState = useRef<HTMLButtonElement>(null);
 
-  // Login form state
-  const [orgType, setOrgType] = useState<OrgType>('Unified Account');
-  const [epicId, setEpicId] = useState('');
-  const [organizationId, setOrganizationId] = useState('');
-  const [personalOrgId, setPersonalOrgId] = useState('');
-  const [loginContact, setLoginContact] = useState('');
+    // ── Register form ──────────────────────────────────────────────────────────
+    const [regContact, setRegContact] = useState('');
+    const [firstName, setFirstName] = useState('');
+    const [middleName, setMiddleName] = useState('');
+    const [lastName, setLastName] = useState('');
+    const [state, setState] = useState('');
+    const [country, setCountry] = useState('');
 
-  // OTP Modal state
-  const [showWhatsAppHelp, setShowWhatsAppHelp] = useState(false);
-  const [showOTPModal, setShowOTPModal] = useState(false);
-  const [otpContact, setOTPContact] = useState('');
-  const [isRegistering, setIsRegistering] = useState(false);
+    // ── Login form ─────────────────────────────────────────────────────────────
+    const [loginContact, setLoginContact] = useState('');
+    const [loginMode, setLoginMode] = useState<LoginMode>('UNIFIED');
+    const [epicId, setEpicId] = useState('');
+    const [orgId, setOrgId] = useState('');
+    const [uid, setUid] = useState('');
 
-  // Error state
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+    // ── OTP / UI state ─────────────────────────────────────────────────────────
+    const [showOTPModal, setShowOTPModal] = useState(false);
+    const [otpContact, setOtpContact] = useState('');
+    const [isRegistering, setIsRegistering] = useState(false);
+    const [showWhatsAppHelp, setShowWhatsAppHelp] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [loading, setLoading] = useState(false);
+    const [otpActive, setOtpActive] = useState(false);
 
-  const isRegisterValid = email && firstName && lastName && state && country;
-  const isLoginValid =
-    (orgType === 'Government' && epicId) ||
-    (orgType === 'Other ORG' && organizationId && personalOrgId) ||
-    (orgType === 'Unified Account' && loginContact);
+    // FIX: epoch ms when the OTP was last dispatched — passed to the modal so
+    // its resend-cooldown timer is based on the real send time, not mount time.
+    const [otpSentAt, setOtpSentAt] = useState<number | null>(null);
 
-  // ─── Derive the OTP identifier for each login type ─────────────────────
-  // For UNIFIED: the mobile/email entered
-  // For GOV / ORG: we need the user to tell us where to send the OTP.
-  // The backend will validate it matches the registered contact.
-  // We reuse loginContact as the "contact" field for GOV/ORG paths too —
-  // the user must type in their registered mobile/email so the OTP
-  // can be delivered and verified.
-  function getLoginIdentifier() {
-    return loginContact; // always used as the OTP delivery contact
-  }
+    // ── Validation ─────────────────────────────────────────────────────────────
+    const isRegisterValid = regContact && firstName && lastName && state && country;
+    const isLoginValid =
+        loginMode === 'UNIFIED' ? !!loginContact :
+            loginMode === 'ORG' ? !!(orgId && uid) :
+                loginMode === 'GOV' ? !!epicId : false;
 
-  // ─── Register: step 1 — send OTP ────────────────────────────────────────
-  const handleRegister = async () => {
-    setError(null);
-    const identifier = email.trim().toLowerCase();
-    try {
-      setLoading(true);
-      await api.sendOtp(identifier);
-      setOTPContact(identifier);
-      setIsRegistering(true);
-      setShowOTPModal(true);
-    } catch (e: any) {
-      setError(e.message ?? 'Failed to send OTP');
-    } finally {
-      setLoading(false);
-    }
-  };
+    // ── Enter-key helper ───────────────────────────────────────────────────────
+    const focusOrSubmit = (
+        next: React.RefObject<HTMLElement> | null,
+        submitFn: () => void,
+        isValid = true
+    ) => (e: React.KeyboardEvent) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        if (next?.current) {
+            next.current.focus();
+        } else if (isValid) {
+            submitFn();
+        }
+    };
 
-  // ─── Login: step 1 — send OTP ───────────────────────────────────────────
-  const handleLogin = async () => {
-    setError(null);
-    const identifier = getLoginIdentifier().trim().toLowerCase();
-    if (!identifier) {
-      setError('Please enter the mobile/email registered with your account');
-      return;
-    }
-    try {
-      setLoading(true);
-      await api.sendOtp(identifier);
-      setOTPContact(identifier);
-      setIsRegistering(false);
-      setShowOTPModal(true);
-    } catch (e: any) {
-      setError(e.message ?? 'Failed to send OTP');
-    } finally {
-      setLoading(false);
-    }
-  };
+    // ── Handlers ───────────────────────────────────────────────────────────────
+    const handleRegister = async () => {
+        setError(null);
+        const identifier = regContact.trim().toLowerCase();
 
-  // ─── OTP verified: step 2 — register or login ───────────────────────────
-  const handleOTPVerify = async (otp: string) => {
-    setError(null);
-    try {
-      setLoading(true);
-
-      if (isRegistering) {
-        // ── REGISTER ──────────────────────────────────────────────────────
-        const user = await api.register({
-          first_name: firstName,
-          middle_name: middleName || undefined,
-          last_name: lastName,
-          // determine whether the identifier is email or mobile
-          ...(email.includes('@') ? { email: email.trim() } : { mobile: email.trim() }),
-          state,
-          country,
-          otp,
-        }) as any;
-
-        // After registration, log the user in automatically via UNIFIED login
-        const identifier = email.trim().toLowerCase();
-
-        // Re-send OTP is NOT needed here because /users/register already
-        // consumed the OTP. We issue a fresh OTP for the auto-login step.
-        // However the simplest UX is: registration succeeded, ask user to login.
-        // We'll set up the app context with the data we got back and skip
-        // the auto-login to avoid a second OTP round-trip.
-        setUser({
-          pid: user.pid?.toString(),
-          email: user.email ?? undefined,
-          mobile: user.mobile ?? undefined,
-          firstName: user.first_name,
-          middleName: user.middle_name ?? undefined,
-          lastName: user.last_name,
-          state,
-          country,
-        });
-
-        const identity = {
-          id: user.pid?.toString(),
-          type: 'Unified Account' as OrgType,
-          displayName: `${user.first_name} ${user.last_name}`,
-          email: user.email ?? undefined,
-        };
-        addIdentity(identity);
-        setActiveIdentity(identity);
-
-        setShowOTPModal(false);
-        navigate('/dashboard');
-
-      } else {
-        // ── LOGIN ─────────────────────────────────────────────────────────
-        const identifier = getLoginIdentifier().trim().toLowerCase();
-
-        let loginBody: object;
-        if (orgType === 'Government') {
-          loginBody = { type: 'GOV', identifier, otp, epic_id: epicId };
-        } else if (orgType === 'Other ORG') {
-          loginBody = { type: 'ORG', identifier, otp, orgid: organizationId, uid: personalOrgId };
-        } else {
-          loginBody = { type: 'UNIFIED', identifier, otp };
+        if (otpActive && otpContact === identifier) {
+            setIsRegistering(true);
+            setShowOTPModal(true);
+            return;
         }
 
-        const { access_token } = await api.login(loginBody);
-        setToken(access_token);
-
-        // Fetch real profile from the server
-        const profile = await api.getMe() as any;
-
-        setUser({
-          pid: profile.pid?.toString(),
-          email: profile.email ?? undefined,
-          mobile: profile.mobile ?? undefined,
-          firstName: profile.first_name,
-          middleName: profile.middle_name ?? undefined,
-          lastName: profile.last_name,
-          state: profile.state ?? undefined,
-          country: profile.country ?? undefined,
-        });
-
-        // Build identity entry from login type
-        let identity;
-        if (orgType === 'Government') {
-          identity = {
-            id: `GOV-${epicId}`,
-            type: orgType as OrgType,
-            epicId,
-            displayName: `Government - ${epicId}`,
-          };
-        } else if (orgType === 'Other ORG') {
-          identity = {
-            id: `${organizationId}-${personalOrgId}`,
-            type: orgType as OrgType,
-            orgId: organizationId,
-            personalOrgId,
-            displayName: `${organizationId} - ${personalOrgId}`,
-          };
-        } else {
-          identity = {
-            id: profile.pid?.toString(),
-            type: 'Unified Account' as OrgType,
-            displayName: `${profile.first_name} ${profile.last_name}`,
-            email: profile.email ?? undefined,
-          };
+        try {
+            setLoading(true);
+            await api.sendOtp(identifier);
+            setOtpContact(identifier);
+            setIsRegistering(true);
+            setOtpActive(true);
+            setOtpSentAt(Date.now()); // record exact send time
+            setShowOTPModal(true);
+        } catch (e: any) {
+            setError(e.message ?? 'Failed to send OTP');
+        } finally {
+            setLoading(false);
         }
-        addIdentity(identity);
-        setActiveIdentity(identity);
+    };
 
-        setShowOTPModal(false);
-        navigate('/dashboard');
-      }
-    } catch (e: any) {
-      setError(e.message ?? 'Verification failed');
-      // Keep modal open so user can retry
-    } finally {
-      setLoading(false);
-    }
-  };
+    const handleLogin = async () => {
+        setError(null);
+        try {
+            setLoading(true);
 
-  return (
-    <div className="min-h-screen flex">
-      {/* Left side - Branding */}
-      <div className="hidden lg:flex lg:w-1/2 bg-[#1e40af] relative overflow-hidden">
-        <div className="absolute inset-0 opacity-20">
-          <ImageWithFallback
-            src="https://images.unsplash.com/photo-1698281958513-2e09090da395?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxzZWN1cmUlMjB2b3RpbmclMjB0ZWNobm9sb2d5JTIwZGlnaXRhbHxlbnwxfHx8fDE3NzMyMzcxNjN8MA&ixlib=rb-4.1.0&q=80&w=1080"
-            alt="Secure voting"
-            className="w-full h-full object-cover"
-          />
-        </div>
-        <div className="relative z-10 flex flex-col justify-center items-center w-full px-12 text-white">
-          <div className="flex items-center gap-3 mb-6">
-            <Shield className="h-16 w-16" />
-            <h1 className="text-5xl">VoteCore</h1>
-          </div>
-          <p className="text-xl text-center max-w-md opacity-90">
-            Secure, transparent, and accessible online voting for the digital age
-          </p>
-          <div className="mt-12 space-y-4 max-w-md">
-            {[
-              { title: 'End-to-End Encryption', body: 'Your vote is secured with industry-leading encryption' },
-              { title: 'Verified Identity', body: 'Multi-factor authentication ensures voting integrity' },
-              { title: 'Unified Account', body: 'Link multiple identities to one secure account' },
-            ].map((item) => (
-              <div key={item.title} className="flex items-start gap-3">
-                <div className="bg-white/20 rounded-full p-2 mt-1">
-                  <Shield className="h-5 w-5" />
-                </div>
-                <div>
-                  <h3 className="text-lg mb-1">{item.title}</h3>
-                  <p className="text-sm opacity-80">{item.body}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+            type SendOtpBody =
+                | { type: 'UNIFIED'; identifier: string }
+                | { type: 'ORG'; orgid: string; uid: string }
+                | { type: 'GOV'; epic_id: string };
 
-      {/* Right side - Auth forms */}
-      <div className="flex-1 flex items-center justify-center p-8 bg-gray-50">
-        <Card className="w-full max-w-md shadow-lg">
-          <CardHeader>
-            <CardTitle>Welcome to VoteCore</CardTitle>
-            <CardDescription>Secure online voting platform</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {/* Global error banner */}
-            {error && (
-              <div className="mb-4 rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
-                {error}
-              </div>
-            )}
+            let sendBody: SendOtpBody;
+            let resolvedContact: string;
 
-            <Tabs defaultValue="login" onValueChange={() => setError(null)}>
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="login">Login</TabsTrigger>
-                <TabsTrigger value="register">Register</TabsTrigger>
-              </TabsList>
+            if (loginMode === 'UNIFIED') {
+                const identifier = loginContact.trim().toLowerCase();
+                if (!identifier) {
+                    setError('Enter your mobile or email');
+                    return;
+                }
+                sendBody = {type: 'UNIFIED', identifier};
+                resolvedContact = identifier;
+            } else if (loginMode === 'ORG') {
+                sendBody = {type: 'ORG', orgid: orgId.trim().toUpperCase(), uid: uid.trim().toUpperCase()};
+                resolvedContact = 'your registered contact';
+            } else {
+                sendBody = {type: 'GOV', epic_id: epicId.trim().toUpperCase()};
+                resolvedContact = 'your registered contact';
+            }
 
-              {/* ── Login Tab ── */}
-              <TabsContent value="login" className="space-y-4 mt-4">
-                <div className="space-y-2">
-                  <Label htmlFor="orgType">Account Type</Label>
-                  <Select value={orgType} onValueChange={(v) => { setOrgType(v as OrgType); setError(null); }}>
-                    <SelectTrigger id="orgType">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="Other ORG">ORG Account</SelectItem>
-                      <SelectItem value="Unified Account">Unified Account</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+            if (otpActive && otpContact === resolvedContact) {
+                setIsRegistering(false);
+                setShowOTPModal(true);
+                return;
+            }
 
-                {orgType === 'Government' && (
-                  <div className="space-y-2">
-                    <Label htmlFor="epicId">
-                      EPIC ID <span className="text-destructive">*</span>
-                    </Label>
-                    <Input
-                      id="epicId"
-                      placeholder="Enter your EPIC ID"
-                      value={epicId}
-                      onChange={(e) => setEpicId(e.target.value)}
+            await api.sendLoginOtp(sendBody);
+            setOtpContact(resolvedContact);
+            setIsRegistering(false);
+            setOtpActive(true);
+            setOtpSentAt(Date.now()); // record exact send time
+            setShowOTPModal(true);
+        } catch (e: any) {
+            setError(e.message ?? 'Failed to send OTP');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleOTPVerify = async (otp: string) => {
+        if (isRegistering) {
+            const identifier = regContact.trim().toLowerCase();
+            const isEmail = identifier.includes('@');
+            const user = await api.register({
+                first_name: firstName,
+                middle_name: middleName || undefined,
+                last_name: lastName,
+                ...(isEmail ? {email: identifier} : {mobile: identifier}),
+                state, country, otp,
+            });
+            setUser({
+                pid: user.pid,
+                first_name: user.first_name,
+                middle_name: user.middle_name,
+                last_name: user.last_name,
+                email: user.email,
+                mobile: user.mobile,
+                state, country,
+            });
+            setShowOTPModal(false);
+            setOtpActive(false);
+            setOtpSentAt(null);
+            navigate('/dashboard');
+        } else {
+            let loginBody: LoginBody;
+            if (loginMode === 'UNIFIED') {
+                loginBody = {type: 'UNIFIED', identifier: loginContact.trim().toLowerCase(), otp};
+            } else if (loginMode === 'ORG') {
+                loginBody = {type: 'ORG', orgid: orgId.trim().toUpperCase(), uid: uid.trim().toUpperCase(), otp};
+            } else {
+                loginBody = {type: 'GOV', epic_id: epicId.trim().toUpperCase(), otp};
+            }
+
+            const {access_token} = await api.login(loginBody);
+            setToken(access_token);
+
+            const profile = await api.getProfile() as any;
+            setSession({
+                type: profile.type,
+                pid: profile.pid?.toString(),
+                orgid: profile.orgid,
+                uid: profile.uid,
+                epic_id: profile.epic_id,
+                session_id: profile.session_id,
+            });
+
+            if (loginMode === 'UNIFIED') {
+                const me = await api.getMe();
+                setUser({
+                    pid: me.pid,
+                    first_name: me.first_name,
+                    middle_name: me.middle_name,
+                    last_name: me.last_name,
+                    email: me.email,
+                    mobile: me.mobile,
+                    state: me.state,
+                    country: me.country,
+                });
+            }
+
+            setShowOTPModal(false);
+            setOtpActive(false);
+            setOtpSentAt(null);
+            navigate('/dashboard');
+        }
+    };
+
+    const handleResendOtp = async () => {
+        setOtpActive(false);
+        setOtpSentAt(null);
+
+        if (isRegistering) {
+            await api.sendOtp(regContact.trim().toLowerCase());
+        } else {
+            type SendOtpBody =
+                | { type: 'UNIFIED'; identifier: string }
+                | { type: 'ORG'; orgid: string; uid: string }
+                | { type: 'GOV'; epic_id: string };
+
+            let sendBody: SendOtpBody;
+            if (loginMode === 'UNIFIED') {
+                sendBody = {type: 'UNIFIED', identifier: loginContact.trim().toLowerCase()};
+            } else if (loginMode === 'ORG') {
+                sendBody = {type: 'ORG', orgid: orgId.trim().toUpperCase(), uid: uid.trim().toUpperCase()};
+            } else {
+                sendBody = {type: 'GOV', epic_id: epicId.trim().toUpperCase()};
+            }
+            await api.sendLoginOtp(sendBody);
+        }
+
+        setOtpActive(true);
+        setOtpSentAt(Date.now()); // record the resend time as the new baseline
+    };
+
+    const contactIsPhone = (v: string): boolean => !!v && !v.includes('@');
+
+    return (
+        <div className="min-h-screen flex">
+            {/* ── Left side — Branding ── */}
+            <div className="hidden lg:flex lg:w-1/2 bg-[#1e40af] relative overflow-hidden">
+                <div className="absolute inset-0 opacity-20">
+                    <ImageWithFallback
+                        src="https://images.unsplash.com/photo-1698281958513-2e09090da395?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxzZWN1cmUlMjB2b3RpbmclMjB0ZWNobm9sb2d5JTIwZGlnaXRhbHxlbnwxfHx8fDE3NzMyMzcxNjN8MA&ixlib=rb-4.1.0&q=80&w=1080"
+                        alt="Secure voting"
+                        className="w-full h-full object-cover"
                     />
-                  </div>
-                )}
-
-                {orgType === 'Other ORG' && (
-                  <>
-                    <div className="space-y-2">
-                      <Label htmlFor="organizationId">
-                        Organization ID <span className="text-destructive">*</span>
-                      </Label>
-                      <Input
-                        id="organizationId"
-                        placeholder="Enter organization ID"
-                        value={organizationId}
-                        onChange={(e) => setOrganizationId(e.target.value)}
-                      />
+                </div>
+                <div className="relative z-10 flex flex-col justify-center items-center w-full px-12 text-white">
+                    <div className="flex items-center gap-3 mb-6">
+                        <svg width="64" height="64" viewBox="0 0 80 80">
+                            <circle cx="40" cy="40" r="37" fill="#1e40af"/>
+                            <circle cx="40" cy="40" r="28" stroke="#6B8AFF" strokeWidth="2.5" fill="none"
+                                    strokeDasharray="158 18" transform="rotate(-90 40 40)" strokeLinecap="round"/>
+                            <path d="M21 40 L33 52 L59 24" stroke="white" strokeWidth="7"
+                                  strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+                        </svg>
+                        <h1 className="text-5xl">VoteCore</h1>
                     </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="personalOrgId">
-                        Personal ORG ID <span className="text-destructive">*</span>
-                      </Label>
-                      <Input
-                        id="personalOrgId"
-                        placeholder="Enter your personal ID"
-                        value={personalOrgId}
-                        onChange={(e) => setPersonalOrgId(e.target.value)}
-                      />
-                    </div>
-                  </>
-                )}
-
-                {/* Contact field — always shown for OTP delivery */}
-                <div className="space-y-2">
-                  <Label htmlFor="loginContact">
-                    {orgType === 'Unified Account'
-                      ? <>Mobile Number or Email <span className="text-destructive">*</span></>
-                      : <>Registered Mobile / Email (for OTP) <span className="text-destructive">*</span></>
-                    }
-                  </Label>
-                  <Input
-                    id="loginContact"
-                    placeholder="Enter mobile or email"
-                    value={loginContact}
-                    onChange={(e) => setLoginContact(e.target.value)}
-                  />
-                </div>
-
-                <div className="flex items-center gap-2">
-                  {/* Main Button */}
-                  <Button
-                    className="flex-1"
-                    onClick={handleLogin}
-                    disabled={!isLoginValid || !loginContact || loading}
-                  >
-                    {loading ? 'Sending OTP…' : 'Send OTP'}
-                  </Button>
-
-                  {/* Info Button */}
-                  {loginContact && !loginContact.includes('@') && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="shrink-0"
-                      onClick={() => setShowWhatsAppHelp(true)}
-                    >
-                      <Info className="h-5 w-5" />
-                    </Button>
-                  )}
-                </div>
-              </TabsContent>
-
-              {/* ── Register Tab ── */}
-              <TabsContent value="register" className="space-y-4 mt-4">
-                <div className="space-y-2">
-                  <Label htmlFor="email">
-                    Email or Mobile Number <span className="text-destructive">*</span>
-                  </Label>
-                  <Input
-                    id="email"
-                    placeholder="your@email.com or 10-digit mobile"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-2">
-                    <Label htmlFor="firstName">
-                      First Name <span className="text-destructive">*</span>
-                    </Label>
-                    <Input
-                      id="firstName"
-                      placeholder="First name"
-                      value={firstName}
-                      onChange={(e) => setFirstName(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="middleName">Middle Name</Label>
-                    <Input
-                      id="middleName"
-                      placeholder="Middle name"
-                      value={middleName}
-                      onChange={(e) => setMiddleName(e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="lastName">
-                    Last Name <span className="text-destructive">*</span>
-                  </Label>
-                  <Input
-                    id="lastName"
-                    placeholder="Last name"
-                    value={lastName}
-                    onChange={(e) => setLastName(e.target.value)}
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-2">
-                    <Label htmlFor="state">
-                      State <span className="text-destructive">*</span>
-                    </Label>
-                    <Select value={state} onValueChange={setState} disabled={!country}>
-                      <SelectTrigger id="state">
-                        <SelectValue placeholder={country ? "Select state" : "Select country first"} />
-                      </SelectTrigger>
-
-                      <SelectContent>
-                        {countryStateMap[country]?.map((s) => (
-                          <SelectItem key={s.value} value={s.value}>
-                            {s.label}
-                          </SelectItem>
+                    <p className="text-xl text-center max-w-md opacity-90">
+                        Secure, transparent, and accessible online voting for the digital age
+                    </p>
+                    <div className="mt-12 space-y-4 max-w-md">
+                        {[
+                            {
+                                title: 'End-to-End Encryption',
+                                body: 'Your vote is secured with industry-leading encryption'
+                            },
+                            {title: 'Verified Identity', body: 'Multi-factor authentication ensures voting integrity'},
+                            {title: 'Unified Account', body: 'Link multiple identities to one secure account'},
+                        ].map((item) => (
+                            <div key={item.title} className="flex items-start gap-3">
+                                <div className="bg-white/20 rounded-full p-2 mt-1">
+                                    <Shield className="h-5 w-5"/>
+                                </div>
+                                <div>
+                                    <h3 className="text-lg mb-1">{item.title}</h3>
+                                    <p className="text-sm opacity-80">{item.body}</p>
+                                </div>
+                            </div>
                         ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="country">
-                      Country <span className="text-destructive">*</span>
-                    </Label>
-                    <Select
-                      value={country}
-                      onValueChange={(val) => {
-                        setCountry(val);
-                        setState(''); // 🔥 reset state when country changes
-                      }}
-                    >
-                      <SelectTrigger id="country">
-                        <SelectValue placeholder="Select country" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="USA">United States</SelectItem>
-                        <SelectItem value="UK">United Kingdom</SelectItem>
-                        <SelectItem value="CA">Canada</SelectItem>
-                        <SelectItem value="AU">Australia</SelectItem>
-                        <SelectItem value="IN">India</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+                    </div>
                 </div>
-
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-start gap-2">
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Info className="h-4 w-4 text-[#1e40af] mt-0.5 flex-shrink-0" />
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p className="max-w-xs">
-                          A unique Personal ID (PID) will be automatically generated for your
-                          account upon successful registration
-                        </p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                  <p className="text-sm text-blue-900">
-                    A unique PID will be generated for your account
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  {/* Main Button */}
-                  <Button
-                    className="flex-1"
-                    onClick={handleRegister}
-                    disabled={!isRegisterValid || loading}
-                  >
-                    {loading ? 'Sending OTP…' : 'Create Account'}
-                  </Button>
-
-                  {/* Info Button */}
-                  {email && !email.includes('@') && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="shrink-0"
-                      onClick={() => setShowWhatsAppHelp(true)}
-                    >
-                      <Info className="h-5 w-5" />
-                    </Button>
-                  )}
-                </div>
-              </TabsContent>
-            </Tabs>
-          </CardContent>
-        </Card>
-      </div>
-
-      <OTPVerificationModal
-        open={showOTPModal}
-        onClose={() => { setShowOTPModal(false); setError(null); }}
-        onVerify={handleOTPVerify}
-        contact={otpContact}
-      />
-      <Dialog open={showWhatsAppHelp} onOpenChange={setShowWhatsAppHelp}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Using Mobile Number?  </DialogTitle>
-          </DialogHeader>
-
-          <div className="grid md:grid-cols-2 gap-6 items-center">
-
-            {/* LEFT SIDE */}
-            <div className="space-y-4">
-              <h3 className="text-lg font-semibold">Opt-in First:</h3>
-
-              <p className="text-sm text-gray-600">
-                Send a message from your WhatsApp to:
-              </p>
-
-              <div className="font-medium text-lg flex items-center gap-2">
-                📱 +1 415 523 8886
-              </div>
-
-              <div className="text-sm">
-                with code <span className="font-semibold">join person-easy</span>
-              </div>
-
-              <a
-                href="https://wa.me/14155238886?text=join%20person-easy"
-                target="_blank"
-                className="inline-block bg-blue-600 text-white px-4 py-2 rounded-md"
-              >
-                Open WhatsApp
-              </a>
             </div>
 
-            {/* RIGHT SIDE */}
-            <div className="flex justify-center">
-              <img
-                src="/whatsappqr.svg" // 👈 put your QR in public folder
-                alt="WhatsApp QR"
-                className="w-48 h-48"
-              />
+            {/* ── Right side — Auth forms ── */}
+            <div className="flex-1 flex items-center justify-center p-8 bg-gray-50">
+                <Card className="w-full max-w-md shadow-lg">
+                    <CardHeader>
+                        <CardTitle>Welcome to VoteCore</CardTitle>
+                        <CardDescription>Secure online voting platform</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        {error && (
+                            <div
+                                className="mb-4 rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+                                {error}
+                            </div>
+                        )}
+
+                        <Tabs defaultValue="login" onValueChange={() => {
+                            setError(null);
+                            setOtpActive(false);
+                            setOtpSentAt(null);
+                        }}>
+                            <TabsList className="grid w-full grid-cols-2">
+                                <TabsTrigger value="login">Login</TabsTrigger>
+                                <TabsTrigger value="register">Register</TabsTrigger>
+                            </TabsList>
+
+                            {/* ── Login Tab ── */}
+                            <TabsContent value="login" className="space-y-4 mt-4">
+                                <div className="space-y-2">
+                                    <Label htmlFor="loginMode">Account Type</Label>
+                                    <Select value={loginMode} onValueChange={(v) => {
+                                        setLoginMode(v as LoginMode);
+                                        setError(null);
+                                        setOtpActive(false);
+                                        setOtpSentAt(null);
+                                    }}>
+                                        <SelectTrigger id="loginMode"><SelectValue/></SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="UNIFIED">Unified Account</SelectItem>
+                                            <SelectItem value="ORG">ORG Account</SelectItem>
+                                            <SelectItem value="GOV">Government</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+
+                                {loginMode === 'UNIFIED' && (
+                                    <div className="space-y-2">
+                                        <Label htmlFor="loginContact">
+                                            Mobile or Email <span className="text-destructive">*</span>
+                                        </Label>
+                                        <Input
+                                            id="loginContact"
+                                            placeholder="your@email.com or 10-digit mobile"
+                                            value={loginContact}
+                                            onChange={(e) => {
+                                                setLoginContact(e.target.value);
+                                                setOtpActive(false);
+                                                setOtpSentAt(null);
+                                            }}
+                                            onKeyDown={focusOrSubmit(null, handleLogin, isLoginValid)}
+                                        />
+                                    </div>
+                                )}
+
+                                {loginMode === 'ORG' && (
+                                    <>
+                                        <div className="space-y-2">
+                                            <Label htmlFor="orgId">
+                                                Organization ID <span className="text-destructive">*</span>
+                                            </Label>
+                                            <Input
+                                                ref={refOrgId}
+                                                id="orgId"
+                                                placeholder="e.g. ABC1234"
+                                                value={orgId}
+                                                onChange={(e) => {
+                                                    setOrgId(e.target.value);
+                                                    setOtpActive(false);
+                                                    setOtpSentAt(null);
+                                                }}
+                                                onKeyDown={focusOrSubmit(refUid, handleLogin)}
+                                            />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <Label htmlFor="uid">
+                                                Your Member ID (UID) <span className="text-destructive">*</span>
+                                            </Label>
+                                            <Input
+                                                ref={refUid}
+                                                id="uid"
+                                                placeholder="e.g. MEM001"
+                                                value={uid}
+                                                onChange={(e) => {
+                                                    setUid(e.target.value);
+                                                    setOtpActive(false);
+                                                    setOtpSentAt(null);
+                                                }}
+                                                onKeyDown={focusOrSubmit(null, handleLogin, isLoginValid)}
+                                            />
+                                        </div>
+                                        <p className="text-xs text-muted-foreground">
+                                            OTP will be sent to your registered contact on file.
+                                        </p>
+                                    </>
+                                )}
+
+                                {loginMode === 'GOV' && (
+                                    <>
+                                        <div className="space-y-2">
+                                            <Label htmlFor="epicId">
+                                                EPIC ID <span className="text-destructive">*</span>
+                                            </Label>
+                                            <Input
+                                                ref={refEpicId}
+                                                id="epicId"
+                                                placeholder="Enter your EPIC ID"
+                                                value={epicId}
+                                                onChange={(e) => {
+                                                    setEpicId(e.target.value);
+                                                    setOtpActive(false);
+                                                    setOtpSentAt(null);
+                                                }}
+                                                onKeyDown={focusOrSubmit(null, handleLogin, isLoginValid)}
+                                            />
+                                        </div>
+                                        <p className="text-xs text-muted-foreground">
+                                            OTP will be sent to your registered contact on file.
+                                        </p>
+                                    </>
+                                )}
+
+                                <div className="flex items-center gap-2">
+                                    <Button
+                                        className="flex-1"
+                                        onClick={handleLogin}
+                                        disabled={!isLoginValid || loading}
+                                    >
+                                        {loading ? 'Sending OTP…' : otpActive ? 'Enter OTP' : 'Send OTP'}
+                                    </Button>
+                                    {loginMode === 'UNIFIED' && contactIsPhone(loginContact) && (
+                                        <Button type="button" variant="ghost" size="icon" className="shrink-0"
+                                                onClick={() => setShowWhatsAppHelp(true)}>
+                                            <Info className="h-5 w-5"/>
+                                        </Button>
+                                    )}
+                                </div>
+                            </TabsContent>
+
+                            {/* ── Register Tab ── */}
+                            <TabsContent value="register" className="space-y-4 mt-4">
+                                <div className="space-y-2">
+                                    <Label htmlFor="regContact">
+                                        Email or Mobile Number <span className="text-destructive">*</span>
+                                    </Label>
+                                    <Input
+                                        ref={refRegContact}
+                                        id="regContact"
+                                        placeholder="your@email.com or 10-digit mobile"
+                                        value={regContact}
+                                        onChange={(e) => {
+                                            setRegContact(e.target.value);
+                                            setOtpActive(false);
+                                            setOtpSentAt(null);
+                                        }}
+                                        onKeyDown={focusOrSubmit(refFirstName, handleRegister, !!isRegisterValid)}
+                                    />
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div className="space-y-2">
+                                        <Label htmlFor="firstName">
+                                            First Name <span className="text-destructive">*</span>
+                                        </Label>
+                                        <Input
+                                            ref={refFirstName}
+                                            id="firstName"
+                                            placeholder="First name"
+                                            value={firstName}
+                                            onChange={(e) => setFirstName(e.target.value)}
+                                            onKeyDown={focusOrSubmit(refMiddleName, handleRegister, !!isRegisterValid)}
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label htmlFor="middleName">Middle Name</Label>
+                                        <Input
+                                            ref={refMiddleName}
+                                            id="middleName"
+                                            placeholder="Middle name"
+                                            value={middleName}
+                                            onChange={(e) => setMiddleName(e.target.value)}
+                                            onKeyDown={focusOrSubmit(refLastName, handleRegister, !!isRegisterValid)}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <Label htmlFor="lastName">
+                                        Last Name <span className="text-destructive">*</span>
+                                    </Label>
+                                    <Input
+                                        ref={refLastName}
+                                        id="lastName"
+                                        placeholder="Last name"
+                                        value={lastName}
+                                        onChange={(e) => setLastName(e.target.value)}
+                                        onKeyDown={focusOrSubmit(refCountry, handleRegister, !!isRegisterValid)}
+                                    />
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div className="space-y-2">
+                                        <Label htmlFor="country">
+                                            Country <span className="text-destructive">*</span>
+                                        </Label>
+                                        <Select value={country} onValueChange={(val) => {
+                                            setCountry(val);
+                                            setState('');
+                                            setTimeout(() => refState.current?.focus(), 0);
+                                        }}>
+                                            <SelectTrigger ref={refCountry} id="country">
+                                                <SelectValue placeholder="Select country"/>
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="USA">United States</SelectItem>
+                                                <SelectItem value="UK">United Kingdom</SelectItem>
+                                                <SelectItem value="CA">Canada</SelectItem>
+                                                <SelectItem value="AU">Australia</SelectItem>
+                                                <SelectItem value="IN">India</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label htmlFor="state">
+                                            State <span className="text-destructive">*</span>
+                                        </Label>
+                                        <Select value={state} onValueChange={setState} disabled={!country}>
+                                            <SelectTrigger ref={refState} id="state">
+                                                <SelectValue
+                                                    placeholder={country ? 'Select state' : 'Select country first'}/>
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {countryStateMap[country]?.map((s) => (
+                                                    <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                </div>
+
+                                <div
+                                    className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-start gap-2">
+                                    <TooltipProvider>
+                                        <Tooltip>
+                                            <TooltipTrigger asChild>
+                                                <Info className="h-4 w-4 text-[#1e40af] mt-0.5 flex-shrink-0"/>
+                                            </TooltipTrigger>
+                                            <TooltipContent>
+                                                <p className="max-w-xs">
+                                                    A unique Personal ID (PID) will be automatically generated for
+                                                    your account upon successful registration
+                                                </p>
+                                            </TooltipContent>
+                                        </Tooltip>
+                                    </TooltipProvider>
+                                    <p className="text-sm text-blue-900">A unique PID will be generated for your
+                                        account</p>
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                    <Button
+                                        className="flex-1"
+                                        onClick={handleRegister}
+                                        disabled={!isRegisterValid || loading}
+                                    >
+                                        {loading ? 'Sending OTP…' : otpActive ? 'Enter OTP' : 'Create Account'}
+                                    </Button>
+                                    {contactIsPhone(regContact) && (
+                                        <Button type="button" variant="ghost" size="icon" className="shrink-0"
+                                                onClick={() => setShowWhatsAppHelp(true)}>
+                                            <Info className="h-5 w-5"/>
+                                        </Button>
+                                    )}
+                                </div>
+                            </TabsContent>
+                        </Tabs>
+                    </CardContent>
+                </Card>
             </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
+
+            <OTPVerificationModal
+                open={showOTPModal}
+                onClose={() => {
+                    setShowOTPModal(false);
+                    setError(null);
+                }}
+                onVerify={handleOTPVerify}
+                onResend={handleResendOtp}
+                contact={otpContact}
+                sentAt={otpSentAt}  /* pass real send timestamp to modal */
+            />
+
+            <Dialog open={showWhatsAppHelp} onOpenChange={setShowWhatsAppHelp}>
+                <DialogContent className="max-w-2xl">
+                    <DialogHeader>
+                        <DialogTitle>Using Mobile Number?</DialogTitle>
+                    </DialogHeader>
+                    <div className="grid md:grid-cols-2 gap-6 items-center">
+                        <div className="space-y-4">
+                            <h3 className="text-lg font-semibold">Opt-in First:</h3>
+                            <p className="text-sm text-gray-600">Send a message from your WhatsApp to:</p>
+                            <div className="font-medium text-lg flex items-center gap-2">📱 +1 415 523 8886</div>
+                            <div className="text-sm">with code <span className="font-semibold">join person-easy</span>
+                            </div>
+                            <a href="https://wa.me/14155238886?text=join%20person-easy" target="_blank"
+                               className="inline-block bg-blue-600 text-white px-4 py-2 rounded-md">
+                                Open WhatsApp
+                            </a>
+                        </div>
+                        <div className="flex justify-center">
+                            <img src="/whatsappqr.svg" alt="WhatsApp QR" className="w-48 h-48"/>
+                        </div>
+                    </div>
+                </DialogContent>
+            </Dialog>
+        </div>
+    );
 }
