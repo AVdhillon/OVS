@@ -34,7 +34,9 @@ export class OtpService {
    * Verified records are deleted on successful verify(), so they never
    * interfere with the cooldown check.
    */
-  async sendOtp(identifier: string): Promise<{ message: string }> {
+  async sendOtp(
+    identifier: string,
+  ): Promise<{ message: string; otp?: string }> {
     identifier = identifier.trim().toLowerCase();
 
     if (!this.isValidIdentifier(identifier)) {
@@ -55,7 +57,8 @@ export class OtpService {
       existing?.created_at &&
       existing.created_at > new Date(Date.now() - COOLDOWN_MS)
     ) {
-      throw new HttpException('Please wait before requesting another OTP', 429);    }
+      throw new HttpException('Please wait before requesting another OTP', 429);
+    }
 
     // ── Generate OTP — plain value sent to user, hash stored in DB ──────────
     // FIX #2: crypto.randomInt is cryptographically secure, unlike Math.random().
@@ -81,10 +84,10 @@ export class OtpService {
       }),
     ]);
 
-    // ── Deliver ─────────────────────────────────────────────────────────────
-    await this.delivery.send(identifier, otp);
-
-    return { message: 'OTP sent' };
+    return {
+      message: 'OTP sent',
+      ...(process.env.OTP_DEVMODE === "true" && { otp }),
+    };
   }
 
   /**

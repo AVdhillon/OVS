@@ -1,3 +1,5 @@
+import {toast} from "sonner";
+
 const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
 import type {
     User,
@@ -87,7 +89,40 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.message ?? `HTTP ${res.status}`);
     }
-    return res.json();
+    let data: any = null;
+    data = await res.json();
+
+    // 👇 GLOBAL OTP INTERCEPT
+    if (data?.otp) {
+        toast(
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <strong>DEV OTP</strong>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontFamily: 'monospace', fontSize: 16 }}>
+        {data.otp}
+        </span>
+
+        <button
+        onClick={() => {
+            navigator.clipboard.writeText(data.otp);
+            toast.success("Copied!");
+        }}
+        style={{
+            padding: '2px 8px',
+                fontSize: 12,
+                border: '1px solid #ccc',
+                borderRadius: 4,
+                cursor: 'pointer',
+        }}
+    >
+        Copy
+        </button>
+        </div>
+        </div>
+    );
+    }
+    return data;
 }
 
 // ── Auth types ────────────────────────────────────────────────────────────────
