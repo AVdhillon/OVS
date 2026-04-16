@@ -142,22 +142,29 @@ export class VotingService {
     //   trg_vote_count              — increments vote_results
     //   trg_mark_participant_voted  — flips event_participants.has_voted
     //   trg_detect_vote_fraud       — logs suspicious IP/device patterns
-    const vote = await this.prisma.votes.create({
-      data: {
-        event_id: dto.event_id,
-        orgid: member.orgid,
-        uid: member.uid,
-        candidate_id: dto.candidate_id,
-        ip_address: ip,
-        device_fingerprint: dto.device_fingerprint ?? null,
-      },
-      select: {
-        vote_id: true,
-        event_id: true,
-        candidate_id: true,
-        voted_at: true,
-        voter_hash: true, // anonymised hash — uid is never returned
-      },
+    const SALT = process.env.VOTER_HASH_SALT!;
+
+    const vote = await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`
+    SELECT set_config('app.voter_hash_salt', ${SALT}, true)
+  `;
+      return tx.votes.create({
+        data: {
+          event_id: dto.event_id,
+          orgid: member.orgid,
+          uid: member.uid,
+          candidate_id: dto.candidate_id,
+          ip_address: ip,
+          device_fingerprint: dto.device_fingerprint ?? null,
+        },
+        select: {
+          vote_id: true,
+          event_id: true,
+          candidate_id: true,
+          voted_at: true,
+          voter_hash: true,
+        },
+      });
     });
 
     // ── 11. Optionally return live results ───────────────────────────────
