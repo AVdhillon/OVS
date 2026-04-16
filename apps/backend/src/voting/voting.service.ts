@@ -145,12 +145,9 @@ export class VotingService {
     const SALT = process.env.VOTER_HASH_SALT!;
 
     const vote = await this.prisma.$transaction(async (tx) => {
-      // 1. Set salt for this transaction
       await tx.$executeRaw`
     SELECT set_config('app.voter_hash_salt', ${SALT}, true)
   `;
-
-      // 2. Insert vote (trigger will now work)
       return tx.votes.create({
         data: {
           event_id: dto.event_id,
