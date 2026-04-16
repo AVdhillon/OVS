@@ -4,10 +4,36 @@ import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
 import { BigIntInterceptor } from './common/interceptors/bigint.interceptor';
+import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  // Swagger config
+  if (process.env.NODE_ENV !== 'production') {
+    const config = new DocumentBuilder()
+      .setTitle('My API')
+      .setDescription('API documentation')
+      .setVersion('1.0')
+      .addBearerAuth(
+        {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+          name: 'Authorization',
+          in: 'header',
+        },
+        'access-token',
+      )
+      .build();
 
+    const document = SwaggerModule.createDocument(app, config);
+
+    SwaggerModule.setup('api-docs', app, document, {
+      swaggerOptions: {
+        persistAuthorization: true, // 🔥 keeps token after refresh
+      },
+    });
+  }
   // ── 1. Global prefix ───────────────────────────────────────────────────────
   //app.setGlobalPrefix('api/v1');
 
@@ -37,7 +63,6 @@ async function bootstrap() {
   if (!allowedOrigins.length && process.env.NODE_ENV === 'production') {
     throw new Error('ALLOWED_ORIGINS must be set in production');
   }
-
   app.enableCors({
     origin: (origin, callback) => {
       // allow non-browser requests

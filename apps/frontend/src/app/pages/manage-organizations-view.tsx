@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { api } from '../../lib/api';
+import type { MemberRole, OrgMemberWithRoles } from '../../lib/api';
 import { useAppContext } from '../context/app-context';
-import type { OrgSummary, OrgMember, ScopeNode } from '../context/app-context';
+import type { OrgSummary, ScopeNode } from '../context/app-context';
 import { toast } from 'sonner';
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
@@ -23,9 +24,19 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import { Textarea } from '../components/ui/textarea';
 import { Checkbox } from '../components/ui/checkbox';
+import React from 'react';
+
+// FIX: use OrgMemberWithRoles from api.tsx instead of redefining a local OrgMember.
+// This removes the stale local type and ensures the cast in fetchMembers is no longer needed.
+type OrgMember = OrgMemberWithRoles;
+
+// ─── Role helpers ─────────────────────────────────────────────────────────────
+const hasVoter = (m: OrgMember) => m.roles.some((r) => r.is_voter);
+const hasOrganizer = (m: OrgMember) => m.roles.some((r) => r.is_organizer);
+const roleLabel = (r: MemberRole) =>
+    r.is_voter && r.is_organizer ? 'V+O' : r.is_voter ? 'V' : r.is_organizer ? 'O' : 'None';
 
 // ─── CSV helpers ──────────────────────────────────────────────────────────────
-
 function parseCsv(text: string): Array<Record<string, string>> {
   const lines = text.trim().split('\n').filter(Boolean);
   if (lines.length < 2) return [];
@@ -44,25 +55,21 @@ function generateOrgId(name: string): string {
 }
 
 // ─── Scope helpers ────────────────────────────────────────────────────────────
-
 function flattenTree(nodes: ScopeNode[]): ScopeNode[] {
   const result: ScopeNode[] = [];
-  const walk = (list: ScopeNode[]) => list.forEach((n) => { result.push(n); if (n.children?.length) walk(n.children); });
+  const walk = (list: ScopeNode[]) =>
+      list.forEach((n) => { result.push(n); if (n.children?.length) walk(n.children); });
   walk(nodes);
   return result;
 }
 
 // ─── ScopeTreeSelect ──────────────────────────────────────────────────────────
-
-function ScopeTreeSelectNode({
-                               node, depth, value, onSelect,
-                             }: {
+function ScopeTreeSelectNode({ node, depth, value, onSelect }: {
   node: ScopeNode; depth: number; value: string; onSelect: (v: string) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
   const hasChildren = (node.children?.length ?? 0) > 0;
   const isSelected = value === String(node.scope_id);
-
   return (
       <div>
         <div
@@ -92,23 +99,30 @@ function ScopeTreeSelectNode({
 function ScopeTreeSelect({
                            scopeTree, flatScopes, value, onChange,
                            placeholder = 'Select scope',
-                           allowAll = false,
-                           allowKeep = false,
+                           allowAll = false, allowKeep = false,
+                           exclude = [],
                            className = '',
                          }: {
   scopeTree: ScopeNode[]; flatScopes: ScopeNode[];
   value: string; onChange: (val: string) => void;
-  placeholder?: string; allowAll?: boolean; allowKeep?: boolean; className?: string;
+  placeholder?: string; allowAll?: boolean; allowKeep?: boolean;
+  exclude?: number[];
+  className?: string;
 }) {
   const [open, setOpen] = useState(false);
-
   const displayName =
       value === 'all'  ? 'All scopes' :
           value === 'keep' ? 'Keep current scope' :
               flatScopes.find((s) => String(s.scope_id) === value)?.scope_name ?? placeholder;
-
   const isDefault = !value || value === 'all' || value === 'keep';
   const handleSelect = (val: string) => { onChange(val); setOpen(false); };
+
+  const filterTree = (nodes: ScopeNode[]): ScopeNode[] =>
+      nodes
+          .filter((n) => !exclude.includes(n.scope_id))
+          .map((n) => ({ ...n, children: filterTree(n.children ?? []) }));
+
+  const filteredTree = exclude.length ? filterTree(scopeTree) : scopeTree;
 
   return (
       <Popover open={open} onOpenChange={setOpen}>
@@ -127,9 +141,7 @@ function ScopeTreeSelect({
                       className={`py-1.5 px-2.5 rounded-md cursor-pointer text-sm transition-colors
                   ${value === 'all' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground'}`}
                       onClick={() => handleSelect('all')}
-                  >
-                    All scopes
-                  </div>
+                  >All scopes</div>
                   <div className="my-1 border-t" />
                 </>
             )}
@@ -139,15 +151,13 @@ function ScopeTreeSelect({
                       className={`py-1.5 px-2.5 rounded-md cursor-pointer text-sm transition-colors
                   ${value === 'keep' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground'}`}
                       onClick={() => handleSelect('keep')}
-                  >
-                    Keep current scope
-                  </div>
+                  >Keep current scope</div>
                   <div className="my-1 border-t" />
                 </>
             )}
-            {scopeTree.length === 0
+            {filteredTree.length === 0
                 ? <p className="text-xs text-muted-foreground px-2.5 py-2">No scopes available</p>
-                : scopeTree.map((node) => (
+                : filteredTree.map((node) => (
                     <ScopeTreeSelectNode key={node.scope_id} node={node} depth={0} value={value} onSelect={handleSelect} />
                 ))
             }
@@ -158,14 +168,12 @@ function ScopeTreeSelect({
 }
 
 // ─── ScopeTreeNode (scope management sidebar) ─────────────────────────────────
-
 function ScopeTreeNode({ node, depth, selectedId, onSelect }: {
   node: ScopeNode; depth: number; selectedId: number | null; onSelect: (n: ScopeNode) => void;
 }) {
   const [open, setOpen] = useState(true);
   const hasChildren = node.children && node.children.length > 0;
   const isSelected = selectedId === node.scope_id;
-
   return (
       <div>
         <div
@@ -197,34 +205,38 @@ function ScopeTreeNode({ node, depth, selectedId, onSelect }: {
 }
 
 // ─── Register Org Modal ───────────────────────────────────────────────────────
-
-function RegisterOrgModal({ open, onClose, onSuccess }: { open: boolean; onClose: () => void; onSuccess: () => void }) {
+function RegisterOrgModal({ open, onClose, onSuccess }: {
+  open: boolean; onClose: () => void; onSuccess: () => void;
+}) {
   const [orgName, setOrgName] = useState('');
   const [preferredOrgId, setPreferredOrgId] = useState('');
   const [callerUid, setCallerUid] = useState('');
   const [callerIdentifier, setCallerIdentifier] = useState('');
   const [memberTab, setMemberTab] = useState<'table' | 'csv'>('table');
   const [csvText, setCsvText] = useState('');
-  const [tableRows, setTableRows] = useState([{ uid: '', contact: '', role: 'v' as 'v' | 'vo' }]);
+  // FIX: role type was 'v' | 'vo' — missing 'o' and 'none' which are valid backend values.
+  const [tableRows, setTableRows] = useState([{ uid: '', contact: '', role: 'v' as 'v' | 'vo' | 'o' | 'none' }]);
   const [loading, setLoading] = useState(false);
 
   const suggestedOrgId = preferredOrgId.trim() || (orgName ? generateOrgId(orgName) : '');
-  const addRow = () => setTableRows((r) => [...r, { uid: '', contact: '', role: 'v' }]);
-  const updateRow = (idx: number, field: keyof (typeof tableRows)[0], val: string) =>
+  const addRow = () => setTableRows((r) => [...r, { uid: '', contact: '', role: 'v' as const }]);
+  const updateRow = (idx: number, field: string, val: string) =>
       setTableRows((rows) => rows.map((r, i) => (i === idx ? { ...r, [field]: val } : r)));
   const removeRow = (idx: number) => setTableRows((rows) => rows.filter((_, i) => i !== idx));
 
-  const buildParticipants = () => memberTab === 'csv'
-      ? parseCsv(csvText).filter((r) => (r.uid ?? '').trim()).map((r) => ({
-        uid: (r.uid ?? '').trim().toUpperCase(),
-        participant_identifier: (r.contact ?? r.email ?? r.mobile ?? '').trim() || undefined,
-        role: (r.role as 'v' | 'vo') || 'v',
-      }))
-      : tableRows.filter((r) => r.uid.trim()).map((r) => ({
-        uid: r.uid.trim().toUpperCase(),
-        participant_identifier: r.contact.trim() || undefined,
-        role: r.role,
-      }));
+  const buildParticipants = () =>
+      memberTab === 'csv'
+          ? parseCsv(csvText).filter((r) => (r.uid ?? '').trim()).map((r) => ({
+            uid: (r.uid ?? '').trim().toUpperCase(),
+            participant_identifier: (r.contact ?? r.email ?? r.mobile ?? '').trim() || undefined,
+            // FIX: cast now includes 'o' and 'none' which the backend ParticipantRowDto supports.
+            role: (r.role as 'v' | 'vo' | 'o' | 'none') || 'v',
+          }))
+          : tableRows.filter((r) => r.uid.trim()).map((r) => ({
+            uid: r.uid.trim().toUpperCase(),
+            participant_identifier: r.contact.trim() || undefined,
+            role: r.role,
+          }));
 
   const handleSubmit = async () => {
     if (!orgName.trim()) return toast.error('Organization name is required');
@@ -266,8 +278,9 @@ function RegisterOrgModal({ open, onClose, onSuccess }: { open: boolean; onClose
                        onChange={(e) => setPreferredOrgId(e.target.value.toUpperCase())} maxLength={7} className="font-mono" />
                 {suggestedOrgId && (
                     <p className="text-xs text-muted-foreground">
-                      Suggested: <button className="font-mono font-semibold text-foreground hover:underline"
-                                         onClick={() => setPreferredOrgId(suggestedOrgId)}>{suggestedOrgId}</button>
+                      Suggested:{' '}
+                      <button className="font-mono font-semibold text-foreground hover:underline"
+                              onClick={() => setPreferredOrgId(suggestedOrgId)}>{suggestedOrgId}</button>
                     </p>
                 )}
               </div>
@@ -286,16 +299,34 @@ function RegisterOrgModal({ open, onClose, onSuccess }: { open: boolean; onClose
             <div>
               <Label className="mb-3 block">Initial Participants <span className="text-muted-foreground font-normal">(optional)</span></Label>
               <Tabs value={memberTab} onValueChange={(v) => setMemberTab(v as any)}>
-                <TabsList className="mb-3"><TabsTrigger value="table">Table</TabsTrigger><TabsTrigger value="csv">CSV Import</TabsTrigger></TabsList>
+                <TabsList className="mb-3">
+                  <TabsTrigger value="table">Table</TabsTrigger>
+                  <TabsTrigger value="csv">CSV Import</TabsTrigger>
+                </TabsList>
                 <TabsContent value="table">
                   <div className="border rounded-md overflow-hidden">
                     <Table>
-                      <TableHeader><TableRow><TableHead>UID</TableHead><TableHead>Contact</TableHead><TableHead>Role</TableHead><TableHead className="w-10" /></TableRow></TableHeader>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>UID</TableHead>
+                          <TableHead>Contact</TableHead>
+                          <TableHead>Role</TableHead>
+                          <TableHead className="w-10" />
+                        </TableRow>
+                      </TableHeader>
                       <TableBody>
                         {tableRows.map((row, i) => (
                             <TableRow key={i}>
-                              <TableCell><Input placeholder="EMP002" value={row.uid} onChange={(e) => updateRow(i, 'uid', e.target.value.toUpperCase())} className="h-8 font-mono" /></TableCell>
-                              <TableCell><Input placeholder="email or mobile" value={row.contact} onChange={(e) => updateRow(i, 'contact', e.target.value)} className="h-8" /></TableCell>
+                              <TableCell>
+                                <Input placeholder="EMP002" value={row.uid}
+                                       onChange={(e) => updateRow(i, 'uid', e.target.value.toUpperCase())}
+                                       className="h-8 font-mono" />
+                              </TableCell>
+                              <TableCell>
+                                <Input placeholder="email or mobile" value={row.contact}
+                                       onChange={(e) => updateRow(i, 'contact', e.target.value)}
+                                       className="h-8" />
+                              </TableCell>
                               <TableCell>
                                 <Select value={row.role} onValueChange={(v) => updateRow(i, 'role', v)}>
                                   <SelectTrigger className="h-8 w-28"><SelectValue /></SelectTrigger>
@@ -307,8 +338,10 @@ function RegisterOrgModal({ open, onClose, onSuccess }: { open: boolean; onClose
                                   </SelectContent>
                                 </Select>
                               </TableCell>
-                              <TableCell><Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
-                                                 onClick={() => removeRow(i)} disabled={tableRows.length === 1}>✕</Button></TableCell>
+                              <TableCell>
+                                <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
+                                        onClick={() => removeRow(i)} disabled={tableRows.length === 1}>✕</Button>
+                              </TableCell>
                             </TableRow>
                         ))}
                       </TableBody>
@@ -332,109 +365,406 @@ function RegisterOrgModal({ open, onClose, onSuccess }: { open: boolean; onClose
   );
 }
 
-// ─── Edit Member Dialog ───────────────────────────────────────────────────────
-
-function EditMemberDialog({ open, member, org, scopeTree, flatScopes, onClose, onSuccess }: {
+// ─── Manage Assignments Dialog ────────────────────────────────────────────────
+function ManageAssignmentsDialog({ open, member, org, scopeTree, flatScopes, onClose, onSuccess }: {
   open: boolean; member: OrgMember | null; org: OrgSummary;
   scopeTree: ScopeNode[]; flatScopes: ScopeNode[];
   onClose: () => void; onSuccess: () => void;
 }) {
-  const [isVoter, setIsVoter] = useState(false);
-  const [isOrganizer, setIsOrganizer] = useState(false);
-  const [scopeId, setScopeId] = useState<string>('keep');
-  const [loading, setLoading] = useState(false);
+  const [pendingEdits, setPendingEdits] = useState<
+      Record<number, { is_voter?: boolean; is_organizer?: boolean }>
+  >({});
+  const [savingScopes, setSavingScopes] = useState<Set<number>>(new Set());
+
+  const [movingScope, setMovingScope] = useState<number | null>(null);
+  const [moveTarget, setMoveTarget] = useState<string>('');
+  const [moveVoter, setMoveVoter] = useState(false);
+  const [moveOrganizer, setMoveOrganizer] = useState(false);
+  const [moveLoading, setMoveLoading] = useState(false);
+
+  const [removingScope, setRemovingScope] = useState<number | null>(null);
+  const [removeLoading, setRemoveLoading] = useState(false);
+
+  const [addOpen, setAddOpen] = useState(false);
+  const [addScopeId, setAddScopeId] = useState('');
+  const [addVoter, setAddVoter] = useState(true);
+  const [addOrganizer, setAddOrganizer] = useState(false);
+  const [addLoading, setAddLoading] = useState(false);
 
   useEffect(() => {
-    if (member) {
-      setIsVoter(member.is_voter);
-      setIsOrganizer(member.is_organizer);
-      setScopeId(member.scope_id != null ? String(member.scope_id) : 'keep');
+    if (open) {
+      setPendingEdits({});
+      setSavingScopes(new Set());
+      setMovingScope(null);
+      setMoveTarget('');
+      setRemovingScope(null);
+      setAddOpen(false);
+      setAddScopeId('');
+      setAddVoter(true);
+      setAddOrganizer(false);
     }
-  }, [member]);
+  }, [open, member?.uid]);
 
-  const handleSave = async () => {
-    if (!member) return;
-    setLoading(true);
-    try {
-      await api.updateMember(org.orgid, org.uid, member.uid, {
-        is_voter: isVoter,
-        is_organizer: isOrganizer,
-        scope_id: scopeId !== 'keep' ? Number(scopeId) : undefined,
-      });
-      toast.success(`Updated ${member.uid}`);
-      onSuccess(); onClose();
-    } catch (e: any) { toast.error(e.message ?? 'Failed to update member'); }
-    finally { setLoading(false); }
+  if (!member) return null;
+
+  const assignedScopeIds = member.roles.map((r) => r.scope_id);
+
+  const getEdited = (r: MemberRole) => ({
+    is_voter: pendingEdits[r.scope_id]?.is_voter ?? r.is_voter,
+    is_organizer: pendingEdits[r.scope_id]?.is_organizer ?? r.is_organizer,
+  });
+
+  const isDirty = (r: MemberRole) => {
+    const e = pendingEdits[r.scope_id];
+    if (!e) return false;
+    return (e.is_voter !== undefined && e.is_voter !== r.is_voter) ||
+        (e.is_organizer !== undefined && e.is_organizer !== r.is_organizer);
   };
 
+  const handleSaveRow = async (r: MemberRole) => {
+    if (!isDirty(r)) return;
+    setSavingScopes((s) => new Set(s).add(r.scope_id));
+    try {
+      await api.updateMember(org.orgid, org.uid, member.uid, {
+        scope_id: r.scope_id,
+        ...pendingEdits[r.scope_id],
+      });
+      toast.success(`Updated ${member.uid} at ${flatScopes.find((s) => s.scope_id === r.scope_id)?.scope_name}`);
+      setPendingEdits((p) => { const n = { ...p }; delete n[r.scope_id]; return n; });
+      onSuccess();
+    } catch (e: any) { toast.error(e.message ?? 'Failed to update'); }
+    finally { setSavingScopes((s) => { const n = new Set(s); n.delete(r.scope_id); return n; }); }
+  };
+
+  const startMove = (r: MemberRole) => {
+    setMovingScope(r.scope_id);
+    setMoveTarget('');
+    setMoveVoter(r.is_voter);
+    setMoveOrganizer(r.is_organizer);
+  };
+
+  const cancelMove = () => { setMovingScope(null); setMoveTarget(''); };
+
+  const handleMove = async (fromScopeId: number) => {
+    if (!moveTarget) return toast.error('Select a target scope');
+    setMoveLoading(true);
+    try {
+      await api.moveMemberRole(org.orgid, org.uid, member.uid, {
+        from_scope_id: fromScopeId,
+        to_scope_id: Number(moveTarget),
+        is_voter: moveVoter,
+        is_organizer: moveOrganizer,
+      });
+      const fromName = flatScopes.find((s) => s.scope_id === fromScopeId)?.scope_name;
+      const toName = flatScopes.find((s) => s.scope_id === Number(moveTarget))?.scope_name;
+      toast.success(`Moved ${member.uid} from "${fromName}" → "${toName}"`);
+      setMovingScope(null); setMoveTarget('');
+      onSuccess();
+    } catch (e: any) { toast.error(e.message ?? 'Move failed'); }
+    finally { setMoveLoading(false); }
+  };
+
+  const handleRemoveRole = async () => {
+    if (removingScope === null) return;
+    setRemoveLoading(true);
+    try {
+      await api.removeMemberRole(org.orgid, org.uid, member.uid, removingScope);
+      const scopeName = flatScopes.find((s) => s.scope_id === removingScope)?.scope_name;
+      toast.success(`Removed ${member.uid} from "${scopeName}"`);
+      setRemovingScope(null);
+      onSuccess();
+    } catch (e: any) { toast.error(e.message ?? 'Failed to remove assignment'); }
+    finally { setRemoveLoading(false); }
+  };
+
+  const handleAddRole = async () => {
+    if (!addScopeId) return toast.error('Select a scope');
+    setAddLoading(true);
+    try {
+      await api.addMemberRole(org.orgid, org.uid, member.uid, {
+        scope_id: Number(addScopeId),
+        is_voter: addVoter,
+        is_organizer: addOrganizer,
+      });
+      const scopeName = flatScopes.find((s) => s.scope_id === Number(addScopeId))?.scope_name;
+      toast.success(`${member.uid} assigned to "${scopeName}"`);
+      setAddOpen(false); setAddScopeId(''); setAddVoter(true); setAddOrganizer(false);
+      onSuccess();
+    } catch (e: any) { toast.error(e.message ?? 'Failed to add assignment'); }
+    finally { setAddLoading(false); }
+  };
+
+  const hasPendingChanges = Object.keys(pendingEdits).length > 0;
+
   return (
-      <Dialog open={open} onOpenChange={onClose}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Edit Member</DialogTitle>
-            <DialogDescription className="font-mono">{member?.uid}</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="space-y-3">
-              <Label>Roles</Label>
-              <div className="flex items-center gap-2">
-                <Checkbox id="is_voter" checked={isVoter} onCheckedChange={(v) => setIsVoter(Boolean(v))} />
-                <label htmlFor="is_voter" className="text-sm cursor-pointer">Voter</label>
-              </div>
-              <div className="flex items-center gap-2">
-                <Checkbox id="is_organizer" checked={isOrganizer} onCheckedChange={(v) => setIsOrganizer(Boolean(v))} />
-                <label htmlFor="is_organizer" className="text-sm cursor-pointer">Organizer</label>
-              </div>
+      <>
+        <Dialog open={open} onOpenChange={onClose}>
+          <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col gap-0 p-0">
+            <div className="px-6 pt-5 pb-4 border-b">
+              <DialogTitle className="text-base font-semibold">Manage Assignments</DialogTitle>
+              <DialogDescription className="mt-0.5">
+                <span className="font-mono font-medium text-foreground">{member.uid}</span>
+                <span className="text-muted-foreground"> · {member.email ?? member.mobile ?? 'No contact'}</span>
+              </DialogDescription>
             </div>
-            <div className="space-y-1.5">
-              <Label>Scope</Label>
-              <ScopeTreeSelect
-                  scopeTree={scopeTree} flatScopes={flatScopes}
-                  value={scopeId} onChange={setScopeId}
-                  allowKeep placeholder="Select scope" className="w-full"
-              />
+
+            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4 min-h-0">
+              {member.roles.length === 0 ? (
+                  <div className="text-center py-8 text-sm text-muted-foreground border rounded-md">
+                    No scope assignments. Add one below.
+                  </div>
+              ) : (
+                  <div className="border rounded-md overflow-hidden">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Scope</TableHead>
+                          <TableHead className="w-20 text-center">Voter</TableHead>
+                          <TableHead className="w-24 text-center">Organizer</TableHead>
+                          <TableHead className="w-32 text-right">Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {member.roles.map((r) => {
+                          const scopeName = flatScopes.find((s) => s.scope_id === r.scope_id)?.scope_name ?? `Scope ${r.scope_id}`;
+                          const edited = getEdited(r);
+                          const dirty = isDirty(r);
+                          const saving = savingScopes.has(r.scope_id);
+                          const isMoving = movingScope === r.scope_id;
+
+                          // FIX: fragments in a .map() must have an explicit key.
+                          // Using React.Fragment instead of <> so the key prop can be set.
+                          return (
+                              <React.Fragment key={r.scope_id}>
+                                <TableRow className={dirty ? 'bg-amber-50 dark:bg-amber-950/20' : ''}>
+                                  <TableCell className="font-medium text-sm">{scopeName}</TableCell>
+
+                                  <TableCell className="text-center">
+                                    <Checkbox
+                                        checked={edited.is_voter}
+                                        onCheckedChange={(v) =>
+                                            setPendingEdits((p) => ({
+                                              ...p,
+                                              [r.scope_id]: { ...p[r.scope_id], is_voter: Boolean(v) },
+                                            }))
+                                        }
+                                    />
+                                  </TableCell>
+
+                                  <TableCell className="text-center">
+                                    <Checkbox
+                                        checked={edited.is_organizer}
+                                        onCheckedChange={(v) =>
+                                            setPendingEdits((p) => ({
+                                              ...p,
+                                              [r.scope_id]: { ...p[r.scope_id], is_organizer: Boolean(v) },
+                                            }))
+                                        }
+                                    />
+                                  </TableCell>
+
+                                  <TableCell className="text-right">
+                                    <div className="flex items-center justify-end gap-1">
+                                      {dirty ? (
+                                          <>
+                                            <Button size="sm" className="h-7 px-2 text-xs"
+                                                    onClick={() => handleSaveRow(r)} disabled={saving}>
+                                              {saving ? '…' : 'Save'}
+                                            </Button>
+                                            <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground"
+                                                    onClick={() => setPendingEdits((p) => { const n = { ...p }; delete n[r.scope_id]; return n; })}>
+                                              Undo
+                                            </Button>
+                                          </>
+                                      ) : (
+                                          <>
+                                            <Button size="sm" variant="ghost" className="h-7 px-2 text-xs"
+                                                    onClick={() => isMoving ? cancelMove() : startMove(r)}>
+                                              {isMoving ? 'Cancel' : 'Move'}
+                                            </Button>
+                                            <Button size="sm" variant="ghost"
+                                                    className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                                                    onClick={() => setRemovingScope(r.scope_id)}>✕</Button>
+                                          </>
+                                      )}
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
+
+                                {isMoving && (
+                                    <TableRow className="bg-muted/30">
+                                      <TableCell colSpan={4} className="py-3 px-4">
+                                        <div className="flex items-end gap-3 flex-wrap">
+                                          <div className="space-y-1 flex-1 min-w-44">
+                                            <p className="text-xs text-muted-foreground font-medium">Move to scope</p>
+                                            <ScopeTreeSelect
+                                                scopeTree={scopeTree} flatScopes={flatScopes}
+                                                value={moveTarget} onChange={setMoveTarget}
+                                                exclude={assignedScopeIds}
+                                                placeholder="Pick target scope…"
+                                                className="w-full"
+                                            />
+                                          </div>
+                                          <div className="space-y-1">
+                                            <p className="text-xs text-muted-foreground font-medium">Roles at new scope</p>
+                                            <div className="flex items-center gap-3">
+                                              <label className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+                                                <Checkbox checked={moveVoter} onCheckedChange={(v) => setMoveVoter(Boolean(v))} />
+                                                Voter
+                                              </label>
+                                              <label className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+                                                <Checkbox checked={moveOrganizer} onCheckedChange={(v) => setMoveOrganizer(Boolean(v))} />
+                                                Organizer
+                                              </label>
+                                            </div>
+                                          </div>
+                                          <Button size="sm" onClick={() => handleMove(r.scope_id)}
+                                                  disabled={!moveTarget || moveLoading}
+                                                  className="h-8">
+                                            {moveLoading ? 'Moving…' : 'Confirm Move'}
+                                          </Button>
+                                        </div>
+                                      </TableCell>
+                                    </TableRow>
+                                )}
+                              </React.Fragment>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+              )}
+
+              {addOpen ? (
+                  <div className="border rounded-md px-4 py-3 space-y-3 bg-muted/20">
+                    <p className="text-sm font-semibold">New scope assignment</p>
+                    <div className="flex items-end gap-3 flex-wrap">
+                      <div className="space-y-1 flex-1 min-w-44">
+                        <p className="text-xs text-muted-foreground">Scope <span className="text-destructive">*</span></p>
+                        <ScopeTreeSelect
+                            scopeTree={scopeTree} flatScopes={flatScopes}
+                            value={addScopeId} onChange={setAddScopeId}
+                            exclude={assignedScopeIds}
+                            placeholder="Select scope…"
+                            className="w-full"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">Roles</p>
+                        <div className="flex items-center gap-3">
+                          <label className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+                            <Checkbox checked={addVoter} onCheckedChange={(v) => setAddVoter(Boolean(v))} />
+                            Voter
+                          </label>
+                          <label className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+                            <Checkbox checked={addOrganizer} onCheckedChange={(v) => setAddOrganizer(Boolean(v))} />
+                            Organizer
+                          </label>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button size="sm" onClick={handleAddRole} disabled={!addScopeId || addLoading} className="h-8">
+                          {addLoading ? 'Adding…' : 'Add'}
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => { setAddOpen(false); setAddScopeId(''); }} className="h-8">
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+              ) : (
+                  <Button variant="outline" size="sm" onClick={() => setAddOpen(true)}
+                          disabled={assignedScopeIds.length >= flatScopes.length}>
+                    + Add scope assignment
+                  </Button>
+              )}
+
+              {hasPendingChanges && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
+                    ⚠ You have unsaved role changes — click Save on each row to apply them.
+                  </p>
+              )}
             </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={onClose} disabled={loading}>Cancel</Button>
-            <Button onClick={handleSave} disabled={loading}>{loading ? 'Saving…' : 'Save Changes'}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+
+            <div className="px-6 py-4 border-t flex justify-between items-center">
+              <p className="text-xs text-muted-foreground">
+                {member.roles.length} scope assignment{member.roles.length !== 1 ? 's' : ''}
+              </p>
+              <Button variant="outline" onClick={onClose}>Close</Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        <AlertDialog open={removingScope !== null} onOpenChange={(o) => !o && setRemovingScope(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Remove assignment?</AlertDialogTitle>
+              <AlertDialogDescription>
+                <span className="font-mono font-medium">{member.uid}</span> will lose their role at{' '}
+                <span className="font-semibold">
+                {flatScopes.find((s) => s.scope_id === removingScope)?.scope_name ?? `Scope ${removingScope}`}
+              </span>.
+                {member.roles.length === 1 && (
+                    <span className="block mt-2 text-destructive font-medium">
+                  This is their only assignment. The member will be fully deactivated.
+                </span>
+                )}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={removeLoading}>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={handleRemoveRole} disabled={removeLoading}
+                                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                {removeLoading ? 'Removing…' : 'Remove Assignment'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </>
   );
 }
 
 // ─── Bulk Edit Dialog ─────────────────────────────────────────────────────────
-
 function BulkEditDialog({ open, selectedUids, org, scopeTree, flatScopes, onClose, onSuccess }: {
   open: boolean; selectedUids: string[]; org: OrgSummary;
   scopeTree: ScopeNode[]; flatScopes: ScopeNode[];
   onClose: () => void; onSuccess: () => void;
 }) {
+  const [tab, setTab] = useState<'update' | 'add'>('update');
+
   const [voterChange, setVoterChange] = useState<'yes' | 'no' | 'keep'>('keep');
   const [organizerChange, setOrganizerChange] = useState<'yes' | 'no' | 'keep'>('keep');
-  const [scopeId, setScopeId] = useState<string>('keep');
+  const [targetScopeId, setTargetScopeId] = useState<string>('');
+
+  const [addScopeId, setAddScopeId] = useState('');
+  const [addVoter, setAddVoter] = useState(true);
+  const [addOrganizer, setAddOrganizer] = useState(false);
+
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
 
   useEffect(() => {
-    if (open) { setVoterChange('keep'); setOrganizerChange('keep'); setScopeId('keep'); setProgress(0); }
+    if (open) {
+      setTab('update');
+      setVoterChange('keep'); setOrganizerChange('keep'); setTargetScopeId('');
+      setAddScopeId(''); setAddVoter(true); setAddOrganizer(false);
+      setProgress(0);
+    }
   }, [open]);
 
-  const hasChanges = voterChange !== 'keep' || organizerChange !== 'keep' || scopeId !== 'keep';
-  const selectedScopeName = flatScopes.find((s) => String(s.scope_id) === scopeId)?.scope_name;
+  const hasUpdateChanges = voterChange !== 'keep' || organizerChange !== 'keep';
 
-  const handleApply = async () => {
-    if (!hasChanges) return toast.error('No changes selected');
+  const handleApplyUpdate = async () => {
+    if (!hasUpdateChanges) return toast.error('No role changes selected');
+    if (!targetScopeId) return toast.error('Select the scope assignment to update');
     setLoading(true); setProgress(0);
     let successCount = 0;
     const errors: string[] = [];
     for (let i = 0; i < selectedUids.length; i++) {
       try {
-        const payload: Record<string, any> = {};
+        const payload: Parameters<typeof api.updateMember>[3] = { scope_id: Number(targetScopeId) };
         if (voterChange !== 'keep') payload.is_voter = voterChange === 'yes';
         if (organizerChange !== 'keep') payload.is_organizer = organizerChange === 'yes';
-        if (scopeId !== 'keep') payload.scope_id = Number(scopeId);
         await api.updateMember(org.orgid, org.uid, selectedUids[i], payload);
         successCount++;
       } catch (e: any) { errors.push(`${selectedUids[i]}: ${e.message ?? 'error'}`); }
@@ -445,16 +775,40 @@ function BulkEditDialog({ open, selectedUids, org, scopeTree, flatScopes, onClos
     setLoading(false); onSuccess(); onClose();
   };
 
-  const TriToggle = ({ label, value, onChange }: { label: string; value: 'keep' | 'yes' | 'no'; onChange: (v: 'keep' | 'yes' | 'no') => void }) => (
+  const handleApplyAdd = async () => {
+    if (!addScopeId) return toast.error('Select a scope');
+    setLoading(true); setProgress(0);
+    let successCount = 0;
+    const errors: string[] = [];
+    for (let i = 0; i < selectedUids.length; i++) {
+      try {
+        await api.addMemberRole(org.orgid, org.uid, selectedUids[i], {
+          scope_id: Number(addScopeId),
+          is_voter: addVoter,
+          is_organizer: addOrganizer,
+        });
+        successCount++;
+      } catch (e: any) { errors.push(`${selectedUids[i]}: ${e.message ?? 'error'}`); }
+      setProgress(Math.round(((i + 1) / selectedUids.length) * 100));
+    }
+    const scopeName = flatScopes.find((s) => String(s.scope_id) === addScopeId)?.scope_name;
+    if (successCount > 0) toast.success(`Added "${scopeName}" assignment to ${successCount} member${successCount !== 1 ? 's' : ''}`);
+    errors.forEach((e) => toast.error(e));
+    setLoading(false); onSuccess(); onClose();
+  };
+
+  const TriToggle = ({ label, value, onChange }: {
+    label: string; value: 'keep' | 'yes' | 'no'; onChange: (v: 'keep' | 'yes' | 'no') => void;
+  }) => (
       <div className="space-y-2">
         <Label className="text-sm font-medium">{label}</Label>
         <div className="flex gap-2">
           {(['keep', 'yes', 'no'] as const).map((v) => (
               <button key={v} onClick={() => onChange(v)}
                       className={`flex-1 py-1.5 px-3 rounded-md border text-sm font-medium transition-colors
-              ${value === v
-                          ? v === 'no' ? 'bg-destructive/10 border-destructive/40 text-destructive'
-                              : v === 'yes' ? 'bg-primary/10 border-primary/40 text-primary'
+                    ${value === v
+                          ? v === 'no'   ? 'bg-destructive/10 border-destructive/40 text-destructive'
+                              : v === 'yes'  ? 'bg-primary/10 border-primary/40 text-primary'
                                   : 'bg-accent border-border text-foreground'
                           : 'border-border text-muted-foreground hover:bg-accent/50'}`}>
                 {v === 'keep' ? 'Keep' : v === 'yes' ? '✓ Enable' : '✕ Disable'}
@@ -470,46 +824,69 @@ function BulkEditDialog({ open, selectedUids, org, scopeTree, flatScopes, onClos
           <DialogHeader>
             <DialogTitle>Bulk Edit Members</DialogTitle>
             <DialogDescription>
-              Applying changes to <span className="font-semibold text-foreground">{selectedUids.length}</span> member{selectedUids.length !== 1 ? 's' : ''}.{' '}
-              Fields set to <span className="font-mono text-xs bg-muted px-1 rounded">Keep</span> will not be changed.
+              Applying to <span className="font-semibold text-foreground">{selectedUids.length}</span> selected member{selectedUids.length !== 1 ? 's' : ''}.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-5 py-2">
-            <TriToggle label="Voter Role" value={voterChange} onChange={setVoterChange} />
-            <TriToggle label="Organizer Role" value={organizerChange} onChange={setOrganizerChange} />
-            <div className="space-y-2">
-              <Label className="text-sm font-medium">Scope</Label>
-              <ScopeTreeSelect scopeTree={scopeTree} flatScopes={flatScopes}
-                               value={scopeId} onChange={setScopeId}
-                               allowKeep placeholder="Select scope" className="w-full" />
-            </div>
-            {hasChanges && (
-                <div className="rounded-md border bg-muted/40 px-3 py-2.5 space-y-1">
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Changes to apply</p>
-                  {voterChange !== 'keep' && (
-                      <p className="text-sm">Voter → <span className={`font-semibold ${voterChange === 'yes' ? 'text-primary' : 'text-destructive'}`}>{voterChange === 'yes' ? 'Enabled' : 'Disabled'}</span></p>
-                  )}
-                  {organizerChange !== 'keep' && (
-                      <p className="text-sm">Organizer → <span className={`font-semibold ${organizerChange === 'yes' ? 'text-primary' : 'text-destructive'}`}>{organizerChange === 'yes' ? 'Enabled' : 'Disabled'}</span></p>
-                  )}
-                  {scopeId !== 'keep' && (
-                      <p className="text-sm">Scope → <span className="font-semibold">{selectedScopeName}</span></p>
-                  )}
+
+          <Tabs value={tab} onValueChange={(v) => setTab(v as any)}>
+            <TabsList className="w-full">
+              <TabsTrigger value="update" className="flex-1">Update existing roles</TabsTrigger>
+              <TabsTrigger value="add" className="flex-1">Add scope assignment</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="update" className="space-y-4 pt-2">
+              <p className="text-xs text-muted-foreground">
+                Changes apply to the selected members' role at a specific scope. Members who don't have that scope are skipped.
+              </p>
+              <div className="space-y-1.5">
+                <Label>Scope to update <span className="text-destructive">*</span></Label>
+                <ScopeTreeSelect scopeTree={scopeTree} flatScopes={flatScopes}
+                                 value={targetScopeId} onChange={setTargetScopeId}
+                                 placeholder="Pick scope…" className="w-full" />
+              </div>
+              <TriToggle label="Voter Role" value={voterChange} onChange={setVoterChange} />
+              <TriToggle label="Organizer Role" value={organizerChange} onChange={setOrganizerChange} />
+            </TabsContent>
+
+            <TabsContent value="add" className="space-y-4 pt-2">
+              <p className="text-xs text-muted-foreground">
+                Adds a new scope assignment to all selected members. Members who already have this scope will have their roles updated.
+              </p>
+              <div className="space-y-1.5">
+                <Label>Scope <span className="text-destructive">*</span></Label>
+                <ScopeTreeSelect scopeTree={scopeTree} flatScopes={flatScopes}
+                                 value={addScopeId} onChange={setAddScopeId}
+                                 placeholder="Select scope…" className="w-full" />
+              </div>
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                  <Checkbox checked={addVoter} onCheckedChange={(v) => setAddVoter(Boolean(v))} />
+                  Voter
+                </label>
+                <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                  <Checkbox checked={addOrganizer} onCheckedChange={(v) => setAddOrganizer(Boolean(v))} />
+                  Organizer
+                </label>
+              </div>
+            </TabsContent>
+          </Tabs>
+
+          {loading && (
+              <div className="space-y-1.5 mt-2">
+                <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                  <div className="h-full bg-primary rounded-full transition-all duration-300" style={{ width: `${progress}%` }} />
                 </div>
-            )}
-            {loading && (
-                <div className="space-y-1.5">
-                  <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                    <div className="h-full bg-primary rounded-full transition-all duration-300" style={{ width: `${progress}%` }} />
-                  </div>
-                  <p className="text-xs text-muted-foreground text-center">{progress}% — updating members…</p>
-                </div>
-            )}
-          </div>
+                <p className="text-xs text-muted-foreground text-center">{progress}%</p>
+              </div>
+          )}
+
           <DialogFooter>
             <Button variant="outline" onClick={onClose} disabled={loading}>Cancel</Button>
-            <Button onClick={handleApply} disabled={loading || !hasChanges}>
-              {loading ? 'Applying…' : `Apply to ${selectedUids.length} member${selectedUids.length !== 1 ? 's' : ''}`}
+            <Button
+                onClick={tab === 'update' ? handleApplyUpdate : handleApplyAdd}
+                disabled={loading || (tab === 'update' ? (!hasUpdateChanges || !targetScopeId) : !addScopeId)}
+            >
+              {loading ? 'Applying…' : `Apply to ${selectedUids.length}`}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -518,7 +895,6 @@ function BulkEditDialog({ open, selectedUids, org, scopeTree, flatScopes, onClos
 }
 
 // ─── Bulk Action Bar ──────────────────────────────────────────────────────────
-
 function BulkActionBar({ selectedCount, totalCount, onSelectAll, onClearSelection, onBulkEdit, onBulkRemove }: {
   selectedCount: number; totalCount: number;
   onSelectAll: () => void; onClearSelection: () => void;
@@ -548,8 +924,9 @@ function BulkActionBar({ selectedCount, totalCount, onSelectAll, onClearSelectio
 }
 
 // ─── Scope Actions Panel ──────────────────────────────────────────────────────
-
-function ScopeActionsPanel({ node, org, flatScopes, onRefresh }: { node: ScopeNode; org: OrgSummary; flatScopes: ScopeNode[]; onRefresh: () => void }){
+function ScopeActionsPanel({ node, org, flatScopes, onRefresh }: {
+  node: ScopeNode; org: OrgSummary; flatScopes: ScopeNode[]; onRefresh: () => void;
+}) {
   const isRoot = node.parent_scope_id === null;
   const hasChildren = node.children && node.children.length > 0;
 
@@ -562,7 +939,9 @@ function ScopeActionsPanel({ node, org, flatScopes, onRefresh }: { node: ScopeNo
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
-  useEffect(() => { setNewName(node.scope_name); setRenaming(false); setAddingChild(false); setChildName(''); }, [node.scope_id]);
+  useEffect(() => {
+    setNewName(node.scope_name); setRenaming(false); setAddingChild(false); setChildName('');
+  }, [node.scope_id]);
 
   const handleRename = async () => {
     if (!newName.trim() || newName.trim() === node.scope_name) { setRenaming(false); return; }
@@ -583,13 +962,7 @@ function ScopeActionsPanel({ node, org, flatScopes, onRefresh }: { node: ScopeNo
   const handleDelete = async () => {
     setDeleteLoading(true);
     try { await api.deleteScope(org.orgid, org.uid, node.scope_id); toast.success('Scope deleted'); onRefresh(); setDeleteOpen(false); }
-    catch (e: any) {
-      const msg =
-          e?.cause?.originalMessage ??   // raw Prisma path (if ever surfaced)
-          e?.message ??
-          'Failed to delete scope';
-      toast.error(msg);
-    }
+    catch (e: any) { toast.error(e?.cause?.originalMessage ?? e?.message ?? 'Failed to delete scope'); }
     finally { setDeleteLoading(false); }
   };
 
@@ -659,32 +1032,24 @@ function ScopeActionsPanel({ node, org, flatScopes, onRefresh }: { node: ScopeNo
 }
 
 // ─── Add Members Dialog ───────────────────────────────────────────────────────
-// 2-step wizard:
-//   Step 1 "input"  — Table entry OR CSV paste → Parse
-//   Step 2 "review" — Editable table with per-row scope, bulk scope assign, filter/search
-
 type AddMemberRow = {
-  id: string;          // stable local key — never sent to API
+  id: string;
   uid: string;
   contact: string;
   role: 'v' | 'o' | 'vo' | 'none';
-  scopeId: string;     // '' = use default scope
+  scopeId: string;
 };
 
 function makeRow(uid = '', contact = '', role: 'v' | 'o' | 'vo' | 'none' = 'v', scopeId = ''): AddMemberRow {
   return { id: Math.random().toString(36).slice(2, 9), uid, contact, role, scopeId };
 }
 
-// Compact inline scope picker used inside the review table rows
-function RowScopePicker({
-                          rowId, scopeId, defaultScopeId, scopeTree, flatScopes, onChange,
-                        }: {
+function RowScopePicker({ rowId, scopeId, defaultScopeId, scopeTree, flatScopes, onChange }: {
   rowId: string; scopeId: string; defaultScopeId: string;
   scopeTree: ScopeNode[]; flatScopes: ScopeNode[];
   onChange: (id: string, val: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-
   const hasOverride = !!scopeId;
   const label = hasOverride
       ? (flatScopes.find(s => String(s.scope_id) === scopeId)?.scope_name ?? 'Unknown')
@@ -698,17 +1063,11 @@ function RowScopePicker({
           <button
               className={`group flex items-center gap-1.5 text-xs rounded-md border px-2 py-1.5 transition-colors
             hover:bg-accent max-w-[180px] w-full text-left
-            ${hasOverride
-                  ? 'border-primary/40 text-primary bg-primary/5 font-medium'
-                  : 'border-border text-muted-foreground'
-              }`}
+            ${hasOverride ? 'border-primary/40 text-primary bg-primary/5 font-medium' : 'border-border text-muted-foreground'}`}
           >
             {hasOverride && (
-                <span
-                    className="flex-shrink-0 hover:text-destructive transition-colors leading-none"
-                    onClick={(e) => { e.stopPropagation(); onChange(rowId, ''); setOpen(false); }}
-                    title="Clear override"
-                >✕</span>
+                <span className="flex-shrink-0 hover:text-destructive transition-colors leading-none"
+                      onClick={(e) => { e.stopPropagation(); onChange(rowId, ''); setOpen(false); }} title="Clear override">✕</span>
             )}
             <span className="truncate flex-1">{label}</span>
             {!hasOverride && <span className="flex-shrink-0 opacity-40 text-[10px]">▾</span>}
@@ -729,15 +1088,10 @@ function RowScopePicker({
               )}
             </div>
             <div className="my-1 border-t" />
-            {scopeTree.length === 0
-                ? <p className="text-xs text-muted-foreground px-2.5 py-2">No scopes available</p>
-                : scopeTree.map(node => (
-                    <ScopeTreeSelectNode key={node.scope_id} node={node} depth={0}
-                                         value={scopeId}
-                                         onSelect={(v) => { onChange(rowId, v); setOpen(false); }}
-                    />
-                ))
-            }
+            {scopeTree.map(node => (
+                <ScopeTreeSelectNode key={node.scope_id} node={node} depth={0} value={scopeId}
+                                     onSelect={(v) => { onChange(rowId, v); setOpen(false); }} />
+            ))}
           </div>
         </PopoverContent>
       </Popover>
@@ -753,11 +1107,7 @@ function AddMembersDialog({ open, org, scopeTree, flatScopes, onClose, onSuccess
   const [inputTab, setInputTab] = useState<'table' | 'csv'>('table');
   const [csvText, setCsvText] = useState('');
   const [csvError, setCsvError] = useState('');
-
-  // Shared row state (used in both steps)
   const [rows, setRows] = useState<AddMemberRow[]>([makeRow()]);
-
-  // Review step state
   const [defaultScopeId, setDefaultScopeId] = useState<string>('');
   const [reviewSearch, setReviewSearch] = useState('');
   const [reviewRoleFilter, setReviewRoleFilter] = useState<'all' | 'v' | 'o' | 'vo' | 'none'>('all');
@@ -765,26 +1115,15 @@ function AddMembersDialog({ open, org, scopeTree, flatScopes, onClose, onSuccess
   const [bulkScopeId, setBulkScopeId] = useState<string>('');
   const [loading, setLoading] = useState(false);
 
-  // Reset everything when dialog opens/closes
   useEffect(() => {
     if (open) {
-      setStep('input');
-      setInputTab('table');
-      setCsvText('');
-      setCsvError('');
-      setRows([makeRow()]);
-      setDefaultScopeId('');
-      setReviewSearch('');
-      setReviewRoleFilter('all');
-      setSelectedIds(new Set());
-      setBulkScopeId('');
+      setStep('input'); setInputTab('table'); setCsvText(''); setCsvError('');
+      setRows([makeRow()]); setDefaultScopeId(''); setReviewSearch('');
+      setReviewRoleFilter('all'); setSelectedIds(new Set()); setBulkScopeId('');
     }
   }, [open]);
 
-  // Clear selection when filter changes in review
   useEffect(() => { setSelectedIds(new Set()); }, [reviewSearch, reviewRoleFilter]);
-
-  // ── Row helpers ──────────────────────────────────────────────────────────
 
   const updateRow = (id: string, field: keyof Omit<AddMemberRow, 'id'>, val: string) =>
       setRows(prev => prev.map(r => r.id === id ? { ...r, [field]: val } : r));
@@ -794,37 +1133,26 @@ function AddMembersDialog({ open, org, scopeTree, flatScopes, onClose, onSuccess
     setSelectedIds(prev => { const n = new Set(prev); n.delete(id); return n; });
   };
 
-  // ── Input step ───────────────────────────────────────────────────────────
-
   const parseCsvToReview = () => {
     const parsed = parseCsv(csvText);
-    if (parsed.length === 0) {
-      setCsvError('No valid rows found. Check that your CSV has a header row: uid,contact,role');
-      return;
-    }
-    const newRows = parsed
-        .filter(r => (r.uid ?? '').trim())
-        .map(r => makeRow(
+    if (!parsed.length) { setCsvError('No valid rows found. Check header: uid,contact,role'); return; }
+    const newRows = parsed.filter(r => (r.uid ?? '').trim()).map(r =>
+        makeRow(
             (r.uid ?? '').trim().toUpperCase(),
             (r.contact ?? r.email ?? r.mobile ?? '').trim(),
-            ((['v', 'o', 'vo', 'none'].includes((r.role ?? '').trim().toLowerCase())
-                ? (r.role ?? '').trim().toLowerCase()
-                : 'v') as 'v' | 'o' | 'vo' | 'none'),
+            (['v', 'o', 'vo', 'none'].includes((r.role ?? '').trim())
+                ? r.role.trim() as 'v' | 'o' | 'vo' | 'none'
+                : 'v'),
         ));
-    if (!newRows.length) { setCsvError('No rows with a UID found in the CSV'); return; }
-    setCsvError('');
-    setRows(newRows);
-    setStep('review');
+    if (!newRows.length) { setCsvError('No rows with a UID found'); return; }
+    setCsvError(''); setRows(newRows); setStep('review');
   };
 
   const goToReview = () => {
     const valid = rows.filter(r => r.uid.trim());
     if (!valid.length) { toast.error('Add at least one member with a UID'); return; }
-    setRows(valid);
-    setStep('review');
+    setRows(valid); setStep('review');
   };
-
-  // ── Review step filtering ────────────────────────────────────────────────
 
   const filteredRows = useMemo(() => {
     const q = reviewSearch.trim().toLowerCase();
@@ -837,36 +1165,23 @@ function AddMembersDialog({ open, org, scopeTree, flatScopes, onClose, onSuccess
 
   const allFilteredSelected = filteredRows.length > 0 && filteredRows.every(r => selectedIds.has(r.id));
   const someFilteredSelected = filteredRows.some(r => selectedIds.has(r.id));
-
-  const toggleSelect = (id: string) =>
-      setSelectedIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-
-  const selectAllFiltered = () =>
-      setSelectedIds(prev => { const n = new Set(prev); filteredRows.forEach(r => n.add(r.id)); return n; });
-
+  const toggleSelect = (id: string) => setSelectedIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const selectAllFiltered = () => setSelectedIds(prev => { const n = new Set(prev); filteredRows.forEach(r => n.add(r.id)); return n; });
   const clearSelection = () => setSelectedIds(new Set());
-
   const handleHeaderCheckbox = () => {
-    if (allFilteredSelected) {
-      setSelectedIds(prev => { const n = new Set(prev); filteredRows.forEach(r => n.delete(r.id)); return n; });
-    } else selectAllFiltered();
+    if (allFilteredSelected) setSelectedIds(prev => { const n = new Set(prev); filteredRows.forEach(r => n.delete(r.id)); return n; });
+    else selectAllFiltered();
   };
-
-  // ── Bulk scope assign (review) ───────────────────────────────────────────
 
   const applyBulkScope = () => {
     setRows(prev => prev.map(r => selectedIds.has(r.id) ? { ...r, scopeId: bulkScopeId } : r));
-    setSelectedIds(new Set());
-    setBulkScopeId('');
+    setSelectedIds(new Set()); setBulkScopeId('');
   };
-
-  // ── Submit ───────────────────────────────────────────────────────────────
 
   const handleSubmit = async () => {
     const valid = rows.filter(r => r.uid.trim());
     if (!valid.length) return toast.error('No members to add');
 
-    // Group by effective scope so members with different scopes are submitted in separate batches
     const groups = new Map<string, AddMemberRow[]>();
     for (const row of valid) {
       const key = row.scopeId || defaultScopeId || '';
@@ -885,75 +1200,54 @@ function AddMembersDialog({ open, org, scopeTree, flatScopes, onClose, onSuccess
             role: r.role as 'v' | 'vo' | 'o' | 'none',
           })),
         };
-        if (scopeKey) body.scope_id = Number(scopeKey)
+        if (scopeKey) body.scope_id = Number(scopeKey);
         const res = await api.addMembers(org.orgid, org.uid, body);
         totalAdded += res.results.filter(r => r.status === 'added' || r.status === 'reactivated').length;
         totalSkipped += res.results.filter(r => r.status === 'skipped').length;
         res.results.filter(r => r.status === 'error').forEach(e => toast.error(`${e.uid}: ${e.error ?? 'error'}`));
       }
       toast.success(`${totalAdded} added${totalSkipped ? `, ${totalSkipped} skipped` : ''}`);
-      onSuccess();
-      onClose();
+      onSuccess(); onClose();
     } catch (e: any) { toast.error(e.message ?? 'Failed to add members'); }
     finally { setLoading(false); }
   };
 
   const validCount = rows.filter(r => r.uid.trim()).length;
 
-  // ── Render ───────────────────────────────────────────────────────────────
-
   return (
       <Dialog open={open} onOpenChange={onClose}>
         <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col gap-0 p-0">
-
-          {/* Header */}
           <div className="px-6 pt-6 pb-4 border-b">
             <DialogTitle className="text-base font-semibold">Add Members to {org.org_name}</DialogTitle>
-
-            {/* Step breadcrumb */}
             <div className="flex items-center gap-1.5 mt-3">
-              <div className={`flex items-center gap-1.5 text-xs font-medium transition-colors
-              ${step === 'input' ? 'text-foreground' : 'text-muted-foreground'}`}>
-              <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px] font-bold
-                ${step === 'input' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>
-                1
-              </span>
-                Enter members
-              </div>
-              <span className="text-muted-foreground text-xs">──</span>
-              <div className={`flex items-center gap-1.5 text-xs font-medium transition-colors
-              ${step === 'review' ? 'text-foreground' : 'text-muted-foreground'}`}>
-              <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px] font-bold
-                ${step === 'review' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>
-                2
-              </span>
-                Review & assign scopes
-              </div>
+              {(['input', 'review'] as const).map((s, i) => (
+                  <div key={s} className="flex items-center gap-1.5">
+                    {i > 0 && <span className="text-muted-foreground text-xs">──</span>}
+                    <div className={`flex items-center gap-1.5 text-xs font-medium transition-colors ${step === s ? 'text-foreground' : 'text-muted-foreground'}`}>
+                  <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px] font-bold
+                    ${step === s ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>{i + 1}</span>
+                      {s === 'input' ? 'Enter members' : 'Review & assign scopes'}
+                    </div>
+                  </div>
+              ))}
             </div>
           </div>
 
-          {/* Body — scrollable */}
           <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4 min-h-0">
-
-            {/* ── STEP 1: INPUT ── */}
             {step === 'input' && (
                 <Tabs value={inputTab} onValueChange={(v) => setInputTab(v as any)}>
                   <TabsList>
                     <TabsTrigger value="table">Manual entry</TabsTrigger>
                     <TabsTrigger value="csv">CSV import</TabsTrigger>
                   </TabsList>
-
-                  {/* Table input */}
                   <TabsContent value="table" className="mt-4 space-y-3">
-                    <p className="text-xs text-muted-foreground">
-                      Enter members below. You'll assign scopes on the next screen.
-                    </p>
+                    <p className="text-xs text-muted-foreground">Enter members below. You'll assign scopes on the next screen.</p>
                     <div className="border rounded-md overflow-hidden">
                       <Table>
                         <TableHeader>
                           <TableRow>
                             <TableHead>UID <span className="text-destructive">*</span></TableHead>
-                            <TableHead>Contact <span className="text-muted-foreground font-normal">(email or mobile)</span></TableHead>
+                            <TableHead>Contact</TableHead>
                             <TableHead>Role</TableHead>
                             <TableHead className="w-10" />
                           </TableRow>
@@ -968,8 +1262,7 @@ function AddMembersDialog({ open, org, scopeTree, flatScopes, onClose, onSuccess
                                 </TableCell>
                                 <TableCell>
                                   <Input placeholder="alice@corp.com or 9876543210" value={row.contact}
-                                         onChange={(e) => updateRow(row.id, 'contact', e.target.value)}
-                                         className="h-8" />
+                                         onChange={(e) => updateRow(row.id, 'contact', e.target.value)} className="h-8" />
                                 </TableCell>
                                 <TableCell>
                                   <Select value={row.role} onValueChange={(v) => updateRow(row.id, 'role', v)}>
@@ -992,15 +1285,9 @@ function AddMembersDialog({ open, org, scopeTree, flatScopes, onClose, onSuccess
                         </TableBody>
                       </Table>
                     </div>
-                    <Button variant="outline" size="sm"
-                            onClick={() => setRows(prev => [...prev, makeRow()])}>
-                      + Add row
-                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => setRows(prev => [...prev, makeRow()])}>+ Add row</Button>
                   </TabsContent>
-
-                  {/* CSV input */}
                   <TabsContent value="csv" className="mt-4 space-y-3">
-                    {/* Format guide */}
                     <div className="rounded-md bg-muted/40 border px-3.5 py-3 space-y-2">
                       <p className="text-xs font-semibold text-foreground">Expected CSV format</p>
                       <div className="font-mono text-xs text-muted-foreground space-y-0.5">
@@ -1008,62 +1295,32 @@ function AddMembersDialog({ open, org, scopeTree, flatScopes, onClose, onSuccess
                         <p>EMP001,alice@corp.com,v</p>
                         <p>EMP002,9876543210,vo</p>
                       </div>
-                      <div className="flex gap-4 text-xs text-muted-foreground pt-0.5">
-                        <span><span className="font-mono text-foreground">uid</span> — required</span>
-                        <span><span className="font-mono text-foreground">contact</span> — email or mobile (either)</span>
-                        <span><span className="font-mono text-foreground">role</span> — v = voter o = organizer vo = both none = none</span>
-                      </div>
                     </div>
-
-                    <Textarea
-                        placeholder={`uid,contact,role\nEMP001,alice@corp.com,v\nEMP002,9876543210,vo`}
-                        value={csvText}
-                        onChange={(e) => { setCsvText(e.target.value); setCsvError(''); }}
-                        rows={9}
-                        className="font-mono text-sm"
-                    />
-                    {csvError && (
-                        <p className="text-xs text-destructive flex items-center gap-1.5">
-                          <span>⚠</span> {csvError}
-                        </p>
-                    )}
+                    <Textarea placeholder={`uid,contact,role\nEMP001,alice@corp.com,v`} value={csvText}
+                              onChange={(e) => { setCsvText(e.target.value); setCsvError(''); }} rows={9} className="font-mono text-sm" />
+                    {csvError && <p className="text-xs text-destructive">⚠ {csvError}</p>}
                   </TabsContent>
                 </Tabs>
             )}
 
-            {/* ── STEP 2: REVIEW ── */}
             {step === 'review' && (
                 <div className="space-y-3">
-
-                  {/* Default scope banner */}
                   <div className="rounded-md border bg-muted/30 px-4 py-3 flex items-start gap-3 flex-wrap">
                     <div className="flex-1 min-w-0 pt-0.5">
-                      <p className="text-sm font-semibold text-foreground leading-tight">Default scope</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        Applied to all members that don't have an individual scope override
-                      </p>
+                      <p className="text-sm font-semibold leading-tight">Default scope</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">Applied to members without an individual override</p>
                     </div>
-                    <ScopeTreeSelect
-                        scopeTree={scopeTree}
-                        flatScopes={flatScopes}
-                        value={defaultScopeId || 'all'}
-                        onChange={(v) => setDefaultScopeId(v === 'all' ? '' : v)}
-                        allowAll
-                        placeholder="Org root (no override)"
-                        className="w-56 flex-shrink-0"
-                    />
+                    <ScopeTreeSelect scopeTree={scopeTree} flatScopes={flatScopes}
+                                     value={defaultScopeId || 'all'}
+                                     onChange={(v) => setDefaultScopeId(v === 'all' ? '' : v)}
+                                     allowAll placeholder="Org root" className="w-56 flex-shrink-0" />
                   </div>
 
-                  {/* Filter bar */}
                   <div className="flex gap-2 flex-wrap items-center">
                     <div className="relative flex-1 min-w-36">
                       <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground text-xs pointer-events-none">⌕</span>
-                      <Input
-                          placeholder="Filter by UID or contact…"
-                          value={reviewSearch}
-                          onChange={(e) => setReviewSearch(e.target.value)}
-                          className="pl-7 h-8 text-sm"
-                      />
+                      <Input placeholder="Filter by UID or contact…" value={reviewSearch}
+                             onChange={(e) => setReviewSearch(e.target.value)} className="pl-7 h-8 text-sm" />
                       {reviewSearch && (
                           <button className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground text-xs"
                                   onClick={() => setReviewSearch('')}>✕</button>
@@ -1075,115 +1332,76 @@ function AddMembersDialog({ open, org, scopeTree, flatScopes, onClose, onSuccess
                         <SelectItem value="all">All roles</SelectItem>
                         <SelectItem value="v">Voter only</SelectItem>
                         <SelectItem value="o">Organizer only</SelectItem>
-                        <SelectItem value="vo">Voter + Org</SelectItem>
-                        <SelectItem value="none">No roles</SelectItem>
+                        <SelectItem value="vo">Both</SelectItem>
+                        <SelectItem value="none">None</SelectItem>
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-muted-foreground whitespace-nowrap">
-                      {filteredRows.length === rows.length
-                          ? `${validCount} member${validCount !== 1 ? 's' : ''}`
-                          : `${filteredRows.length} of ${validCount} shown`}
+                      {filteredRows.length === rows.length ? `${validCount} members` : `${filteredRows.length} of ${validCount}`}
                     </p>
-                    {(reviewSearch || reviewRoleFilter !== 'all') && (
-                        <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground"
-                                onClick={() => { setReviewSearch(''); setReviewRoleFilter('all'); }}>
-                          Clear
-                        </Button>
-                    )}
                   </div>
 
-                  {/* Bulk scope assign bar — only when rows selected */}
                   {selectedIds.size > 0 && (
                       <div className="flex items-center gap-2 px-3 py-2 bg-primary/5 border border-primary/20 rounded-lg flex-wrap">
-                        <span className="text-sm font-semibold text-primary tabular-nums">{selectedIds.size}</span>
-                        <span className="text-sm text-muted-foreground">selected — set scope:</span>
+                        <span className="text-sm font-semibold text-primary">{selectedIds.size} selected — set scope:</span>
                         <Popover>
                           <PopoverTrigger asChild>
                             <Button variant="outline" size="sm" className="h-7 text-xs font-normal gap-1 min-w-32">
                         <span className={bulkScopeId ? 'text-foreground' : 'text-muted-foreground'}>
-                          {bulkScopeId
-                              ? (flatScopes.find(s => String(s.scope_id) === bulkScopeId)?.scope_name ?? 'Unknown')
-                              : 'Pick scope…'}
+                          {bulkScopeId ? (flatScopes.find(s => String(s.scope_id) === bulkScopeId)?.scope_name ?? 'Unknown') : 'Pick scope…'}
                         </span>
                               <span className="text-[10px] text-muted-foreground">▾</span>
                             </Button>
                           </PopoverTrigger>
                           <PopoverContent className="p-1 w-56" align="start" sideOffset={4}>
                             <div className="max-h-60 overflow-y-auto">
-                              {scopeTree.length === 0
-                                  ? <p className="text-xs text-muted-foreground px-2.5 py-2">No scopes available</p>
-                                  : scopeTree.map(node => (
-                                      <ScopeTreeSelectNode key={node.scope_id} node={node} depth={0}
-                                                           value={bulkScopeId}
-                                                           onSelect={(v) => setBulkScopeId(v)}
-                                      />
-                                  ))
-                              }
+                              {scopeTree.map(node => (
+                                  <ScopeTreeSelectNode key={node.scope_id} node={node} depth={0} value={bulkScopeId}
+                                                       onSelect={(v) => setBulkScopeId(v)} />
+                              ))}
                             </div>
                           </PopoverContent>
                         </Popover>
                         <Button size="sm" className="h-7 text-xs" onClick={applyBulkScope} disabled={!bulkScopeId}>
                           Apply to {selectedIds.size}
                         </Button>
-                        <button className="text-xs text-muted-foreground hover:text-foreground ml-auto" onClick={clearSelection}>
-                          ✕ Clear selection
-                        </button>
+                        <button className="text-xs text-muted-foreground hover:text-foreground ml-auto" onClick={clearSelection}>✕ Clear</button>
                       </div>
                   )}
 
-                  {/* Review table */}
                   <div className="border rounded-md overflow-hidden">
                     <Table>
                       <TableHeader>
                         <TableRow>
                           <TableHead className="w-10 pr-0">
-                            <Checkbox
-                                checked={allFilteredSelected}
-                                ref={(el) => { if (el) (el as any).indeterminate = someFilteredSelected && !allFilteredSelected; }}
-                                onCheckedChange={handleHeaderCheckbox}
-                                disabled={filteredRows.length === 0}
-                                aria-label="Select all"
-                            />
+                            <Checkbox checked={allFilteredSelected}
+                                      ref={(el) => { if (el) (el as any).indeterminate = someFilteredSelected && !allFilteredSelected; }}
+                                      onCheckedChange={handleHeaderCheckbox} disabled={filteredRows.length === 0} />
                           </TableHead>
                           <TableHead className="w-28">UID</TableHead>
                           <TableHead>Contact</TableHead>
                           <TableHead className="w-28">Role</TableHead>
-                          <TableHead>
-                        <span className="flex items-center gap-1.5">
-                          Scope
-                          <span className="text-[10px] font-normal text-muted-foreground normal-case tracking-normal">
-                            (click to override)
-                          </span>
-                        </span>
-                          </TableHead>
+                          <TableHead>Scope <span className="text-[10px] font-normal text-muted-foreground">(click to override)</span></TableHead>
                           <TableHead className="w-10" />
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {filteredRows.length === 0 ? (
-                            <TableRow>
-                              <TableCell colSpan={6} className="text-center text-muted-foreground py-8 text-sm">
-                                No members match your filters
-                              </TableCell>
-                            </TableRow>
+                            <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8 text-sm">No members match your filters</TableCell></TableRow>
                         ) : filteredRows.map((row) => {
                           const isSelected = selectedIds.has(row.id);
                           return (
-                              <TableRow key={row.id}
-                                        className={`transition-colors cursor-pointer ${isSelected ? 'bg-primary/5' : ''}`}
-                                        onClick={() => toggleSelect(row.id)}
-                              >
+                              <TableRow key={row.id} className={`transition-colors cursor-pointer ${isSelected ? 'bg-primary/5' : ''}`}
+                                        onClick={() => toggleSelect(row.id)}>
                                 <TableCell className="pr-0" onClick={e => e.stopPropagation()}>
                                   <Checkbox checked={isSelected} onCheckedChange={() => toggleSelect(row.id)} />
                                 </TableCell>
                                 <TableCell onClick={e => e.stopPropagation()}>
-                                  <Input value={row.uid}
-                                         onChange={(e) => updateRow(row.id, 'uid', e.target.value.toUpperCase())}
+                                  <Input value={row.uid} onChange={(e) => updateRow(row.id, 'uid', e.target.value.toUpperCase())}
                                          className="h-7 font-mono text-xs w-full" placeholder="UID" />
                                 </TableCell>
                                 <TableCell onClick={e => e.stopPropagation()}>
-                                  <Input value={row.contact}
-                                         onChange={(e) => updateRow(row.id, 'contact', e.target.value)}
+                                  <Input value={row.contact} onChange={(e) => updateRow(row.id, 'contact', e.target.value)}
                                          className="h-7 text-xs w-full" placeholder="email or mobile" />
                                 </TableCell>
                                 <TableCell onClick={e => e.stopPropagation()}>
@@ -1198,19 +1416,13 @@ function AddMembersDialog({ open, org, scopeTree, flatScopes, onClose, onSuccess
                                   </Select>
                                 </TableCell>
                                 <TableCell onClick={e => e.stopPropagation()}>
-                                  <RowScopePicker
-                                      rowId={row.id}
-                                      scopeId={row.scopeId}
-                                      defaultScopeId={defaultScopeId}
-                                      scopeTree={scopeTree}
-                                      flatScopes={flatScopes}
-                                      onChange={(id, val) => updateRow(id, 'scopeId', val)}
-                                  />
+                                  <RowScopePicker rowId={row.id} scopeId={row.scopeId} defaultScopeId={defaultScopeId}
+                                                  scopeTree={scopeTree} flatScopes={flatScopes}
+                                                  onChange={(id, val) => updateRow(id, 'scopeId', val)} />
                                 </TableCell>
                                 <TableCell onClick={e => e.stopPropagation()}>
                                   <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-                                          onClick={() => rows.length > 1 ? removeRow(row.id) : undefined}
-                                          disabled={rows.length === 1}>✕</Button>
+                                          onClick={() => rows.length > 1 ? removeRow(row.id) : undefined} disabled={rows.length === 1}>✕</Button>
                                 </TableCell>
                               </TableRow>
                           );
@@ -1218,40 +1430,20 @@ function AddMembersDialog({ open, org, scopeTree, flatScopes, onClose, onSuccess
                       </TableBody>
                     </Table>
                   </div>
-
-                  {/* Scope legend */}
-                  <div className="flex items-center gap-3 text-xs text-muted-foreground px-0.5 flex-wrap">
-                <span className="flex items-center gap-1.5">
-                  <span className="inline-block w-2.5 h-2.5 rounded-sm bg-primary/10 border border-primary/40 flex-shrink-0" />
-                  Individual scope override (blue border)
-                </span>
-                    <span>·</span>
-                    <span>No border = uses default scope above</span>
-                    {rows.some(r => r.scopeId) && (
-                        <>
-                          <span>·</span>
-                          <button className="text-primary hover:underline"
-                                  onClick={() => setRows(prev => prev.map(r => ({ ...r, scopeId: '' })))}>
-                            Clear all overrides
-                          </button>
-                        </>
-                    )}
-                  </div>
                 </div>
             )}
           </div>
 
-          {/* Footer */}
           <div className="px-6 py-4 border-t flex items-center justify-between gap-3">
             <div>
               {step === 'review' && (
                   <p className="text-xs text-muted-foreground">
                     {(() => {
-                      const overrideCount = rows.filter(r => r.uid.trim() && r.scopeId).length;
-                      const defaultCount = rows.filter(r => r.uid.trim() && !r.scopeId).length;
-                      if (overrideCount === 0) return `All ${validCount} will use default scope`;
-                      if (defaultCount === 0) return `All ${validCount} have individual scopes`;
-                      return `${overrideCount} with scope override · ${defaultCount} using default`;
+                      const ov = rows.filter(r => r.uid.trim() && r.scopeId).length;
+                      const def = rows.filter(r => r.uid.trim() && !r.scopeId).length;
+                      if (ov === 0) return `All ${validCount} will use default scope`;
+                      if (def === 0) return `All ${validCount} have individual scopes`;
+                      return `${ov} with scope override · ${def} using default`;
                     })()}
                   </p>
               )}
@@ -1260,21 +1452,14 @@ function AddMembersDialog({ open, org, scopeTree, flatScopes, onClose, onSuccess
               {step === 'input' ? (
                   <>
                     <Button variant="outline" onClick={onClose}>Cancel</Button>
-                    {inputTab === 'csv' ? (
-                        <Button onClick={parseCsvToReview} disabled={!csvText.trim()}>
-                          Parse CSV →
-                        </Button>
-                    ) : (
-                        <Button onClick={goToReview} disabled={!rows.some(r => r.uid.trim())}>
-                          Review & assign scopes →
-                        </Button>
-                    )}
+                    {inputTab === 'csv'
+                        ? <Button onClick={parseCsvToReview} disabled={!csvText.trim()}>Parse CSV →</Button>
+                        : <Button onClick={goToReview} disabled={!rows.some(r => r.uid.trim())}>Review & assign scopes →</Button>
+                    }
                   </>
               ) : (
                   <>
-                    <Button variant="outline" onClick={() => { setStep('input'); setSelectedIds(new Set()); }} disabled={loading}>
-                      ← Back
-                    </Button>
+                    <Button variant="outline" onClick={() => { setStep('input'); setSelectedIds(new Set()); }} disabled={loading}>← Back</Button>
                     <Button onClick={handleSubmit} disabled={loading || validCount === 0}>
                       {loading ? 'Adding…' : `Add ${validCount} member${validCount !== 1 ? 's' : ''}`}
                     </Button>
@@ -1288,43 +1473,38 @@ function AddMembersDialog({ open, org, scopeTree, flatScopes, onClose, onSuccess
 }
 
 // ─── Manage Org Panel ─────────────────────────────────────────────────────────
-
 function ManageOrgPanel({ org }: { org: OrgSummary }) {
   const [activeTab, setActiveTab] = useState('members');
-
   const [members, setMembers] = useState<OrgMember[]>([]);
   const [membersLoading, setMembersLoading] = useState(false);
-
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<'all' | 'organizer' | 'organizer-only' | 'voter' | 'voter-only' | 'none'>('all');
   const [scopeFilter, setScopeFilter] = useState<string>('all');
-
   const [selectedUids, setSelectedUids] = useState<Set<string>>(new Set());
-
   const [addMemberOpen, setAddMemberOpen] = useState(false);
-
-  const [editMember, setEditMember] = useState<OrgMember | null>(null);
+  const [managingMember, setManagingMember] = useState<OrgMember | null>(null);
   const [removingUid, setRemovingUid] = useState<string | null>(null);
   const [removeLoading, setRemoveLoading] = useState(false);
-
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
   const [bulkRemoveOpen, setBulkRemoveOpen] = useState(false);
   const [bulkRemoveLoading, setBulkRemoveLoading] = useState(false);
-
   const [scopeTree, setScopeTree] = useState<ScopeNode[]>([]);
   const [flatScopes, setFlatScopes] = useState<ScopeNode[]>([]);
   const [selectedScope, setSelectedScope] = useState<ScopeNode | null>(null);
   const [scopeLoading, setScopeLoading] = useState(false);
 
-  // ── Fetchers ──────────────────────────────────────────────────────────────────
-
   const fetchMembers = useCallback(async () => {
     setMembersLoading(true);
-    try { setMembers(await api.getMembers(org.orgid, org.uid, {}) as OrgMember[]); }
-    catch (e: any) { toast.error(e.message ?? 'Failed to load members'); }
+    try {
+      // FIX: api.getMembers now returns OrgMemberWithRoles[] directly — no cast needed.
+      setMembers(await api.getMembers(org.orgid, org.uid, {}));
+    } catch (e: any) { toast.error(e.message ?? 'Failed to load members'); }
     finally { setMembersLoading(false); }
   }, [org.orgid, org.uid]);
 
+  // FIX: selectedScope was used inside fetchScopes but missing from its deps array,
+  // causing a stale closure where the scope panel wouldn't re-highlight after a refresh.
+  // Using a functional setter avoids capturing the stale value at all.
   const fetchScopes = useCallback(async () => {
     setScopeLoading(true);
     try {
@@ -1332,7 +1512,9 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
       setScopeTree(data);
       const flat = flattenTree(data);
       setFlatScopes(flat);
-      if (selectedScope) setSelectedScope(flat.find((s) => s.scope_id === selectedScope.scope_id) ?? null);
+      // FIX: use functional update so we always compare against the latest selectedScope,
+      // not the one captured when fetchScopes was last created.
+      setSelectedScope((prev) => prev ? (flat.find((s) => s.scope_id === prev.scope_id) ?? null) : null);
     } catch (e: any) { toast.error(e.message ?? 'Failed to load scope tree'); }
     finally { setScopeLoading(false); }
   }, [org.orgid, org.uid]);
@@ -1340,33 +1522,34 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
   useEffect(() => {
     if (activeTab === 'members') fetchMembers();
     if (activeTab === 'scope') fetchScopes();
-  }, [activeTab, org.orgid]);
+  }, [activeTab, org.orgid, fetchMembers, fetchScopes]);
 
-  // Load scopes in background (needed for filter dropdown + dialogs)
-  useEffect(() => { if (activeTab === 'members' && flatScopes.length === 0) fetchScopes(); }, [activeTab]);
+  // FIX: added fetchScopes to the dependency array. The previous deps [activeTab] was
+  // incomplete — ESLint exhaustive-deps would flag this. flatScopes.length is no longer
+  // needed as a dep because fetchScopes is now stable (memoized by useCallback).
+  useEffect(() => {
+    if (activeTab === 'members') fetchScopes();
+  }, [activeTab, fetchScopes]);
 
-  // Clear selection when filters change
   useEffect(() => { setSelectedUids(new Set()); }, [searchQuery, roleFilter, scopeFilter]);
 
   // ── Filtering ─────────────────────────────────────────────────────────────────
-
   const filteredMembers = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return members.filter((m) => {
       const contact = (m.email ?? m.mobile ?? '').toLowerCase();
       if (q && !m.uid.toLowerCase().includes(q) && !contact.includes(q)) return false;
-      if (roleFilter === 'organizer' && !m.is_organizer) return false;
-      if (roleFilter === 'organizer-only' && (!m.is_organizer || m.is_voter)) return false;
-      if (roleFilter === 'voter' && !m.is_voter) return false;
-      if (roleFilter === 'voter-only' && (m.is_organizer || !m.is_voter)) return false;
-      if (roleFilter === 'none' && (m.is_voter || m.is_organizer)) return false;
-      if (scopeFilter !== 'all' && String(m.scope_id) !== scopeFilter) return false;
+      if (roleFilter === 'organizer' && !hasOrganizer(m)) return false;
+      if (roleFilter === 'organizer-only' && (!hasOrganizer(m) || hasVoter(m))) return false;
+      if (roleFilter === 'voter' && !hasVoter(m)) return false;
+      if (roleFilter === 'voter-only' && (hasOrganizer(m) || !hasVoter(m))) return false;
+      if (roleFilter === 'none' && (hasVoter(m) || hasOrganizer(m))) return false;
+      if (scopeFilter !== 'all' && !m.roles.some(r => String(r.scope_id) === scopeFilter)) return false;
       return true;
     });
   }, [members, searchQuery, roleFilter, scopeFilter]);
 
   // ── Selection ─────────────────────────────────────────────────────────────────
-
   const selectableUids = filteredMembers.map((m) => m.uid).filter((uid) => uid !== org.uid);
   const allFilteredSelected = selectableUids.length > 0 && selectableUids.every((uid) => selectedUids.has(uid));
   const someSelected = selectableUids.some((uid) => selectedUids.has(uid));
@@ -1381,13 +1564,7 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
     else selectAllFiltered();
   };
 
-  // ── Scope name lookup ─────────────────────────────────────────────────────────
-
-  const getScopeName = (id: number | null | undefined) =>
-      id == null ? '—' : flatScopes.find((s) => s.scope_id === id)?.scope_name ?? 'Unknown scope';
-
   // ── Remove ────────────────────────────────────────────────────────────────────
-
   const handleRemoveMember = async () => {
     if (!removingUid) return;
     setRemoveLoading(true);
@@ -1409,8 +1586,36 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
 
   const hasActiveFilters = searchQuery.trim() || roleFilter !== 'all' || scopeFilter !== 'all';
 
-  // ── Render ────────────────────────────────────────────────────────────────────
+  // ── Roles summary cell ────────────────────────────────────────────────────────
+  const RolesSummary = ({ roles }: { roles: MemberRole[] }) => {
+    if (!roles.length) return <span className="text-xs text-muted-foreground italic">No assignments</span>;
+    const show = roles.slice(0, 2);
+    const rest = roles.length - 2;
+    return (
+        <div className="flex flex-wrap gap-1">
+          {show.map((r) => {
+            const name = flatScopes.find(s => s.scope_id === r.scope_id)?.scope_name ?? `S${r.scope_id}`;
+            const label = roleLabel(r);
+            return (
+                <span key={r.scope_id}
+                      className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-md
+                             bg-muted border border-border text-foreground leading-none whitespace-nowrap">
+              <span className="truncate max-w-[60px]">{name}</span>
+              <span className="text-muted-foreground">·</span>
+              <span className={label === 'V+O' ? 'text-primary' : label === 'O' ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}>
+                {label}
+              </span>
+            </span>
+            );
+          })}
+          {rest > 0 && (
+              <span className="text-[11px] text-muted-foreground font-medium px-1 py-0.5">+{rest} more</span>
+          )}
+        </div>
+    );
+  };
 
+  // ── Render ────────────────────────────────────────────────────────────────────
   return (
       <div className="space-y-5">
         <div className="flex items-start justify-between gap-4">
@@ -1435,8 +1640,6 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
 
           {/* ── MEMBERS TAB ── */}
           <TabsContent value="members" className="space-y-3 mt-4">
-
-            {/* Filter bar */}
             <div className="space-y-2">
               <div className="flex gap-2 flex-wrap items-center">
                 <div className="relative">
@@ -1448,7 +1651,6 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
                               onClick={() => setSearchQuery('')}>✕</button>
                   )}
                 </div>
-
                 <Select value={roleFilter} onValueChange={(v) => setRoleFilter(v as any)}>
                   <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -1460,26 +1662,20 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
                     <SelectItem value="none">No roles</SelectItem>
                   </SelectContent>
                 </Select>
-
-                <ScopeTreeSelect
-                    scopeTree={scopeTree} flatScopes={flatScopes}
-                    value={scopeFilter} onChange={setScopeFilter}
-                    allowAll placeholder="All scopes" className="w-44"
-                />
-
+                <ScopeTreeSelect scopeTree={scopeTree} flatScopes={flatScopes}
+                                 value={scopeFilter} onChange={setScopeFilter}
+                                 allowAll placeholder="All scopes" className="w-44" />
                 {hasActiveFilters && (
                     <Button variant="ghost" size="sm" className="text-xs text-muted-foreground h-9"
                             onClick={() => { setSearchQuery(''); setRoleFilter('all'); setScopeFilter('all'); }}>
                       Clear filters
                     </Button>
                 )}
-
                 <div className="ml-auto flex items-center gap-2">
                   <Button variant="outline" size="sm" onClick={fetchMembers}>Refresh</Button>
                   <Button size="sm" onClick={() => setAddMemberOpen(true)}>+ Add Members</Button>
                 </div>
               </div>
-
               <div className="flex items-center gap-2 px-0.5">
                 <p className="text-xs text-muted-foreground">
                   {filteredMembers.length === members.length
@@ -1506,25 +1702,20 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
                     <TableHeader>
                       <TableRow>
                         <TableHead className="w-10 pr-0">
-                          <Checkbox
-                              checked={allFilteredSelected}
-                              ref={(el) => { if (el) (el as any).indeterminate = someSelected && !allFilteredSelected; }}
-                              onCheckedChange={handleHeaderCheckbox}
-                              disabled={selectableUids.length === 0}
-                              aria-label="Select all"
-                          />
+                          <Checkbox checked={allFilteredSelected}
+                                    ref={(el) => { if (el) (el as any).indeterminate = someSelected && !allFilteredSelected; }}
+                                    onCheckedChange={handleHeaderCheckbox} disabled={selectableUids.length === 0} />
                         </TableHead>
                         <TableHead>UID</TableHead>
                         <TableHead>Contact</TableHead>
-                        <TableHead>Roles</TableHead>
-                        <TableHead>Scope</TableHead>
-                        <TableHead className="w-20 text-right">Actions</TableHead>
+                        <TableHead>Scope Assignments</TableHead>
+                        <TableHead className="w-24 text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {filteredMembers.length === 0 ? (
                           <TableRow>
-                            <TableCell colSpan={6} className="text-center text-muted-foreground py-10">
+                            <TableCell colSpan={5} className="text-center text-muted-foreground py-10">
                               {hasActiveFilters ? (
                                   <div className="space-y-1">
                                     <p>No members match your filters.</p>
@@ -1539,13 +1730,11 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
                       ) : filteredMembers.map((m) => {
                         const isSelected = selectedUids.has(m.uid);
                         const isSelf = m.uid === org.uid;
-                        const q = searchQuery.toLowerCase();
                         return (
                             <TableRow key={m.uid}
                                       className={`transition-colors ${isSelected ? 'bg-primary/5' : ''} ${isSelf ? 'opacity-75' : ''}`}
                                       onClick={() => !isSelf && toggleSelect(m.uid)}
-                                      style={{ cursor: isSelf ? 'default' : 'pointer' }}
-                            >
+                                      style={{ cursor: isSelf ? 'default' : 'pointer' }}>
                               <TableCell className="pr-0" onClick={(e) => e.stopPropagation()}>
                                 <Checkbox checked={isSelected} onCheckedChange={() => !isSelf && toggleSelect(m.uid)} disabled={isSelf} />
                               </TableCell>
@@ -1554,27 +1743,22 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
                                 {isSelf && <span className="ml-1.5 text-[10px] font-normal text-muted-foreground bg-muted px-1 rounded">you</span>}
                               </TableCell>
                               <TableCell className="text-sm text-muted-foreground">
-                                {(() => {
-                                  const contact = m.email ?? m.mobile ?? null;
-                                  if (!contact) return '—';
-                                  const isMatch = q && contact.toLowerCase().includes(q);
-                                  return isMatch
-                                      ? <span className="bg-yellow-100 dark:bg-yellow-900/40 rounded px-0.5">{contact}</span>
-                                      : contact;
-                                })()}
+                                {m.email ?? m.mobile ?? '—'}
                               </TableCell>
                               <TableCell>
-                                <div className="flex gap-1 flex-wrap">
-                                  {m.is_voter && <Badge variant="outline" className="text-xs">Voter</Badge>}
-                                  {m.is_organizer && <Badge className="text-xs">Organizer</Badge>}
-                                </div>
+                                <RolesSummary roles={m.roles} />
                               </TableCell>
-                              <TableCell className="text-sm text-muted-foreground">{getScopeName(m.scope_id)}</TableCell>
                               <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                                 <div className="flex justify-end gap-1">
-                                  <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setEditMember(m)}>Edit</Button>
-                                  <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
-                                          onClick={() => setRemovingUid(m.uid)} disabled={isSelf}>Remove</Button>
+                                  <Button variant="ghost" size="sm" className="h-7 px-2 text-xs"
+                                          onClick={() => setManagingMember(m)}>
+                                    Manage
+                                  </Button>
+                                  <Button variant="ghost" size="sm"
+                                          className="h-7 px-2 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
+                                          onClick={() => setRemovingUid(m.uid)} disabled={isSelf}>
+                                    Remove
+                                  </Button>
                                 </div>
                               </TableCell>
                             </TableRow>
@@ -1592,54 +1776,43 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
                 </p>
             )}
 
-            {/* Add members — new 2-step dialog */}
-            <AddMembersDialog
-                open={addMemberOpen}
-                org={org}
-                scopeTree={scopeTree}
-                flatScopes={flatScopes}
-                onClose={() => setAddMemberOpen(false)}
-                onSuccess={fetchMembers}
-            />
+            <AddMembersDialog open={addMemberOpen} org={org} scopeTree={scopeTree} flatScopes={flatScopes}
+                              onClose={() => setAddMemberOpen(false)} onSuccess={fetchMembers} />
 
-            {/* Edit single member */}
-            <EditMemberDialog
-                open={editMember !== null} member={editMember} org={org}
-                scopeTree={scopeTree} flatScopes={flatScopes}
-                onClose={() => setEditMember(null)} onSuccess={fetchMembers}
-            />
+            <ManageAssignmentsDialog open={managingMember !== null} member={managingMember} org={org}
+                                     scopeTree={scopeTree} flatScopes={flatScopes}
+                                     onClose={() => setManagingMember(null)}
+                                     onSuccess={() => { fetchMembers(); }} />
 
-            {/* Bulk edit */}
-            <BulkEditDialog
-                open={bulkEditOpen} selectedUids={Array.from(selectedUids)} org={org}
-                scopeTree={scopeTree} flatScopes={flatScopes}
-                onClose={() => setBulkEditOpen(false)}
-                onSuccess={() => { clearSelection(); fetchMembers(); }}
-            />
+            <BulkEditDialog open={bulkEditOpen} selectedUids={Array.from(selectedUids)} org={org}
+                            scopeTree={scopeTree} flatScopes={flatScopes}
+                            onClose={() => setBulkEditOpen(false)}
+                            onSuccess={() => { clearSelection(); fetchMembers(); }} />
 
-            {/* Remove single */}
             <AlertDialog open={removingUid !== null} onOpenChange={(o) => !o && setRemovingUid(null)}>
               <AlertDialogContent>
                 <AlertDialogHeader>
                   <AlertDialogTitle>Remove {removingUid}?</AlertDialogTitle>
-                  <AlertDialogDescription>This member will be deactivated from {org.org_name}. They can be re-added later.</AlertDialogDescription>
+                  <AlertDialogDescription>
+                    This member and all their scope assignments will be deactivated from {org.org_name}. They can be re-added later.
+                  </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogCancel disabled={removeLoading}>Cancel</AlertDialogCancel>
-                  <AlertDialogAction onClick={handleRemoveMember} disabled={removeLoading} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                  <AlertDialogAction onClick={handleRemoveMember} disabled={removeLoading}
+                                     className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
                     {removeLoading ? 'Removing…' : 'Remove Member'}
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
 
-            {/* Bulk remove */}
             <AlertDialog open={bulkRemoveOpen} onOpenChange={(o) => !o && setBulkRemoveOpen(false)}>
               <AlertDialogContent>
                 <AlertDialogHeader>
                   <AlertDialogTitle>Remove {selectedUids.size} member{selectedUids.size !== 1 ? 's' : ''}?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    These members will be deactivated from {org.org_name}.
+                    These members and all their scope assignments will be deactivated from {org.org_name}.
                     <div className="mt-2 max-h-24 overflow-y-auto font-mono text-xs bg-muted rounded p-2 space-y-0.5">
                       {Array.from(selectedUids).map((uid) => <div key={uid}>{uid}</div>)}
                     </div>
@@ -1647,7 +1820,8 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogCancel disabled={bulkRemoveLoading}>Cancel</AlertDialogCancel>
-                  <AlertDialogAction onClick={handleBulkRemove} disabled={bulkRemoveLoading} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                  <AlertDialogAction onClick={handleBulkRemove} disabled={bulkRemoveLoading}
+                                     className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
                     {bulkRemoveLoading ? 'Removing…' : `Remove ${selectedUids.size} member${selectedUids.size !== 1 ? 's' : ''}`}
                   </AlertDialogAction>
                 </AlertDialogFooter>
@@ -1696,7 +1870,6 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
 }
 
 // ─── Main View ────────────────────────────────────────────────────────────────
-
 export function ManageOrganizationsView() {
   const { session } = useAppContext();
   const [orgs, setOrgs] = useState<OrgSummary[]>([]);
@@ -1772,7 +1945,7 @@ export function ManageOrganizationsView() {
                 {orgs.map((org) => (
                     <button key={org.orgid} onClick={() => setSelectedOrg(org)}
                             className={`w-full text-left px-3 py-2.5 rounded-md border transition-colors
-                  ${selectedOrg?.orgid === org.orgid ? 'bg-accent border-primary/40 font-semibold' : 'border-border hover:bg-accent/50'}`}>
+                        ${selectedOrg?.orgid === org.orgid ? 'bg-accent border-primary/40 font-semibold' : 'border-border hover:bg-accent/50'}`}>
                       <p className="text-sm font-semibold truncate leading-tight">{org.org_name}</p>
                       <p className="text-xs text-muted-foreground font-mono mt-0.5">{org.orgid}</p>
                       {!org.is_active && <Badge variant="secondary" className="text-[10px] mt-1 h-4">Inactive</Badge>}

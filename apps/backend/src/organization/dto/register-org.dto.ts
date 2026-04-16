@@ -25,7 +25,11 @@ export class ParticipantRowDto {
   participant_identifier?: string;
 
   /**
-   * 'v' = voter only (default), 'vo' = voter + organizer
+   * Role for this participant's initial scope assignment.
+   * 'v'  = voter only (default)
+   * 'vo' = voter + organizer
+   * 'o'  = organizer only
+   * 'none' = no roles
    */
   @IsOptional()
   @IsIn(['v', 'vo', 'o', 'none'])
@@ -55,8 +59,6 @@ export class RegisterOrgDto {
    * Required when the session is UNIFIED (user.uid is absent from JWT).
    * ORG sessions already carry uid in the JWT and may omit this.
    */
-  // FIX: added — controller references dto.caller_uid but it was never declared
-  //      or validated in the DTO, causing silent undefined at runtime for UNIFIED sessions.
   @IsOptional()
   @Matches(/^[A-Z0-9]{4,20}$/, {
     message: 'caller_uid must be 4–20 uppercase alphanumeric characters',

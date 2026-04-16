@@ -102,12 +102,12 @@ import { AuthController } from './auth.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 import { JwtModule } from '@nestjs/jwt';
 import { JwtStrategy } from './strategies/jwt.strategy';
-import { OtpModule } from '../otp/otp.module';   // ← import OtpModule
+import { OtpModule } from '../otp/otp.module'; // ← import OtpModule
 
 @Module({
   imports: [
     PrismaModule,
-    OtpModule,             // ← provides OtpService
+    OtpModule, // ← provides OtpService
     JwtModule.register({
       secret: process.env.JWT_SECRET || 'SECRET_KEY',
       signOptions: { expiresIn: '1h' },
@@ -249,7 +249,7 @@ export class AuthService {
 
     // Step 2: Verify OTP atomically before doing anything else.
     if (!dto.otp) {
-      throw new UnauthorizedException('OTP missing');
+      throw new BadRequestException('OTP missing');
     }
     await this.otpService.verifyOtp(otpIdentifier, dto.otp);
 
@@ -264,7 +264,7 @@ export class AuthService {
         },
         select: { pid: true },
       });
-      if (!user) throw new UnauthorizedException('User not found');
+      if (!user) throw new BadRequestException('User not found');
       payload = { pid: user.pid.toString(), type: 'UNIFIED' };
     }
 
@@ -275,7 +275,7 @@ export class AuthService {
         select: { pid: true },
       });
       // member existence guaranteed by resolveOtpIdentifier, but guard anyway
-      if (!member) throw new UnauthorizedException('Member not found');
+      if (!member) throw new BadRequestException('Member not found');
       payload = {
         type: 'ORG',
         orgid: dto.orgid,

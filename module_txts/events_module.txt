@@ -409,8 +409,15 @@ describe('EventsController', () => {
 --- events\events.controller.ts ---
 
 import {
-  Controller, Get, Post, Patch, Delete,
-  Param, Body, ParseIntPipe, UseGuards,
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Param,
+  Body,
+  ParseIntPipe,
+  UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -421,7 +428,7 @@ import { EventsService } from './events.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
 
-@UseGuards(JwtAuthGuard)          // all routes require a valid session
+@UseGuards(JwtAuthGuard) // all routes require a valid session
 @Controller('events')
 export class EventsController {
   constructor(private eventsService: EventsService) {}
@@ -449,23 +456,22 @@ export class EventsController {
   // (trg_check_event_creator) which already validates scope hierarchy.
   @Post()
   @UseGuards(RolesGuard)
-  @RequireOrganizer('orgid')        // reads orgid from body, uid from JWT or body
-  createEvent(
-    @CurrentUser() user: JwtUser,
-    @Body() dto: CreateEventDto,
-  ) {
+  @RequireOrganizer('orgid') // reads orgid from body, uid from JWT or body
+  createEvent(@CurrentUser() user: JwtUser, @Body() dto: CreateEventDto) {
     return this.eventsService.createEvent(user, dto);
   }
 
   // ── PATCH /events/:eventId ─────────────────────────────────────────────────
   // Creator-only check is done inside the service (compares created_by_uid).
   // RolesGuard still ensures caller is at least an organizer.
-  @Patch(':eventId')
+  @Patch(':orgId/:eventId/:actingUid')
   @UseGuards(RolesGuard)
-  @RequireOrganizer('orgid')
+  @RequireOrganizer('orgId') // match the param name exactly
   updateEvent(
     @CurrentUser() user: JwtUser,
+    //@Param('orgId', ParseIntPipe) orgId: string, // extract it
     @Param('eventId', ParseIntPipe) eventId: number,
+    //@Param('actingUid', ParseIntPipe) actingUid: string,
     @Body() dto: UpdateEventDto,
   ) {
     return this.eventsService.updateEvent(user, eventId, dto);
@@ -504,6 +510,7 @@ export class EventsController {
     return this.eventsService.getParticipants(user, eventId);
   }
 }
+
 
 
 --- events\events.module.ts ---
@@ -565,6 +572,7 @@ import { UpdateEventDto } from './dto/update-event.dto';
 //      JWT payload stores pid as string (auth.service: payload = { pid: user.pid.toString() }).
 //      The local interface had pid?: number which is incorrect.
 import type { JwtUser } from '../common/decorators/current-user.decorator';
+import type { events as PrismaEvent } from '@prisma/client';
 
 @Injectable()
 export class EventsService {
@@ -587,54 +595,75 @@ export class EventsService {
 
     for (const { orgid, uid, scope_id } of identities) {
       const rows = await this.prisma.$queryRaw<any[]>`
-        SELECT
-          e.event_id,
-          e.orgid,
-          e.title,
-          e.description,
-          e.start_time,
-          e.end_time,
-          e.status,
-          e.show_live_results,
-          e.visibility_upward,
-          e.scope_only,
-          e.scope_id,
-          ep.has_voted
+        SELECT e.event_id,
+               e.orgid,
+               e.title,
+               e.description,
+               e.start_time,
+               e.end_time,
+               e.status,
+               e.show_live_results,
+               e.visibility_upward,
+               e.scope_only,
+               e.scope_id,
+               e.created_by_uid,
+               ep.has_voted,
+               CASE WHEN ep.uid IS NOT NULL THEN TRUE ELSE FALSE END AS is_voter,
+               COALESCE(mr.is_organizer, FALSE)                      AS is_organizer
         FROM events e
-        LEFT JOIN event_participants ep
-          ON ep.event_id = e.event_id
-         AND ep.orgid    = ${orgid}
-         AND ep.uid      = ${uid}
+               LEFT JOIN event_participants ep
+                         ON ep.event_id = e.event_id
+                           AND ep.orgid = ${orgid}
+                           AND ep.uid = ${uid}
+               LEFT JOIN member_roles mr
+                         ON mr.orgid = ${orgid}
+                           AND mr.uid = ${uid}
         WHERE e.orgid = ${orgid}
           AND e.is_deleted = FALSE
           AND (
-            (
-              e.scope_only = FALSE
-              AND e.scope_id IN (
-                SELECT scope_id FROM get_scope_descendants(${scope_id}::int)
-              )
+          -- Organizer can always see events within their scope downward (manages them)
+          (
+            mr.is_organizer = TRUE
+              AND e.scope_id IN (SELECT scope_id FROM get_scope_descendants(${scope_id}::int))
             )
             OR
-            (
-              e.scope_only = TRUE
+            -- Default downward visibility for voters
+          (
+            e.scope_only = FALSE
+              AND e.scope_id IN (SELECT scope_id FROM get_scope_descendants(${scope_id}::int))
+            )
+            OR
+            -- scope_only: exact scope match for voters
+          (
+            e.scope_only = TRUE
               AND e.scope_id = ${scope_id}::int
             )
             OR
-            (
-              e.visibility_upward = TRUE
+            -- Upward visibility if flag is set
+          (
+            e.visibility_upward = TRUE
               AND e.scope_only = FALSE
-              AND e.scope_id IN (
-                SELECT scope_id FROM get_scope_ancestors(${scope_id}::int)
-              )
+              AND e.scope_id IN (SELECT scope_id FROM get_scope_ancestors(${scope_id}::int))
             )
           )
         ORDER BY e.start_time DESC
       `;
 
       for (const ev of rows) {
-        const entry = { ...ev, orgid, acting_uid: uid };
+        const entry = {
+          ...ev,
+          start_time: ev.start_time?.toISOString(),
+          end_time: ev.end_time?.toISOString(),
+          orgid,
+          acting_uid: uid,
+          created_by_uid: ev.created_by_uid,
+          is_voter: ev.is_voter,
+          is_organizer: ev.is_organizer,
+        };
 
-        if (ev.status === 'COMPLETED' || ev.end_time < now) {
+        const end = new Date(ev.end_time);
+
+        if (ev.status === 'COMPLETED' || end < now) {
           completed.push(entry);
         } else if (ev.has_voted) {
           voted.push(entry);
@@ -668,6 +697,7 @@ export class EventsService {
       where: { event_id: eventId, is_deleted: false },
       include: { candidates: true },
     });
+
     if (!event) throw new NotFoundException('Event not found');
 
     await this.assertEventVisible(user, event);
@@ -693,8 +723,13 @@ export class EventsService {
         select: { candidate_id: true, vote_count: true },
       });
     }
-
-    return { ...event, has_voted, results };
+    return {
+      ...event,
+      start_time: event.start_time?.toISOString() ?? null,
+      end_time: event.end_time?.toISOString() ?? null,
+      has_voted,
+      results,
+    };
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -707,7 +742,9 @@ export class EventsService {
         'scope_only and visible_upward cannot both be true',
       );
     }
-
+    if (new Date(dto.start_time) < new Date()) {
+      throw new BadRequestException('start_time cannot be in the past');
+    }
     this.assertOrgIdentity(user, dto.orgid, dto.uid);
 
     const role = await this.prisma.member_roles.findFirst({
@@ -889,7 +926,7 @@ export class EventsService {
       throw new ForbiddenException('Organizer access required');
     }
     const role = await this.prisma.member_roles.findFirst({
-      where: { orgid: user.orgid!, uid: user.uid!, is_organizer: true },
+      where: { orgid: user.orgid, uid: user.uid!, is_organizer: true },
     });
     if (!role) throw new ForbiddenException('Not an organizer');
 
@@ -917,7 +954,7 @@ export class EventsService {
   // HELPERS
   // ─────────────────────────────────────────────────────────────────────────
 
-  private async getEventOrThrow(eventId: number) {
+  private async getEventOrThrow(eventId: number): Promise<PrismaEvent> {
     const event = await this.prisma.events.findFirst({
       where: { event_id: eventId, is_deleted: false },
     });
@@ -925,7 +962,7 @@ export class EventsService {
     return event;
   }
 
-  private assertEventNotStarted(event: any) {
+  private assertEventNotStarted(event: PrismaEvent) {
     if (new Date() >= new Date(event.start_time)) {
       throw new BadRequestException(
         'Cannot modify an event that has already started',

@@ -306,6 +306,24 @@ export class UsersService {
    */
   private async mergeAccounts(sourcePid: bigint, targetPid: bigint) {
     await this.prisma.$transaction(async (tx) => {
+      const recheck = await tx.uaccount.findUnique({
+        where: { pid: sourcePid },
+        select: {
+          mobile: true,
+          email: true,
+          _count: { select: { identity_wallet: true, org_members: true } },
+        },
+      });
+
+      if (!recheck) return; // already deleted, nothing to do
+
+      const stillThin =
+        (recheck.mobile === null || recheck.email === null) &&
+        recheck._count.identity_wallet === 0 &&
+        recheck._count.org_members === 0;
+
+      if (!stillThin) throw new ConflictException('Account is no longer thin');
+
       // ── 1. Deactivate all sessions for the source account ─────────────────
       await tx.user_sessions.updateMany({
         where: { pid: sourcePid },

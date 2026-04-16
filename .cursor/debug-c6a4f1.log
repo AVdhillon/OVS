@@ -1,6 +1,0 @@
-{"sessionId":"c6a4f1","runId":"rerun-1","hypothesisId":"H5","location":"src/main.ts:bootstrap","message":"Bootstrap entry","data":{"cwd":"B:\\Wrk\\OVS\\voting-backend","node":"v24.13.0"},"timestamp":1774411794118}
-{"sessionId":"c6a4f1","runId":"current-fix","hypothesisId":"H1","location":"src/database/prisma.service.ts:constructor","message":"DATABASE_URL presence before PrismaClient","data":{"hasDatabaseUrl":true,"databaseUrlLength":51},"timestamp":1774411794415}
-{"sessionId":"c6a4f1","runId":"current-fix","hypothesisId":"H2","location":"src/database/prisma.service.ts:constructor","message":"Calling super({ adapter: PrismaPg })","data":{},"timestamp":1774411794419}
-{"sessionId":"c6a4f1","runId":"current-fix","hypothesisId":"H3","location":"src/database/prisma.service.ts:onModuleInit","message":"Before $connect","data":{},"timestamp":1774411794449}
-{"sessionId":"c6a4f1","runId":"current-fix","hypothesisId":"H3","location":"src/database/prisma.service.ts:onModuleInit","message":"After $connect OK","data":{},"timestamp":1774411794527}
-{"sessionId":"c6a4f1","runId":"rerun-1","hypothesisId":"H5","location":"src/main.ts:bootstrap","message":"Bootstrap listen succeeded","data":{"port":3000},"timestamp":1774411794535}

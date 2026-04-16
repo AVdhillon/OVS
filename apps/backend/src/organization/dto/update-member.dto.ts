@@ -1,11 +1,14 @@
-import {
-  IsBoolean,
-  IsIn,
-  IsOptional,
-  IsNumber,
-} from 'class-validator';
+import { IsBoolean, IsOptional, IsNumber, IsNotEmpty } from 'class-validator';
 
 export class UpdateMemberDto {
+  /**
+   * Required. Identifies which scope-role row to update.
+   * Corresponds to the scope_id column in member_roles (part of composite PK).
+   */
+  @IsNumber()
+  @IsNotEmpty()
+  scope_id: number;
+
   @IsOptional()
   @IsBoolean()
   is_voter?: boolean;
@@ -13,11 +16,4 @@ export class UpdateMemberDto {
   @IsOptional()
   @IsBoolean()
   is_organizer?: boolean;
-
-  /**
-   * New scope_id to assign (must be within caller's scope subtree)
-   */
-  @IsOptional()
-  @IsNumber()
-  scope_id?: number;
 }

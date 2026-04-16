@@ -26,8 +26,11 @@ export class ScopeService {
   async getScopeTree(orgid: string, callerUid: string): Promise<ScopeNode[]> {
     await this.orgService.assertOrganizerAccess(orgid, callerUid);
 
-    const callerScope = await this.orgService.getCallerScope(orgid, callerUid);
-    const visibleIds = await this.orgService.getDescendantScopeIds(callerScope);
+    const callerOrganizerScopes =
+      await this.orgService.getCallerOrganizerScopes(orgid, callerUid);
+    const visibleIds = await this.orgService.getDescendantScopeIds(
+      callerOrganizerScopes,
+    );
 
     const allScopes = await this.prisma.org_scope.findMany({
       where: { orgid, scope_id: { in: visibleIds } },
@@ -35,17 +38,22 @@ export class ScopeService {
       orderBy: { scope_id: 'asc' },
     });
 
-    return buildTree(allScopes, callerScope);
+    // Build a forest rooted at every organizer scope the caller holds
+    return buildForest(allScopes, callerOrganizerScopes);
   }
 
   // ─── Add scope node ──────────────────────────────────────────────────────────
   async createScope(orgid: string, callerUid: string, dto: CreateScopeDto) {
     await this.orgService.assertOrganizerAccess(orgid, callerUid);
 
-    const callerScope = await this.orgService.getCallerScope(orgid, callerUid);
-    const visibleIds = await this.orgService.getDescendantScopeIds(callerScope);
+    const callerOrganizerScopes =
+      await this.orgService.getCallerOrganizerScopes(orgid, callerUid);
+    const visibleIds = await this.orgService.getDescendantScopeIds(
+      callerOrganizerScopes,
+    );
 
-    const parentId = dto.parent_scope_id ?? callerScope;
+    // Default parent: first organizer scope of the caller
+    const parentId = dto.parent_scope_id ?? callerOrganizerScopes[0];
 
     if (!visibleIds.includes(parentId)) {
       throw new ForbiddenException('Cannot create scope outside your subtree');
@@ -67,10 +75,6 @@ export class ScopeService {
   }
 
   // ─── Rename scope node ───────────────────────────────────────────────────────
-  // FIX: renamed from "updateScope (rename / reattach)" to rename-only.
-  // Project design: "Scope is a fixed tree — nodes are not moved."
-  // Removed: parent_scope_id acceptance, reattachment cycle check, and the
-  //          closure-table rebuild that would have been required for reattachment.
   async updateScope(
     orgid: string,
     callerUid: string,
@@ -79,8 +83,11 @@ export class ScopeService {
   ) {
     await this.orgService.assertOrganizerAccess(orgid, callerUid);
 
-    const callerScope = await this.orgService.getCallerScope(orgid, callerUid);
-    const visibleIds = await this.orgService.getDescendantScopeIds(callerScope);
+    const callerOrganizerScopes =
+      await this.orgService.getCallerOrganizerScopes(orgid, callerUid);
+    const visibleIds = await this.orgService.getDescendantScopeIds(
+      callerOrganizerScopes,
+    );
 
     if (!visibleIds.includes(scopeId)) {
       throw new ForbiddenException('Cannot edit a scope outside your subtree');
@@ -91,7 +98,6 @@ export class ScopeService {
     });
     if (!node) throw new NotFoundException('Scope node not found');
 
-    // ROOT node has no parent — prevent renaming it to avoid confusion
     if (node.parent_scope_id === null) {
       throw new BadRequestException('Cannot rename the ROOT scope');
     }
@@ -125,14 +131,14 @@ export class ScopeService {
   }
 
   // ─── Delete scope node ───────────────────────────────────────────────────────
-  // The DB trigger (trg_prevent_nonempty_scope_delete) enforces that the node
-  // has no direct children and no members assigned. The application-level
-  // events check here is an additional safety layer not covered by the trigger.
   async deleteScope(orgid: string, callerUid: string, scopeId: number) {
     await this.orgService.assertOrganizerAccess(orgid, callerUid);
 
-    const callerScope = await this.orgService.getCallerScope(orgid, callerUid);
-    const visibleIds = await this.orgService.getDescendantScopeIds(callerScope);
+    const callerOrganizerScopes =
+      await this.orgService.getCallerOrganizerScopes(orgid, callerUid);
+    const visibleIds = await this.orgService.getDescendantScopeIds(
+      callerOrganizerScopes,
+    );
 
     if (!visibleIds.includes(scopeId)) {
       throw new ForbiddenException(
@@ -162,7 +168,6 @@ export class ScopeService {
     try {
       await this.prisma.org_scope.delete({ where: { scope_id: scopeId } });
     } catch (e: any) {
-      // Postgres raised exception (P0001) — extract the human message
       const originalMessage = e?.cause?.originalMessage ?? e?.message;
       if (originalMessage) throw new BadRequestException(originalMessage);
       throw e;
@@ -172,14 +177,16 @@ export class ScopeService {
 }
 
 // ─── Tree builder ─────────────────────────────────────────────────────────────
-function buildTree(
+// Builds a forest from flatNodes, using rootIds as the set of entry-point roots.
+function buildForest(
   nodes: {
     scope_id: number;
     scope_name: string;
     parent_scope_id: number | null;
   }[],
-  rootId: number,
+  rootIds: number[],
 ): ScopeNode[] {
+  const rootSet = new Set(rootIds);
   const map = new Map<number, ScopeNode>();
 
   for (const n of nodes) {
@@ -189,16 +196,17 @@ function buildTree(
   const roots: ScopeNode[] = [];
 
   for (const node of map.values()) {
-    if (node.scope_id === rootId || node.parent_scope_id === null) {
+    // Treat as root if it is one of the caller's organizer scopes,
+    // has no parent, or its parent is outside the visible slice.
+    if (
+      rootSet.has(node.scope_id) ||
+      node.parent_scope_id === null ||
+      !map.has(node.parent_scope_id)
+    ) {
       roots.push(node);
     } else {
-      const parent = map.get(node.parent_scope_id);
-      if (parent) {
-        parent.children.push(node);
-      } else {
-        // Parent is outside caller's visible subtree — treat as root of visible slice
-        roots.push(node);
-      }
+      const parent = map.get(node.parent_scope_id)!;
+      parent.children.push(node);
     }
   }
 

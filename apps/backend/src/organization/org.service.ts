@@ -40,8 +40,9 @@ export function parseCsvParticipants(csv: string): ParticipantRowDto[] {
       throw new BadRequestException(`Row ${i + 2}: contact is required`);
     row.participant_identifier = cols[contactIdx];
     const role = roleIdx !== -1 ? cols[roleIdx] : 'v';
-    row.role = role === 'vo' ? 'vo' : 'v';
-
+    row.role = (['v', 'vo', 'o', 'none'] as const).includes(role as any)
+      ? (role as 'v' | 'vo' | 'o' | 'none')
+      : 'v';
     return row;
   });
 }
@@ -70,8 +71,6 @@ export class OrgService {
   async registerOrg(
     pid: bigint,
     callerUid: string | undefined,
-    // FIX: typed as string | undefined — it is optional in the DTO and must be
-    //      guarded before use; the previous code passed it straight to splitIdentifier.
     callerIdentifier: string | undefined,
     dto: RegisterOrgDto,
   ) {
@@ -89,8 +88,6 @@ export class OrgService {
       );
     }
 
-    // FIX: null guard for callerIdentifier — it is optional in the DTO but
-    //      splitIdentifier cannot accept undefined.
     if (!callerIdentifier) {
       throw new BadRequestException(
         'caller_identifier (mobile or email) is required to register an organization.',
@@ -115,7 +112,6 @@ export class OrgService {
 
     // Generate org ID
     const preferredOrgId = dto.preferred_orgid?.trim().toUpperCase();
-
     let orgid: string;
 
     if (preferredOrgId) {
@@ -167,7 +163,7 @@ export class OrgService {
       });
       if (!rootScope) throw new Error('ROOT scope not created');
 
-      // 3. Insert caller as member with voter + organizer role
+      // 3. Insert caller as member
       const { email, mobile } = splitIdentifier(callerIdentifier);
 
       await tx.org_members.create({
@@ -181,7 +177,7 @@ export class OrgService {
         },
       });
 
-      // 4. Assign caller role: voter + organizer at ROOT scope
+      // 4. Assign caller a single role row: voter + organizer at ROOT scope
       await tx.member_roles.create({
         data: {
           orgid,
@@ -204,14 +200,12 @@ export class OrgService {
 
       // 6. Insert participants (skip if uid === caller)
       for (const p of deduped) {
-        if (p.uid === callerUidNorm) continue; // already added
+        if (p.uid === callerUidNorm) continue;
         if (!p.participant_identifier)
           throw new BadRequestException(
             `Participant ${p.uid}: contact is required`,
           );
 
-        // FIX: use splitIdentifier — ParticipantRowDto only has participant_identifier,
-        //      not separate mobile/email fields.
         const { email, mobile } = splitIdentifier(p.participant_identifier);
 
         await tx.org_members.create({
@@ -224,6 +218,7 @@ export class OrgService {
           },
         });
 
+        // One role row per participant at ROOT scope
         await tx.member_roles.create({
           data: {
             orgid,
@@ -254,12 +249,13 @@ export class OrgService {
     });
     if (links.length === 0) return [];
 
+    // A member is an organizer if they have at least one role row with is_organizer = true
     const organizerLinks = await Promise.all(
       links.map(async (l) => {
-        const role = await this.prisma.member_roles.findUnique({
-          where: { orgid_uid: { orgid: l.orgid, uid: l.uid } },
+        const role = await this.prisma.member_roles.findFirst({
+          where: { orgid: l.orgid, uid: l.uid, is_organizer: true },
         });
-        return role?.is_organizer ? l : null;
+        return role ? l : null;
       }),
     );
 
@@ -297,18 +293,29 @@ export class OrgService {
   ) {
     await this.assertOrganizerAccess(orgid, callerUid);
 
-    const callerScope = await this.getCallerScope(orgid, callerUid);
-    const visibleScopes = await this.getDescendantScopeIds(callerScope);
+    const callerOrganizerScopes = await this.getCallerOrganizerScopes(
+      orgid,
+      callerUid,
+    );
+    const visibleScopes = await this.getDescendantScopeIds(
+      callerOrganizerScopes,
+    );
+
+    // Build the scope filter for the member_roles relation
+    const roleFilter: Record<string, any> = {
+      scope_id: { in: visibleScopes },
+    };
+    if (filters?.role === 'organizer') roleFilter.is_organizer = true;
+    if (filters?.role === 'voter') roleFilter.is_voter = true;
+    if (filters?.scope_id) roleFilter.scope_id = filters.scope_id;
 
     const members = await this.prisma.org_members.findMany({
       where: {
         orgid,
         is_deleted: false,
+        // Member must have at least one qualifying role row
         member_roles: {
-          scope_id: { in: visibleScopes },
-          ...(filters?.role === 'organizer' ? { is_organizer: true } : {}),
-          ...(filters?.role === 'voter' ? { is_voter: true } : {}),
-          ...(filters?.scope_id ? { scope_id: filters.scope_id } : {}),
+          some: roleFilter,
         },
         ...(filters?.search
           ? {
@@ -326,6 +333,7 @@ export class OrgService {
         email: true,
         pid: true,
         member_roles: {
+          where: { scope_id: { in: visibleScopes } },
           select: {
             is_voter: true,
             is_organizer: true,
@@ -340,9 +348,12 @@ export class OrgService {
       mobile: m.mobile,
       email: m.email,
       pid: m.pid?.toString() ?? null,
-      is_voter: m.member_roles?.is_voter ?? false,
-      is_organizer: m.member_roles?.is_organizer ?? false,
-      scope_id: m.member_roles?.scope_id ?? null,
+      // Each entry represents an independent scope assignment
+      roles: m.member_roles.map((r) => ({
+        scope_id: r.scope_id,
+        is_voter: r.is_voter,
+        is_organizer: r.is_organizer,
+      })),
     }));
   }
 
@@ -355,10 +366,16 @@ export class OrgService {
   ) {
     await this.assertOrganizerAccess(orgid, callerUid);
 
-    const callerScope = await this.getCallerScope(orgid, callerUid);
-    const visibleScopes = await this.getDescendantScopeIds(callerScope);
+    const callerOrganizerScopes = await this.getCallerOrganizerScopes(
+      orgid,
+      callerUid,
+    );
+    const visibleScopes = await this.getDescendantScopeIds(
+      callerOrganizerScopes,
+    );
 
-    const targetScopeId = dto.scope_id ?? callerScope;
+    // Default target scope: caller's first organizer scope
+    const targetScopeId = dto.scope_id ?? callerOrganizerScopes[0];
     if (!visibleScopes.includes(targetScopeId)) {
       throw new ForbiddenException(
         'Cannot assign members to a scope outside your jurisdiction',
@@ -380,9 +397,6 @@ export class OrgService {
 
     for (const p of participants) {
       try {
-        // FIX: use splitIdentifier(p.participant_identifier) in all branches.
-        //      The previous code referenced p.mobile and p.email which do not exist
-        //      on ParticipantRowDto — only participant_identifier does.
         if (!p.participant_identifier) {
           results.push({
             uid: p.uid,
@@ -397,38 +411,66 @@ export class OrgService {
           where: { orgid_uid: { orgid, uid: p.uid } },
         });
 
+        const isVoter = p.role === 'v' || p.role === 'vo';
+        const isOrganizer = p.role === 'o' || p.role === 'vo';
+
         if (existing) {
           if (existing.is_deleted) {
-            // Reactivate: restore contact info and role
+            // Reactivate: restore org_members and upsert a role at the target scope
             await this.prisma.org_members.update({
               where: { orgid_uid: { orgid, uid: p.uid } },
               data: {
                 is_deleted: false,
-                // FIX: was p.mobile / p.email (undefined). Now uses splitIdentifier result.
                 mobile: mobile ?? existing.mobile,
                 email: email ?? existing.email,
               },
             });
-            await this.prisma.member_roles.update({
-              where: { orgid_uid: { orgid, uid: p.uid } },
-              data: {
-                is_voter: p.role === 'v' || p.role === 'vo',
-                is_organizer: p.role === 'o' || p.role === 'vo',
+
+            // Upsert role at target scope — member may have pre-existing rows
+            await this.prisma.member_roles.upsert({
+              where: {
+                orgid_uid_scope_id: {
+                  orgid,
+                  uid: p.uid,
+                  scope_id: targetScopeId,
+                },
+              },
+              create: {
+                orgid,
+                uid: p.uid,
+                is_voter: isVoter,
+                is_organizer: isOrganizer,
                 scope_id: targetScopeId,
               },
+              update: { is_voter: isVoter, is_organizer: isOrganizer },
             });
+
             results.push({ uid: p.uid, status: 'reactivated' });
           } else {
-            results.push({
-              uid: p.uid,
-              status: 'skipped',
-              error: 'Already exists',
+            // Member already active — upsert the role at the target scope
+            await this.prisma.member_roles.upsert({
+              where: {
+                orgid_uid_scope_id: {
+                  orgid,
+                  uid: p.uid,
+                  scope_id: targetScopeId,
+                },
+              },
+              create: {
+                orgid,
+                uid: p.uid,
+                is_voter: isVoter,
+                is_organizer: isOrganizer,
+                scope_id: targetScopeId,
+              },
+              update: { is_voter: isVoter, is_organizer: isOrganizer },
             });
+            results.push({ uid: p.uid, status: 'role_assigned' });
           }
           continue;
         }
 
-        // FIX: was p.mobile / p.email (undefined). Now uses splitIdentifier result.
+        // New member — create org_members + a role row at target scope
         await this.prisma.org_members.create({
           data: { orgid, uid: p.uid, mobile, email },
         });
@@ -436,8 +478,8 @@ export class OrgService {
           data: {
             orgid,
             uid: p.uid,
-            is_voter: p.role === 'v' || p.role === 'vo',
-            is_organizer: p.role === 'o' || p.role === 'vo',
+            is_voter: isVoter,
+            is_organizer: isOrganizer,
             scope_id: targetScopeId,
           },
         });
@@ -451,7 +493,8 @@ export class OrgService {
     return { results };
   }
 
-  // ─── Update member role / scope ─────────────────────────────────────────────
+  // ─── Update member role at a specific scope ──────────────────────────────────
+  // scope_id in the DTO identifies which member_roles row to update.
   async updateMember(
     pid: bigint,
     orgid: string,
@@ -461,32 +504,39 @@ export class OrgService {
   ) {
     await this.assertOrganizerAccess(orgid, callerUid);
 
-    const callerScope = await this.getCallerScope(orgid, callerUid);
-    const visibleScopes = await this.getDescendantScopeIds(callerScope);
+    const callerOrganizerScopes = await this.getCallerOrganizerScopes(
+      orgid,
+      callerUid,
+    );
+    const visibleScopes = await this.getDescendantScopeIds(
+      callerOrganizerScopes,
+    );
 
+    // Locate the specific role row being updated
     const targetRole = await this.prisma.member_roles.findUnique({
-      where: { orgid_uid: { orgid, uid: targetUid } },
+      where: {
+        orgid_uid_scope_id: { orgid, uid: targetUid, scope_id: dto.scope_id },
+      },
     });
-    if (!targetRole) throw new NotFoundException('Member not found');
-
-    if (!visibleScopes.includes(targetRole.scope_id)) {
-      throw new ForbiddenException('Cannot edit member outside your scope');
-    }
-
-    if (dto.scope_id !== undefined && !visibleScopes.includes(dto.scope_id)) {
-      throw new ForbiddenException(
-        'Cannot move member to a scope outside your jurisdiction',
+    if (!targetRole) {
+      throw new NotFoundException(
+        `No role found for member ${targetUid} at scope ${dto.scope_id}`,
       );
     }
 
+    if (!visibleScopes.includes(dto.scope_id)) {
+      throw new ForbiddenException('Cannot edit member outside your scope');
+    }
+
     const updated = await this.prisma.member_roles.update({
-      where: { orgid_uid: { orgid, uid: targetUid } },
+      where: {
+        orgid_uid_scope_id: { orgid, uid: targetUid, scope_id: dto.scope_id },
+      },
       data: {
         ...(dto.is_voter !== undefined && { is_voter: dto.is_voter }),
         ...(dto.is_organizer !== undefined && {
           is_organizer: dto.is_organizer,
         }),
-        ...(dto.scope_id !== undefined && { scope_id: dto.scope_id }),
       },
     });
 
@@ -502,15 +552,26 @@ export class OrgService {
   ) {
     await this.assertOrganizerAccess(orgid, callerUid);
 
-    const callerScope = await this.getCallerScope(orgid, callerUid);
-    const visibleScopes = await this.getDescendantScopeIds(callerScope);
+    const callerOrganizerScopes = await this.getCallerOrganizerScopes(
+      orgid,
+      callerUid,
+    );
+    const visibleScopes = await this.getDescendantScopeIds(
+      callerOrganizerScopes,
+    );
 
-    const targetRole = await this.prisma.member_roles.findUnique({
-      where: { orgid_uid: { orgid, uid: targetUid } },
+    // Member must exist and have at least one role within caller's visible scopes
+    const memberRoles = await this.prisma.member_roles.findMany({
+      where: { orgid, uid: targetUid },
     });
-    if (!targetRole) throw new NotFoundException('Member not found');
+    if (memberRoles.length === 0) {
+      throw new NotFoundException('Member not found');
+    }
 
-    if (!visibleScopes.includes(targetRole.scope_id)) {
+    const inVisibleScope = memberRoles.some((r) =>
+      visibleScopes.includes(r.scope_id),
+    );
+    if (!inVisibleScope) {
       throw new ForbiddenException('Cannot remove member outside your scope');
     }
 
@@ -521,30 +582,253 @@ export class OrgService {
 
     return { message: `Member ${targetUid} removed from ${orgid}` };
   }
+  async addMemberRole(
+    pid: bigint,
+    orgid: string,
+    callerUid: string,
+    targetUid: string,
+    dto: { scope_id: number; is_voter: boolean; is_organizer: boolean },
+  ) {
+    await this.assertOrganizerAccess(orgid, callerUid);
 
+    const callerOrganizerScopes = await this.getCallerOrganizerScopes(
+      orgid,
+      callerUid,
+    );
+    const visibleScopes = await this.getDescendantScopeIds(
+      callerOrganizerScopes,
+    );
+
+    if (!visibleScopes.includes(dto.scope_id)) {
+      throw new ForbiddenException(
+        'Cannot assign member to a scope outside your jurisdiction',
+      );
+    }
+
+    const member = await this.prisma.org_members.findUnique({
+      where: { orgid_uid: { orgid, uid: targetUid } },
+    });
+    if (!member || member.is_deleted) {
+      throw new NotFoundException(`Member ${targetUid} not found`);
+    }
+
+    // Upsert: if an assignment already exists at this scope, update it.
+    const role = await this.prisma.member_roles.upsert({
+      where: {
+        orgid_uid_scope_id: { orgid, uid: targetUid, scope_id: dto.scope_id },
+      },
+      create: {
+        orgid,
+        uid: targetUid,
+        scope_id: dto.scope_id,
+        is_voter: dto.is_voter,
+        is_organizer: dto.is_organizer,
+      },
+      update: { is_voter: dto.is_voter, is_organizer: dto.is_organizer },
+    });
+
+    return {
+      scope_id: role.scope_id,
+      is_voter: role.is_voter,
+      is_organizer: role.is_organizer,
+    };
+  }
+
+  // ─── Remove one scope assignment from a member ───────────────────────────────
+  // If this is the member's last assignment, soft-deletes org_members too.
+  async removeMemberRole(
+    pid: bigint,
+    orgid: string,
+    callerUid: string,
+    targetUid: string,
+    scopeId: number,
+  ) {
+    await this.assertOrganizerAccess(orgid, callerUid);
+
+    const callerOrganizerScopes = await this.getCallerOrganizerScopes(
+      orgid,
+      callerUid,
+    );
+    const visibleScopes = await this.getDescendantScopeIds(
+      callerOrganizerScopes,
+    );
+
+    if (!visibleScopes.includes(scopeId)) {
+      throw new ForbiddenException('Cannot remove a role outside your scope');
+    }
+
+    const targetRole = await this.prisma.member_roles.findUnique({
+      where: {
+        orgid_uid_scope_id: { orgid, uid: targetUid, scope_id: scopeId },
+      },
+    });
+    if (!targetRole) {
+      throw new NotFoundException(
+        `No role found for member ${targetUid} at scope ${scopeId}`,
+      );
+    }
+
+    await this.prisma.member_roles.delete({
+      where: {
+        orgid_uid_scope_id: { orgid, uid: targetUid, scope_id: scopeId },
+      },
+    });
+
+    // If this was the member's last role row, deactivate the org_members record.
+    const remaining = await this.prisma.member_roles.count({
+      where: { orgid, uid: targetUid },
+    });
+    if (remaining === 0) {
+      await this.prisma.org_members.update({
+        where: { orgid_uid: { orgid, uid: targetUid } },
+        data: { is_deleted: true },
+      });
+    }
+
+    return { message: `Role at scope ${scopeId} removed from ${targetUid}` };
+  }
+
+  // ─── Atomically move one scope assignment to a different scope ───────────────
+  async moveMemberRole(
+    pid: bigint,
+    orgid: string,
+    callerUid: string,
+    targetUid: string,
+    dto: {
+      from_scope_id: number;
+      to_scope_id: number;
+      is_voter?: boolean;
+      is_organizer?: boolean;
+    },
+  ) {
+    await this.assertOrganizerAccess(orgid, callerUid);
+
+    const callerOrganizerScopes = await this.getCallerOrganizerScopes(
+      orgid,
+      callerUid,
+    );
+    const visibleScopes = await this.getDescendantScopeIds(
+      callerOrganizerScopes,
+    );
+
+    if (!visibleScopes.includes(dto.from_scope_id)) {
+      throw new ForbiddenException(
+        'Cannot move a role from a scope outside your jurisdiction',
+      );
+    }
+    if (!visibleScopes.includes(dto.to_scope_id)) {
+      throw new ForbiddenException(
+        'Cannot move a role to a scope outside your jurisdiction',
+      );
+    }
+
+    const fromRole = await this.prisma.member_roles.findUnique({
+      where: {
+        orgid_uid_scope_id: {
+          orgid,
+          uid: targetUid,
+          scope_id: dto.from_scope_id,
+        },
+      },
+    });
+    if (!fromRole) {
+      throw new NotFoundException(
+        `No role found for ${targetUid} at scope ${dto.from_scope_id}`,
+      );
+    }
+
+    const existing = await this.prisma.member_roles.findUnique({
+      where: {
+        orgid_uid_scope_id: {
+          orgid,
+          uid: targetUid,
+          scope_id: dto.to_scope_id,
+        },
+      },
+    });
+    if (existing) {
+      throw new ConflictException(
+        `${targetUid} already has an assignment at scope ${dto.to_scope_id}. ` +
+          `Remove it first or use updateMember to edit it.`,
+      );
+    }
+
+    // Carry over roles from the source row unless the caller overrides them.
+    const is_voter = dto.is_voter ?? fromRole.is_voter;
+    const is_organizer = dto.is_organizer ?? fromRole.is_organizer;
+
+    const [, newRole] = await this.prisma.$transaction([
+      this.prisma.member_roles.delete({
+        where: {
+          orgid_uid_scope_id: {
+            orgid,
+            uid: targetUid,
+            scope_id: dto.from_scope_id,
+          },
+        },
+      }),
+      this.prisma.member_roles.create({
+        data: {
+          orgid,
+          uid: targetUid,
+          scope_id: dto.to_scope_id,
+          is_voter,
+          is_organizer,
+        },
+      }),
+    ]);
+
+    return {
+      scope_id: newRole.scope_id,
+      is_voter: newRole.is_voter,
+      is_organizer: newRole.is_organizer,
+    };
+  }
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+  /**
+   * Throws ForbiddenException unless the caller has at least one
+   * is_organizer = true role row in the given org.
+   */
   async assertOrganizerAccess(orgid: string, callerUid: string) {
-    const role = await this.prisma.member_roles.findUnique({
-      where: { orgid_uid: { orgid, uid: callerUid } },
+    const role = await this.prisma.member_roles.findFirst({
+      where: { orgid, uid: callerUid, is_organizer: true },
     });
-    if (!role?.is_organizer) {
+    if (!role) {
       throw new ForbiddenException('Organizer access required');
     }
   }
 
-  async getCallerScope(orgid: string, uid: string): Promise<number> {
-    const role = await this.prisma.member_roles.findUnique({
-      where: { orgid_uid: { orgid, uid } },
+  /**
+   * Returns all scope_ids where the caller holds is_organizer = true.
+   * These are the roots of the caller's jurisdiction.
+   */
+  async getCallerOrganizerScopes(
+    orgid: string,
+    uid: string,
+  ): Promise<number[]> {
+    const roles = await this.prisma.member_roles.findMany({
+      where: { orgid, uid, is_organizer: true },
+      select: { scope_id: true },
     });
-    if (!role) throw new NotFoundException('Member role not found');
-    return role.scope_id;
+    if (roles.length === 0) {
+      throw new NotFoundException('No organizer roles found for this member');
+    }
+    return roles.map((r) => r.scope_id);
   }
 
-  async getDescendantScopeIds(scopeId: number): Promise<number[]> {
-    const rows = await this.prisma.$queryRaw<{ scope_id: number }[]>`
-      SELECT scope_id FROM get_scope_descendants(${scopeId})
-    `;
-    return rows.map((r) => Number(r.scope_id));
+  /**
+   * Returns the union of all descendants (including self) for the given
+   * list of scope root IDs — i.e. the full jurisdiction of the caller.
+   */
+  async getDescendantScopeIds(scopeIds: number[]): Promise<number[]> {
+    const allIds = new Set<number>();
+    for (const scopeId of scopeIds) {
+      const rows = await this.prisma.$queryRaw<{ scope_id: number }[]>`
+        SELECT scope_id FROM get_scope_descendants(${scopeId})
+      `;
+      rows.forEach((r) => allIds.add(Number(r.scope_id)));
+    }
+    return Array.from(allIds);
   }
 }

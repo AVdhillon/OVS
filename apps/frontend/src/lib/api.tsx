@@ -1,4 +1,4 @@
-import {toast} from "sonner";
+import { toast } from 'sonner';
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
 import type {
@@ -10,8 +10,8 @@ import type {
     EventsListing,
     WalletIdentity,
 } from '../app/context/app-context';
-import {UpdateMeResponse} from '../types/users';
-import {normalizeEvent} from '../utils/normalizeEvent';
+import { UpdateMeResponse } from '../types/users';
+import { normalizeEvent } from '../utils/normalizeEvent';
 
 // ── Response types ────────────────────────────────────────────────────────────
 
@@ -56,8 +56,27 @@ export interface RegisterOrgResponse {
 }
 
 export interface AddMembersResponse {
-    results: { uid: string; status: 'added' | 'reactivated' | 'skipped' | 'error'; error?: string }[];
+    results: {
+        uid: string;
+        status: 'added' | 'reactivated' | 'role_assigned' | 'skipped' | 'error';
+        error?: string;
+    }[];
 }
+
+/**
+ * A single scope assignment row from member_roles.
+ * One member can have many of these — one per scope they're assigned to.
+ */
+export interface MemberRole {
+    scope_id: number;
+    is_voter: boolean;
+    is_organizer: boolean;
+}
+
+// FIX: OrgMember returned by getMembers always includes a `roles` array.
+// The app-context OrgMember type predates the multi-scope roles design;
+// this intersection extends it without changing the context type globally.
+export type OrgMemberWithRoles = OrgMember & { roles: MemberRole[] };
 
 // ── Token helpers ─────────────────────────────────────────────────────────────
 export function setToken(t: string | null) {
@@ -74,79 +93,50 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
         ...init,
         headers: {
             'Content-Type': 'application/json',
-            ...(getToken() ? {Authorization: `Bearer ${getToken()}`} : {}),
+            ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
             ...init.headers,
         },
     });
 
     if (res.status === 401) {
         setToken(null);
-        window.location.href = '/';   // adjust to your login route
-        return new Promise(() => {});  // hang so no downstream catch fires
+        window.location.href = '/';
+        return new Promise(() => {});
     }
 
     if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.message ?? `HTTP ${res.status}`);
     }
-    let data: any = null;
-    data = await res.json();
 
-    // 👇 GLOBAL OTP INTERCEPT
+    const data: any = await res.json();
+
     if (data?.otp) {
         toast(
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <strong>DEV OTP</strong>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontFamily: 'monospace', fontSize: 16 }}>
-        {data.otp}
-        </span>
-
-        <button
-        onClick={() => {
-            navigator.clipboard.writeText(data.otp);
-            toast.success("Copied!");
-        }}
-        style={{
-            padding: '2px 8px',
-                fontSize: 12,
-                border: '1px solid #ccc',
-                borderRadius: 4,
-                cursor: 'pointer',
-        }}
-    >
-        Copy
-        </button>
-        </div>
-        </div>
-    );
+                <strong>DEV OTP</strong>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontFamily: 'monospace', fontSize: 16 }}>{data.otp}</span>
+                    <button
+                        onClick={() => { navigator.clipboard.writeText(data.otp); toast.success('Copied!'); }}
+                        style={{ padding: '2px 8px', fontSize: 12, border: '1px solid #ccc', borderRadius: 4, cursor: 'pointer' }}
+                    >
+                        Copy
+                    </button>
+                </div>
+            </div>,
+        );
     }
+
     return data;
 }
 
 // ── Auth types ────────────────────────────────────────────────────────────────
 export type LoginType = 'UNIFIED' | 'ORG' | 'GOV';
 
-export interface UnifiedLoginBody {
-    type: 'UNIFIED';
-    identifier: string;
-    otp?: string;
-}
-
-export interface OrgLoginBody {
-    type: 'ORG';
-    orgid: string;
-    uid: string;
-    otp?: string;
-}
-
-export interface GovLoginBody {
-    type: 'GOV';
-    epic_id: string;
-    otp?: string;
-}
-
+export interface UnifiedLoginBody { type: 'UNIFIED'; identifier: string; otp?: string; }
+export interface OrgLoginBody     { type: 'ORG'; orgid: string; uid: string; otp?: string; }
+export interface GovLoginBody     { type: 'GOV'; epic_id: string; otp?: string; }
 export type LoginBody = UnifiedLoginBody | OrgLoginBody | GovLoginBody;
 
 // ── API ───────────────────────────────────────────────────────────────────────
@@ -154,72 +144,48 @@ export const api = {
 
     // ── Auth ───────────────────────────────────────────────────────────────────
 
-    // Registration-only OTP — for new account creation flow only
     sendOtp: (identifier: string) =>
-        request('/auth/send-otp', {method: 'POST', body: JSON.stringify({identifier})}),
+        request('/auth/send-otp', { method: 'POST', body: JSON.stringify({ identifier }) }),
 
-    // Login OTP — use before login for ALL identity types (UNIFIED/ORG/GOV)
-    // Contact is resolved server-side for ORG/GOV; client never supplies it
     sendLoginOtp: (body: Omit<LoginBody, 'otp'>) =>
-        request('/auth/send-login-otp', {method: 'POST', body: JSON.stringify(body)}),
+        request('/auth/send-login-otp', { method: 'POST', body: JSON.stringify(body) }),
 
-    // Standalone OTP verify — only for registration two-step flows
-    // Do NOT call before login; login verifies OTP atomically
     verifyOtp: (identifier: string, otp: string) =>
-        request('/auth/verify-otp', {method: 'POST', body: JSON.stringify({identifier, otp})}),
+        request('/auth/verify-otp', { method: 'POST', body: JSON.stringify({ identifier, otp }) }),
 
-    // Login — verifies OTP + issues JWT in one atomic step
     login: (body: LoginBody) =>
-        request<{ access_token: string }>('/auth/login', {method: 'POST', body: JSON.stringify(body)}),
+        request<{ access_token: string }>('/auth/login', { method: 'POST', body: JSON.stringify(body) }),
 
-    logout: () =>
-        request('/auth/logout', {method: 'POST'}),
+    logout: () => request('/auth/logout', { method: 'POST' }),
 
-    getProfile: () =>
-        request<User>('/auth/profile'),
+    getProfile: () => request<User>('/auth/profile'),
 
     // ── Users ──────────────────────────────────────────────────────────────────
 
-    // PUBLIC — no JWT needed
-    // Must call sendOtp(mobile|email) first; include returned otp here
-    // At least one of mobile or email required
     register: (body: {
         first_name: string;
         last_name: string;
         otp: string;
         middle_name?: string;
-        mobile?: string;   // 10-digit
-        email?: string;
-        country?: string;
-        state?: string;
-    }) => request<User>('/users/register', {method: 'POST', body: JSON.stringify(body)}),
-
-    getMe: () =>
-        request<User>('/users/me'),
-
-    // Changing email → also send email_otp (sendOtp(newEmail) first)
-    // Changing mobile → also send mobile_otp (sendOtp(newMobile) first)
-    // 409 with code MOBILE_ACCOUNT_EXISTS or EMAIL_ACCOUNT_EXISTS means
-    //   the contact belongs to a rich account → guide user to Identity Wallet
-    updateMe: (body: {
-        first_name?: string;
-        middle_name?: string;
-        last_name?: string;
         mobile?: string;
-        mobile_otp?: string;
         email?: string;
-        email_otp?: string;
         country?: string;
         state?: string;
-    }) => request<UpdateMeResponse>('/users/me', {method: 'PATCH', body: JSON.stringify(body)}),
+    }) => request<User>('/users/register', { method: 'POST', body: JSON.stringify(body) }),
+
+    getMe: () => request<User>('/users/me'),
+
+    updateMe: (body: {
+        first_name?: string; middle_name?: string; last_name?: string;
+        mobile?: string; mobile_otp?: string;
+        email?: string;  email_otp?: string;
+        country?: string; state?: string;
+    }) => request<UpdateMeResponse>('/users/me', { method: 'PATCH', body: JSON.stringify(body) }),
 
     // ── Events ─────────────────────────────────────────────────────────────────
 
-    // Returns { active_pending[], voted[], completed[] }
-    // Server resolves visibility per caller's org memberships + scope automatically
     getEvents: async () => {
         const data = await request<EventsListing>('/events');
-
         return {
             active_pending: data.active_pending.map(normalizeEvent),
             voted: data.voted.map(normalizeEvent),
@@ -227,164 +193,171 @@ export const api = {
         };
     },
 
-    // Returns event + candidates[] + has_voted + results (if live or ended)
     getEvent: async (id: number) => {
         const data = await request<VotingEvent>(`/events/${id}`);
         return normalizeEvent(data);
     },
 
-    // Caller must be organizer in the supplied orgid
-    // scope_only and visible_upward are mutually exclusive (cannot both be true)
     createEvent: (body: {
-        orgid: string;
-        uid: string;
-        scope_id: number;
-        title: string;
-        start_time: string; // ISO 8601
-        end_time: string;
-        candidates: { candidate_name: string; description?: string }[]; // min 2
-        description?: string;
-        show_live_results?: boolean;
-        visible_upward?: boolean;
-        scope_only?: boolean;
-    }) => request<VotingEvent>('/events', {method: 'POST', body: JSON.stringify(body)}),
+        orgid: string; uid: string; scope_id: number;
+        title: string; start_time: string; end_time: string;
+        candidates: { candidate_name: string; description?: string }[];
+        description?: string; show_live_results?: boolean;
+        visible_upward?: boolean; scope_only?: boolean;
+    }) => request<VotingEvent>('/events', { method: 'POST', body: JSON.stringify(body) }),
 
-    // Creator only. Event must not have started.
-    updateEvent: (orgId : string ,eventId: number,actingUid: string, body: {
-        title?: string;
-        description?: string;
-        start_time?: string;
-        end_time?: string;
-        show_live_results?: boolean;
-        visible_upward?: boolean;
-        scope_only?: boolean;
-    }) => request(`/events/${orgId}/${eventId}/${actingUid}`, {method: 'PATCH', body: JSON.stringify(body)}),
+    updateEvent: (orgId: string, eventId: number, actingUid: string, body: {
+        title?: string; description?: string;
+        start_time?: string; end_time?: string;
+        show_live_results?: boolean; visible_upward?: boolean; scope_only?: boolean;
+    }) => request(`/events/${orgId}/${eventId}/${actingUid}`, { method: 'PATCH', body: JSON.stringify(body) }),
 
-    // Soft-delete + sets status=CANCELLED. Must not have started.
-    deleteEvent: (id: number) =>
-        request(`/events/${id}`, {method: 'DELETE'}),
+    deleteEvent: (id: number) => request(`/events/${id}`, { method: 'DELETE' }),
 
-    // Returns { event_id, title, status, total_votes, results[] with percentages }
-    // 403 if show_live_results=false and event hasn't ended
-    getResults: (id: number) =>
-        request<EventResults>(`/events/${id}/results`),
+    getResults: (id: number) => request<EventResults>(`/events/${id}/results`),
 
-    // Organizer only — returns participants with uid, orgid, has_voted, mobile, email
     getParticipants: (eventId: number) =>
         request<{ event_id: number; participants: EventParticipant[] }>(`/events/${eventId}/participants`),
 
     // ── Candidates ─────────────────────────────────────────────────────────────
-    // Organizer only. Event must not have started.
 
     addCandidate: (eventId: number, body: { candidate_name: string; description?: string }) =>
-        request(`/events/${eventId}/candidates`, {method: 'POST', body: JSON.stringify(body)}),
+        request(`/events/${eventId}/candidates`, { method: 'POST', body: JSON.stringify(body) }),
 
     updateCandidate: (eventId: number, candidateId: number, body: { candidate_name: string; description?: string }) =>
-        request(`/events/${eventId}/candidates/${candidateId}`, {method: 'PATCH', body: JSON.stringify(body)}),
+        request(`/events/${eventId}/candidates/${candidateId}`, { method: 'PATCH', body: JSON.stringify(body) }),
 
-    // At least 2 candidates must remain after deletion
     removeCandidate: (eventId: number, candidateId: number) =>
-        request(`/events/${eventId}/candidates/${candidateId}`, {method: 'DELETE'}),
+        request(`/events/${eventId}/candidates/${candidateId}`, { method: 'DELETE' }),
 
     // ── Voting ─────────────────────────────────────────────────────────────────
-    // Backend resolves identity + org membership from JWT
-// Only event_id and candidate_id are required
-// Returns vote + optional live_results
-    // GOV sessions → always 403. UNIFIED sessions → pid must be linked via org_members.
-    // Returns { message, vote: { vote_id, event_id, candidate_id, voted_at, voter_hash },
-    //           live_results? } (live_results only if show_live_results=true)
-    castVote: (body: {
-        event_id: number;
-        candidate_id: number;
-        device_fingerprint?: string;
-    }) => request<CastVoteResponse>('/voting/cast', {method: 'POST', body: JSON.stringify(body)}),
+
+    castVote: (body: { event_id: number; candidate_id: number; device_fingerprint?: string }) =>
+        request<CastVoteResponse>('/voting/cast', { method: 'POST', body: JSON.stringify(body) }),
 
     // ── Org ────────────────────────────────────────────────────────────────────
 
-    // Returns orgs where caller has organizer role, with their uid per org
-    getMyOrgs: () =>
-        request<OrgSummary[]>('/org/mine'),
+    getMyOrgs: () => request<OrgSummary[]>('/org/mine'),
 
-    // caller_uid required for UNIFIED sessions (4-20 uppercase alphanumeric)
-    // Returns { orgid, org_name, root_scope_id, message }
     registerOrg: (body: {
-        org_name: string;
-        caller_uid: string;
-        caller_identifier: string;  // caller's own mobile or email
-        org_email?: string;
-        org_prefix?: string;         // 3 uppercase letters
-        org_suffix?: string;         // 4 digits
-        preferred_orgid?: string;    // format: ABC1234
+        org_name: string; caller_uid: string; caller_identifier: string;
+        org_email?: string; org_prefix?: string; org_suffix?: string;
+        preferred_orgid?: string;
         participants?: { uid: string; participant_identifier?: string; role?: 'v' | 'vo' | 'o' | 'none' }[];
-        participants_csv?: string;   // header row: uid,contact,role
-    }) => request<RegisterOrgResponse>('/org/register', {method: 'POST', body: JSON.stringify(body)}),
+        participants_csv?: string;
+    }) => request<RegisterOrgResponse>('/org/register', { method: 'POST', body: JSON.stringify(body) }),
 
-    // ── Org Members (all require organizer role; uid = caller's uid in org) ────
+    // ── Org Members ────────────────────────────────────────────────────────────
 
+    /**
+     * Returns members. Each member has a `roles` array — one entry per scope assignment.
+     * FIX: return type now correctly reflects the `roles` field the backend always sends.
+     */
     getMembers: (orgid: string, uid: string, params?: {
         role?: 'organizer' | 'voter';
         scope_id?: number;
         search?: string;
     }) => {
-        const q = new URLSearchParams({uid});
+        const q = new URLSearchParams({ uid });
         if (params?.role !== undefined) q.set('role', params.role);
         if (params?.scope_id !== undefined) q.set('scope_id', String(params.scope_id));
         if (params?.search !== undefined) q.set('search', params.search);
-        return request<OrgMember[]>(`/org/${orgid}/members?${q.toString()}`);
+        return request<OrgMemberWithRoles[]>(`/org/${orgid}/members?${q.toString()}`);
     },
 
-    // participants or participants_csv (header: uid,contact,role). role: 'v'=voter, 'vo'=voter+organizer
-    // scope_id defaults to org root if omitted
-    // Returns { results: [{ uid, status: 'added'|'reactivated'|'skipped'|'error', error? }] }
+    /**
+     * Add members. Each participant gets one role row at the given scope_id.
+     * For members that already exist, upserts a role row at the target scope.
+     */
     addMembers: (orgid: string, uid: string, body: {
-        participants?: { uid: string; participant_identifier?: string; role?: 'v' | 'vo' | 'o' | 'none'}[];
+        participants?: { uid: string; participant_identifier?: string; role?: 'v' | 'vo' | 'o' | 'none' }[];
         participants_csv?: string;
         scope_id?: number;
-    }) => request<AddMembersResponse>(`/org/${orgid}/members?uid=${uid}`, {method: 'POST', body: JSON.stringify(body)}),
+    }) => request<AddMembersResponse>(`/org/${orgid}/members?uid=${uid}`, { method: 'POST', body: JSON.stringify(body) }),
 
+    /**
+     * Update is_voter / is_organizer on one specific scope assignment row.
+     * scope_id is required — it identifies which member_roles row to update.
+     * To change which scope a member is assigned to, use moveMemberRole instead.
+     */
     updateMember: (orgid: string, uid: string, targetUid: string, body: {
+        scope_id: number;       // identifies the row (part of composite PK)
         is_voter?: boolean;
         is_organizer?: boolean;
-        scope_id?: number; // must be within caller's scope subtree
-    }) => request(`/org/${orgid}/members/${targetUid}?uid=${uid}`, {method: 'PATCH', body: JSON.stringify(body)}),
+    }) => request(`/org/${orgid}/members/${targetUid}?uid=${uid}`, { method: 'PATCH', body: JSON.stringify(body) }),
 
+    /**
+     * Soft-deletes the entire org_members row for targetUid, removing all their scope assignments.
+     * Use removeMemberRole to remove just one scope assignment while leaving others intact.
+     */
     removeMember: (orgid: string, uid: string, targetUid: string) =>
-        request(`/org/${orgid}/members/${targetUid}?uid=${uid}`, {method: 'DELETE'}),
+        request(`/org/${orgid}/members/${targetUid}?uid=${uid}`, { method: 'DELETE' }),
+
+    // ── Member Roles (per-scope assignment CRUD) ───────────────────────────────
+
+    /**
+     * Add a new scope assignment to an existing member.
+     * Does not affect the member's other scope assignments.
+     */
+    addMemberRole: (orgid: string, uid: string, targetUid: string, body: {
+        scope_id: number;
+        is_voter: boolean;
+        is_organizer: boolean;
+    }) =>
+        request<MemberRole>(
+            `/org/${orgid}/members/${targetUid}/roles?uid=${uid}`,
+            { method: 'POST', body: JSON.stringify(body) },
+        ),
+
+    /**
+     * Remove one scope assignment from a member.
+     * If this is their last assignment, the server will soft-delete org_members too.
+     */
+    removeMemberRole: (orgid: string, uid: string, targetUid: string, scopeId: number) =>
+        request(
+            `/org/${orgid}/members/${targetUid}/roles/${scopeId}?uid=${uid}`,
+            { method: 'DELETE' },
+        ),
+
+    /**
+     * Atomically move a member's assignment from one scope to another.
+     * from_scope_id + to_scope_id are required.
+     * Roles (is_voter / is_organizer) are carried over unless explicitly provided.
+     */
+    moveMemberRole: (orgid: string, uid: string, targetUid: string, body: {
+        from_scope_id: number;
+        to_scope_id: number;
+        is_voter?: boolean;
+        is_organizer?: boolean;
+    }) =>
+        request<MemberRole>(
+            `/org/${orgid}/members/${targetUid}/roles/move?uid=${uid}`,
+            { method: 'POST', body: JSON.stringify(body) },
+        ),
 
     // ── Org Scope ─────────────────────────────────────────────────────────────
 
-    // Returns caller's subtree only as nested ScopeNode tree
     getScopeTree: (orgid: string, uid: string) =>
         request<ScopeNode[]>(`/org/${orgid}/scope?uid=${uid}`),
 
-    // parent_scope_id defaults to caller's own scope node if omitted
     createScope: (orgid: string, uid: string, body: { scope_name: string; parent_scope_id?: number }) =>
-        request(`/org/${orgid}/scope?uid=${uid}`, {method: 'POST', body: JSON.stringify(body)}),
+        request(`/org/${orgid}/scope?uid=${uid}`, { method: 'POST', body: JSON.stringify(body) }),
 
-    // Rename only — tree structure is fixed, nodes cannot be moved
-    // Cannot rename ROOT scope node
     updateScope: (orgid: string, uid: string, scopeId: number, body: { scope_name: string }) =>
-        request(`/org/${orgid}/scope/${scopeId}?uid=${uid}`, {method: 'PATCH', body: JSON.stringify(body)}),
+        request(`/org/${orgid}/scope/${scopeId}?uid=${uid}`, { method: 'PATCH', body: JSON.stringify(body) }),
 
-    // Leaf nodes only — 400 if node has children, assigned members, or active events
     deleteScope: (orgid: string, uid: string, scopeId: number) =>
-        request(`/org/${orgid}/scope/${scopeId}?uid=${uid}`, {method: 'DELETE'}),
+        request(`/org/${orgid}/scope/${scopeId}?uid=${uid}`, { method: 'DELETE' }),
 
     // ── Identity Wallet ────────────────────────────────────────────────────────
 
-    // UNIFIED session only (needs pid). GOV/ORG sessions → 403.
-    // Returns [{ identity_type, identity_id, uid }]
-    getWallet: () =>
-        request<WalletIdentity[]>('/identity/getwallet'),
+    getWallet: () => request<WalletIdentity[]>('/identity/getwallet'),
 
-    // Send OTP to the contact on file for that identity first (via sendOtp)
-    // identity_type ORG: identity_id=orgid, uid=member's uid (required)
-    // identity_type GOV: identity_id=epic_id, uid not needed
     addIdentity: (body: {
         identity_type: 'ORG' | 'GOV';
         identity_id: string;
         otp: string;
-        identifier: string; // mobile or email the OTP was sent to
-        uid?: string;       // required for ORG
-    }) => request('/identity/wallet/add', {method: 'POST', body: JSON.stringify(body)}),
+        identifier: string;
+        uid?: string;
+    }) => request('/identity/wallet/add', { method: 'POST', body: JSON.stringify(body) }),
 };

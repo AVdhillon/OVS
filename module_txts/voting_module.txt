@@ -5,7 +5,7 @@ MODULE: voting
 --- voting\dto\cast-vote.dto.ts ---
 
 // dto/cast-vote.dto.ts
-import { IsInt, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsInt, IsOptional, IsString } from 'class-validator';
 
 export class CastVoteDto {
   @IsInt()
@@ -13,19 +13,6 @@ export class CastVoteDto {
 
   @IsInt()
   candidate_id: number;
-
-  /**
-   * The org + uid the caller is voting as.
-   * Required — a user may belong to multiple orgs so must declare context.
-   */
-  @IsString()
-  @IsNotEmpty()
-  orgid: string;
-
-  @IsString()
-  @IsNotEmpty()
-  uid: string;
-
   /**
    * Optional client-side device fingerprint for fraud detection.
    */
@@ -93,6 +80,7 @@ export class VotingController {
 }
 
 
+
 --- voting\voting.module.ts ---
 
 import { Module } from '@nestjs/common';
@@ -155,15 +143,47 @@ export class VotingService {
 
   async castVote(user: JwtUser, dto: CastVoteDto, req: Request) {
     // ── 1. Validate the identity being used to vote ──────────────────────
-    // Ensures the session is permitted to act as dto.orgid + dto.uid.
-    await this.assertVotingIdentity(user, dto.orgid, dto.uid);
+    // Ensures the session is permitted to act as member.orgid + member.uid.
 
     // ── 2. Load the event ────────────────────────────────────────────────
     const event = await this.prisma.events.findFirst({
       where: { event_id: dto.event_id, is_deleted: false },
     });
     if (!event) throw new NotFoundException('Event not found');
+    // ── Resolve org member from JWT ─────────────────────────────
+    if (user.type === 'GOV') {
+      throw new ForbiddenException('Government identity cannot vote');
+    }
+    if (!event.orgid) {
+      throw new BadRequestException('Event is not linked to an organization');
+    }
+    let member;
+    if (user.type === 'ORG') {
+      member = await this.prisma.org_members.findFirst({
+        where: {
+          orgid: user.orgid,
+          uid: user.uid,
+          is_deleted: false,
+        },
+      });
+    } else if (user.type === 'UNIFIED' && user.pid) {
+      member = await this.prisma.org_members.findFirst({
+        where: {
+          orgid: event.orgid,
+          pid: BigInt(user.pid),
+          is_deleted: false,
+        },
+      });
+    }
 
+    if (!member) {
+      throw new ForbiddenException('You are not a member of this organization');
+    }
+    if (member.orgid !== event.orgid) {
+      throw new ForbiddenException(
+        'You are not part of this event organization',
+      );
+    }
     // ── 3. Check event is currently open ────────────────────────────────
     const now = new Date();
     if (now < event.start_time) {
@@ -178,7 +198,7 @@ export class VotingService {
 
     // ── 4. Check caller is a registered participant ──────────────────────
     const participant = await this.prisma.event_participants.findFirst({
-      where: { event_id: dto.event_id, orgid: dto.orgid, uid: dto.uid },
+      where: { event_id: dto.event_id, orgid: member.orgid, uid: member.uid },
     });
     if (!participant) {
       throw new ForbiddenException('You are not a participant in this event');
@@ -193,7 +213,7 @@ export class VotingService {
     // Secondary check via votes table as a race-condition guard.
     // The UNIQUE(event_id, orgid, uid) DB constraint is the final safety net.
     const existingVote = await this.prisma.votes.findFirst({
-      where: { event_id: dto.event_id, orgid: dto.orgid, uid: dto.uid },
+      where: { event_id: dto.event_id, orgid: member.orgid, uid: member.uid },
     });
     if (existingVote) {
       throw new ConflictException('You have already voted in this event');
@@ -209,7 +229,7 @@ export class VotingService {
 
     // ── 7. Check voter role ──────────────────────────────────────────────
     const role = await this.prisma.member_roles.findFirst({
-      where: { orgid: dto.orgid, uid: dto.uid, is_voter: true },
+      where: { orgid: member.orgid, uid: member.uid, is_voter: true },
     });
     if (!role) {
       throw new ForbiddenException(
@@ -249,8 +269,8 @@ export class VotingService {
     const vote = await this.prisma.votes.create({
       data: {
         event_id: dto.event_id,
-        orgid: dto.orgid,
-        uid: dto.uid,
+        orgid: member.orgid,
+        uid: member.uid,
         candidate_id: dto.candidate_id,
         ip_address: ip,
         device_fingerprint: dto.device_fingerprint ?? null,
@@ -286,52 +306,6 @@ export class VotingService {
   // ─────────────────────────────────────────────────────────────────────────
   // HELPERS
   // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Validates that the calling JWT session is permitted to vote as
-   * the supplied orgid + uid.
-   *
-   *  ORG session      → must match JWT orgid + uid exactly
-   *  UNIFIED session  → pid must be linked to orgid+uid via org_members.pid
-   *  GOV session      → never permitted to vote in org events
-   */
-  private async assertVotingIdentity(
-    user: JwtUser,
-    orgid: string,
-    uid: string,
-  ) {
-    if (user.type === 'GOV') {
-      throw new ForbiddenException(
-        'Government identity cannot vote in org events',
-      );
-    }
-
-    if (user.type === 'ORG') {
-      if (user.orgid !== orgid || user.uid !== uid) {
-        throw new ForbiddenException(
-          'Voting identity does not match your session',
-        );
-      }
-      return;
-    }
-
-    // UNIFIED — check pid → orgid+uid linkage via org_members
-    if (user.type === 'UNIFIED' && user.pid) {
-      // pid is a string in the JWT (auth.service: payload = { pid: user.pid.toString() })
-      const link = await this.prisma.org_members.findFirst({
-        where: { pid: BigInt(user.pid), orgid, uid },
-      });
-      if (!link) {
-        throw new ForbiddenException(
-          'Your unified account is not linked to this org identity',
-        );
-      }
-      return;
-    }
-
-    throw new ForbiddenException('Unable to verify voting identity');
-  }
-
   /**
    * Checks the voter's scope against the event's visibility configuration.
    *

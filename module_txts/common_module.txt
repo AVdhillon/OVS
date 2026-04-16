@@ -189,7 +189,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
-    const status = exception.getStatus();
+    const status = exception.getStatus() as HttpStatus;
     const raw = exception.getResponse();
 
     // NestJS validation errors come as { message: string[], error, statusCode }
@@ -336,33 +336,37 @@ export class RolesGuard implements CanActivate {
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
     // Read metadata set by @RequireOrganizer()
-    const meta = this.reflector.getAllAndOverride<{ orgidParam: string } | undefined>(
-      ORGANIZER_KEY,
-      [ctx.getHandler(), ctx.getClass()],
-    );
+    const meta = this.reflector.getAllAndOverride<
+      { orgidParam: string } | undefined
+    >(ORGANIZER_KEY, [ctx.getHandler(), ctx.getClass()]);
 
     // If no @RequireOrganizer() on this route, skip guard
     if (!meta) return true;
 
-    const req  = ctx.switchToHttp().getRequest();
+    const req = ctx.switchToHttp().getRequest();
     const user = req.user;
-    console.log(user);
     // Resolve orgid: from JWT payload first, then route param
     const orgid: string =
-      user?.orgid ?? req.params?.[meta.orgidParam] ?? req.body?.[meta.orgidParam];
+      user?.orgid ??
+      req.params?.[meta.orgidParam] ??
+      req.body?.[meta.orgidParam];
 
     // Resolve uid: from JWT payload first, then route param / body
-    const uid: string = user?.uid ?? req.params?.uid ?? req.query?.uid ?? req.body?.uid;
-
+    const uid: string =
+      user?.uid ??
+      req.params?.uid ??
+      req.query?.uid ??
+      req.body?.uid ??
+      req.params?.actingUid;
     if (!orgid || !uid) {
-      throw new ForbiddenException('org context required to check organizer role');
+      throw new ForbiddenException(
+        'org context required to check organizer role',
+      );
     }
-    console.log('GUARD checking:', { orgid, uid });
     const role = await this.prisma.member_roles.findFirst({
       where: { orgid, uid },
       select: { is_organizer: true },
     });
-    console.log('GUARD role result:', role);
     if (!role?.is_organizer) {
       throw new ForbiddenException('Organizer role required');
     }
@@ -373,6 +377,7 @@ export class RolesGuard implements CanActivate {
     return true;
   }
 }
+
 
 
 --- common\guards\scope.guard.ts ---
@@ -465,34 +470,36 @@ export class ScopeGuard implements CanActivate {
 // src/common/interceptors/bigint.interceptor.ts
 
 import {
-    CallHandler,
-    ExecutionContext,
-    Injectable,
-    NestInterceptor,
-  } from '@nestjs/common';
-  import { Observable } from 'rxjs';
-  import { map } from 'rxjs/operators';
-  
-  function replaceBigInt(value: unknown): unknown {
-    if (typeof value === 'bigint') return value.toString();
-    if (Array.isArray(value))      return value.map(replaceBigInt);
-    if (value !== null && typeof value === 'object') {
-      return Object.fromEntries(
-        Object.entries(value as Record<string, unknown>).map(([k, v]) => [
-          k,
-          replaceBigInt(v),
-        ]),
-      );
-    }
-    return value;
+  CallHandler,
+  ExecutionContext,
+  Injectable,
+  NestInterceptor,
+} from '@nestjs/common';
+import { Observable } from 'rxjs';
+import { map } from 'rxjs/operators';
+
+function replaceBigInt(value: unknown): unknown {
+  if(typeof value === 'bigint') return value.toString();
+  if(Array.isArray(value)) return value.map(replaceBigInt);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [
+        k,
+        replaceBigInt(v),
+      ]),
+    );
   }
-  
-  @Injectable()
-  export class BigIntInterceptor implements NestInterceptor {
-    intercept(_ctx: ExecutionContext, next: CallHandler): Observable<unknown> {
-      return next.handle().pipe(map(replaceBigInt));
-    }
+  return value;
+}
+
+@Injectable()
+export class BigIntInterceptor implements NestInterceptor {
+  intercept(_ctx: ExecutionContext, next: CallHandler): Observable<unknown> {
+    return next.handle().pipe(map(replaceBigInt));
   }
+}
+
+
 
 
 --- common\utils\check.utilities.ts ---
@@ -518,4 +525,5 @@ export function splitIdentifier(value: string) {
 
   throw new Error('Invalid identifier');
 }
+
 

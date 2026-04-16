@@ -90,8 +90,8 @@ describe('OtpService', () => {
 
 import {
   Injectable,
-  UnauthorizedException,
   BadRequestException,
+  HttpException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { OtpDeliveryService } from './otp-delivery.service';
@@ -102,7 +102,7 @@ const COOLDOWN_MS = 30_000; // 30 seconds
 // OTP validity window.
 const EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
 // Maximum failed attempts before the record is locked.
-const MAX_ATTEMPTS = 5;
+const MAX_ATTEMPTS = 4;
 
 @Injectable()
 export class OtpService {
@@ -123,12 +123,14 @@ export class OtpService {
    * Verified records are deleted on successful verify(), so they never
    * interfere with the cooldown check.
    */
-  async sendOtp(identifier: string): Promise<{ message: string }> {
+  async sendOtp(
+    identifier: string,
+  ): Promise<{ message: string; otp?: string }> {
     identifier = identifier.trim().toLowerCase();
 
     if (!this.isValidIdentifier(identifier)) {
       throw new BadRequestException(
-        'identifier must be a 10-digit mobile number or a valid email address',
+        'Identifier must be a 10-digit mobile number or a valid email address',
       );
     }
 
@@ -144,33 +146,45 @@ export class OtpService {
       existing?.created_at &&
       existing.created_at > new Date(Date.now() - COOLDOWN_MS)
     ) {
-      return { message: 'Please wait before requesting another OTP' };
+      throw new HttpException('Please wait before requesting another OTP', 429);
     }
 
     // ── Generate OTP — plain value sent to user, hash stored in DB ──────────
-    const otp = Math.floor(100_000 + Math.random() * 900_000).toString();
+    // FIX #2: crypto.randomInt is cryptographically secure, unlike Math.random().
+    const otp = crypto.randomInt(100_000, 1_000_000).toString();
     const hashedOtp = crypto.createHash('sha256').update(otp).digest('hex');
 
-    // ── Replace any stale unverified record for this identifier ─────────────
-    // deleteMany is safe even if no record exists.
-    await this.prisma.otp_verification.deleteMany({
-      where: { identifier, is_verified: false },
-    });
-
-    await this.prisma.otp_verification.create({
-      data: {
-        identifier,
-        otp_code: hashedOtp,
-        attempts: 0,
-        expires_at: new Date(Date.now() + EXPIRY_MS),
-        // is_verified defaults to false (schema default)
-      },
-    });
-
-    // ── Deliver ─────────────────────────────────────────────────────────────
-    await this.delivery.send(identifier, otp);
-
-    return { message: 'OTP sent' };
+    // ── Atomically replace any stale unverified record for this identifier ───
+    // FIX #4: Wrapped in a transaction to prevent a race condition where two
+    // concurrent requests for the same identifier could both pass the cooldown
+    // check and then both insert, violating the partial unique index.
+    await this.prisma.$transaction([
+      this.prisma.otp_verification.deleteMany({
+        where: { identifier, is_verified: false },
+      }),
+      this.prisma.otp_verification.create({
+        data: {
+          identifier,
+          otp_code: hashedOtp,
+          attempts: 0,
+          expires_at: new Date(Date.now() + EXPIRY_MS),
+          // is_verified defaults to false (schema default)
+        },
+      }),
+    ]);
+    if (process.env.OTP_DEVMODE !== 'true')
+      try {
+        await this.delivery.send(identifier, otp);
+      } catch (err) {
+        await this.prisma.otp_verification.deleteMany({
+          where: { identifier, is_verified: false },
+        });
+        throw err;
+      }
+    return {
+      message: 'OTP sent',
+      ...(process.env.OTP_DEVMODE === 'true' && { otp }),
+    };
   }
 
   /**
@@ -190,34 +204,40 @@ export class OtpService {
     });
 
     if (!record) {
-      throw new UnauthorizedException(
-        'No pending OTP found for this identifier',
-      );
+      throw new BadRequestException('No pending OTP found for this identifier');
     }
 
     if (record.expires_at < new Date()) {
-      // Clean up expired record so a fresh one can be requested immediately.
       await this.prisma.otp_verification.delete({
         where: { otp_id: record.otp_id },
       });
-      throw new UnauthorizedException('OTP has expired');
+      throw new BadRequestException('OTP has expired');
     }
 
     if ((record.attempts ?? 0) >= MAX_ATTEMPTS) {
-      throw new UnauthorizedException(
+      throw new HttpException(
         'Too many failed attempts — please request a new OTP',
+        429,
       );
     }
 
     const hashed = crypto.createHash('sha256').update(otp).digest('hex');
 
-    if (record.otp_code !== hashed) {
+    // FIX #1: Use constant-time comparison to prevent timing attacks.
+    // Direct string equality (`!==`) leaks timing information that an attacker
+    // could use to progressively narrow down the correct hash.
+    const isMatch = crypto.timingSafeEqual(
+      Buffer.from(record.otp_code, 'hex'),
+      Buffer.from(hashed, 'hex'),
+    );
+
+    if (!isMatch) {
       // Increment attempt counter; the record stays alive until expiry or success.
       await this.prisma.otp_verification.update({
         where: { otp_id: record.otp_id },
         data: { attempts: { increment: 1 } },
       });
-      throw new UnauthorizedException('Invalid OTP');
+      throw new BadRequestException('Invalid OTP');
     }
 
     // ── Success: delete for single-use guarantee ─────────────────────────────
@@ -282,13 +302,13 @@ export class OtpDeliveryService {
         to,
         from: {
           email: process.env.SENDGRID_SENDER_EMAIL!,
-          name: 'Online Voting Platform',
+          name: 'VoteCore',
         },
         subject: 'Your OTP Code',
         html: `
           <div style="font-family:sans-serif;max-width:400px;margin:auto;
                       padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
-            <h2 style="color:#1d4ed8;">Online Voting Platform</h2>
+            <h2 style="color:#1d4ed8;">VoteCore</h2>
             <p>Your one-time password:</p>
             <div style="font-size:32px;font-weight:700;letter-spacing:8px;padding:16px 0;">
               ${otp}
@@ -323,7 +343,7 @@ export class OtpDeliveryService {
         from,
         to,
         body:
-          `Your OTP for Online Voting Platform is: *${otp}*\n\n` +
+          `Your OTP for VoteCore is: *${otp}*\n\n` +
           `Expires in 5 minutes. Do not share this code.`,
       });
       this.logger.log(`OTP WhatsApp sent → ${to}`);

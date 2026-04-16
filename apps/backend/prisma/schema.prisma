@@ -42,7 +42,7 @@ model org_members {
   email              String?              @db.VarChar(100)
   is_deleted         Boolean?             @default(false)
   event_participants event_participants[]
-  member_roles       member_roles?
+  member_roles       member_roles[]
   organization       organization         @relation(fields: [orgid], references: [orgid], onDelete: NoAction, onUpdate: NoAction)
   uaccount           uaccount?            @relation(fields: [pid], references: [pid], onUpdate: NoAction)
   votes              votes[]
@@ -64,9 +64,10 @@ model member_roles {
   org_members  org_members @relation(fields: [orgid, uid], references: [orgid, uid], onDelete: Cascade, onUpdate: NoAction)
   org_scope    org_scope   @relation(fields: [scope_id], references: [scope_id], onDelete: NoAction, onUpdate: NoAction)
 
-  @@id([orgid, uid])
+  @@id([orgid, uid, scope_id])
   @@index([orgid, scope_id], map: "idx_member_roles_scope")
   @@index([uid], map: "idx_member_roles_uid")
+  @@index([orgid, uid, is_voter, scope_id], map: "idx_member_roles_voter")
 }
 
 model events {

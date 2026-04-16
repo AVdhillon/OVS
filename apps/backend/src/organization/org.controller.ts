@@ -22,7 +22,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequireOrganizer } from '../common/decorators/require-organizer.decorator';
 import type { JwtUser } from '../common/decorators/current-user.decorator';
-
+import { AddMemberRoleDto, MoveMemberRoleDto } from './dto/member-role.dto';
 // ─── Helper: resolve caller uid ───────────────────────────────────────────────
 // ORG sessions: uid is baked into JWT.
 // UNIFIED sessions: caller passes uid via x-caller-uid header or query param.
@@ -164,7 +164,80 @@ export class OrgController {
       targetUid.toUpperCase(),
     );
   }
+  /*
+   * POST /org/:orgid/members/:targetUid/roles
+   * Add a new scope assignment to an existing member.
+   */
+  @Post(':orgid/members/:targetUid/roles')
+  @UseGuards(RolesGuard)
+  @RequireOrganizer('orgid')
+  addMemberRole(
+    @CurrentUser() user: JwtUser,
+    @Param('orgid') orgid: string,
+    @Param('targetUid') targetUid: string,
+    @Body() dto: AddMemberRoleDto,
+    @Req() req: any,
+  ) {
+    const callerUid = resolveCallerUid(user, req);
+    return this.orgService.addMemberRole(
+      BigInt(user.pid!),
+      orgid,
+      callerUid,
+      targetUid.toUpperCase(),
+      dto,
+    );
+  }
 
+  /**
+   * DELETE /org/:orgid/members/:targetUid/roles/:scopeId
+   * Remove one scope assignment from a member.
+   * If it is their last assignment, org_members is soft-deleted too.
+   */
+  @Delete(':orgid/members/:targetUid/roles/:scopeId')
+  @UseGuards(RolesGuard)
+  @RequireOrganizer('orgid')
+  removeMemberRole(
+    @CurrentUser() user: JwtUser,
+    @Param('orgid') orgid: string,
+    @Param('targetUid') targetUid: string,
+    @Param('scopeId', ParseIntPipe) scopeId: number,
+    @Req() req: any,
+  ) {
+    const callerUid = resolveCallerUid(user, req);
+    return this.orgService.removeMemberRole(
+      BigInt(user.pid!),
+      orgid,
+      callerUid,
+      targetUid.toUpperCase(),
+      scopeId,
+    );
+  }
+
+  /**
+   * POST /org/:orgid/members/:targetUid/roles/move
+   * Atomically move a member's scope assignment from one scope to another.
+   * NOTE: this route must be declared BEFORE :scopeId routes to avoid NestJS
+   * routing the literal string "move" as a ParseIntPipe param.
+   */
+  @Post(':orgid/members/:targetUid/roles/move')
+  @UseGuards(RolesGuard)
+  @RequireOrganizer('orgid')
+  moveMemberRole(
+    @CurrentUser() user: JwtUser,
+    @Param('orgid') orgid: string,
+    @Param('targetUid') targetUid: string,
+    @Body() dto: MoveMemberRoleDto,
+    @Req() req: any,
+  ) {
+    const callerUid = resolveCallerUid(user, req);
+    return this.orgService.moveMemberRole(
+      BigInt(user.pid!),
+      orgid,
+      callerUid,
+      targetUid.toUpperCase(),
+      dto,
+    );
+  }
   // ─── Scope Tree ─────────────────────────────────────────────────────────────
 
   /**

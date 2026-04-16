@@ -1,17 +1,19 @@
 import {
   Injectable,
   BadRequestException,
-  UnauthorizedException,
   NotFoundException,
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AddIdentityDto } from './dto/add-identity.dto';
-import * as crypto from 'crypto';
+import { OtpService } from '../otp/otp.service';
 
 @Injectable()
 export class IdentityService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private otpService: OtpService,
+  ) {}
 
   // ─── List all identities in a user's wallet ───────────────────────────────
   async getWallet(pid: bigint) {
@@ -31,86 +33,86 @@ export class IdentityService {
 
   // ─── Add a new identity to the wallet ────────────────────────────────────
   async addIdentity(pid: bigint, dto: AddIdentityDto) {
+    dto.identifier = dto.identifier.trim().toLowerCase();
     // 1. Caller must have a unified account (pid with mobile/email)
     await this.requireUnifiedAccount(pid);
-
     // 2. Verify OTP for the supplied identifier
-    await this.verifyOtp(dto.identifier, dto.otp);
+    await this.otpService.verifyOtp(dto.identifier, dto.otp);
+    return await this.prisma.$transaction(async (tx) => {
+      // 3. Validate the identity exists and the identifier matches it
+      if (dto.identity_type === 'GOV') {
+        const gov = await tx.gov_identity.findUnique({
+          where: { epic_id: dto.identity_id },
+        });
+        if (!gov) throw new NotFoundException('Government identity not found');
 
-    // 3. Validate the identity exists and the identifier matches it
-    if (dto.identity_type === 'GOV') {
-      const gov = await this.prisma.gov_identity.findUnique({
-        where: { epic_id: dto.identity_id },
+        const contact = dto.identifier.includes('@') ? 'email' : 'mobile';
+        if (gov[contact] !== dto.identifier) {
+          throw new ForbiddenException(
+            'Identifier does not match the GOV identity on record',
+          );
+        }
+      }
+
+      if (dto.identity_type === 'ORG') {
+        if (!dto.uid) {
+          throw new BadRequestException('uid is required for ORG identity');
+        }
+
+        const member = await tx.org_members.findFirst({
+          where: { orgid: dto.identity_id, uid: dto.uid },
+        });
+        if (!member) throw new NotFoundException('Org member not found');
+
+        const identifierIsEmail = dto.identifier.includes('@');
+        const match = identifierIsEmail
+          ? member.email === dto.identifier
+          : member.mobile === dto.identifier;
+
+        if (!match) {
+          throw new ForbiddenException(
+            'Identifier does not match the org member record',
+          );
+        }
+      }
+
+      // 4. Check not already linked
+      const existing = await tx.identity_wallet.findFirst({
+        where: {
+          pid,
+          identity_type: dto.identity_type,
+          identity_id: dto.identity_id,
+          ...(dto.uid ? { uid: dto.uid } : {}),
+        },
       });
-      if (!gov) throw new NotFoundException('Government identity not found');
+      if (existing) throw new BadRequestException('Identity already in wallet');
 
-      const contact = dto.identifier.includes('@') ? 'email' : 'mobile';
-      if (gov[contact] !== dto.identifier) {
-        throw new ForbiddenException(
-          'Identifier does not match the GOV identity on record',
-        );
-      }
-    }
-
-    if (dto.identity_type === 'ORG') {
-      if (!dto.uid) {
-        throw new BadRequestException('uid is required for ORG identity');
-      }
-
-      const member = await this.prisma.org_members.findFirst({
-        where: { orgid: dto.identity_id, uid: dto.uid },
+      // 5. Insert into identity_wallet
+      const entry = await tx.identity_wallet.create({
+        data: {
+          pid,
+          identity_type: dto.identity_type,
+          identity_id: dto.identity_id,
+          uid: dto.uid ?? null,
+        },
+        select: {
+          identity_type: true,
+          identity_id: true,
+          uid: true,
+        },
       });
-      if (!member) throw new NotFoundException('Org member not found');
 
-      const identifierIsEmail = dto.identifier.includes('@');
-      const match = identifierIsEmail
-        ? member.email === dto.identifier
-        : member.mobile === dto.identifier;
-
-      if (!match) {
-        throw new ForbiddenException(
-          'Identifier does not match the org member record',
-        );
+      // 6. If ORG — also bind pid to org_members so the org can resolve
+      //    the unified account from their roster.
+      //    org_members.pid is the authoritative link; no separate join table exists.
+      if (dto.identity_type === 'ORG' && dto.uid) {
+        await tx.org_members.updateMany({
+          where: { orgid: dto.identity_id, uid: dto.uid, pid: null },
+          data: { pid },
+        });
       }
-    }
-
-    // 4. Check not already linked
-    const existing = await this.prisma.identity_wallet.findFirst({
-      where: {
-        pid,
-        identity_type: dto.identity_type,
-        identity_id: dto.identity_id,
-        ...(dto.uid ? { uid: dto.uid } : {}),
-      },
+      return entry;
     });
-    if (existing) throw new BadRequestException('Identity already in wallet');
-
-    // 5. Insert into identity_wallet
-    const entry = await this.prisma.identity_wallet.create({
-      data: {
-        pid,
-        identity_type: dto.identity_type,
-        identity_id: dto.identity_id,
-        uid: dto.uid ?? null,
-      },
-      select: {
-        identity_type: true,
-        identity_id: true,
-        uid: true,
-      },
-    });
-
-    // 6. If ORG — also bind pid to org_members so the org can resolve
-    //    the unified account from their roster.
-    //    org_members.pid is the authoritative link; no separate join table exists.
-    if (dto.identity_type === 'ORG' && dto.uid) {
-      await this.prisma.org_members.updateMany({
-        where: { orgid: dto.identity_id, uid: dto.uid, pid: null },
-        data: { pid },
-      });
-    }
-
-    return entry;
   }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -127,39 +129,5 @@ export class IdentityService {
         'Please add a mobile number or email to your account before using the Identity Wallet',
       );
     }
-  }
-
-  private async verifyOtp(identifier: string, otp: string) {
-    identifier = identifier.trim().toLowerCase();
-
-    const record = await this.prisma.otp_verification.findFirst({
-      where: { identifier, is_verified: false },
-    });
-
-    if (!record)
-      throw new UnauthorizedException('OTP not found or already used');
-
-    if (record.expires_at < new Date()) {
-      throw new UnauthorizedException('OTP expired');
-    }
-
-    if ((record.attempts ?? 0) >= 5) {
-      throw new UnauthorizedException('Too many failed attempts');
-    }
-
-    const hashed = crypto.createHash('sha256').update(otp).digest('hex');
-
-    if (record.otp_code !== hashed) {
-      await this.prisma.otp_verification.update({
-        where: { otp_id: record.otp_id },
-        data: { attempts: (record.attempts ?? 0) + 1 },
-      });
-      throw new UnauthorizedException('Invalid OTP');
-    }
-
-    // Consumed — delete the record
-    await this.prisma.otp_verification.delete({
-      where: { otp_id: record.otp_id },
-    });
   }
 }

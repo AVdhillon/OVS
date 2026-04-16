@@ -1,6 +1,5 @@
 import {
   Injectable,
-  UnauthorizedException,
   BadRequestException,
   HttpException,
 } from '@nestjs/common';
@@ -83,10 +82,18 @@ export class OtpService {
         },
       }),
     ]);
-
+    if (process.env.OTP_DEVMODE !== 'true')
+      try {
+        await this.delivery.send(identifier, otp);
+      } catch (err) {
+        await this.prisma.otp_verification.deleteMany({
+          where: { identifier, is_verified: false },
+        });
+        throw err;
+      }
     return {
       message: 'OTP sent',
-      ...(process.env.OTP_DEVMODE === "true" && { otp }),
+      ...(process.env.OTP_DEVMODE === 'true' && { otp }),
     };
   }
 
