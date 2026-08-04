@@ -1,14 +1,14 @@
-import {useState, useEffect, useRef, useCallback} from 'react';
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from './ui/dialog';
-import {Button} from './ui/button';
-import {InputOTP, InputOTPGroup, InputOTPSlot} from './ui/input-otp';
-import {Loader2} from 'lucide-react';
+} from "./ui/dialog";
+import { Button } from "./ui/button";
+import { InputOTP, InputOTPGroup, InputOTPSlot } from "./ui/input-otp";
+import { Loader2 } from "lucide-react";
 
 interface OTPVerificationModalProps {
   open: boolean;
@@ -31,21 +31,21 @@ const getRemainingCooldown = (sentAt: number | null | undefined): number => {
 };
 
 export function OTPVerificationModal({
-                                       open,
-                                       onClose,
-                                       onVerify,
-                                       onResend,
-                                       contact,
-                                       sentAt,
-                                     }: OTPVerificationModalProps) {
-  const [otp, setOtp]                 = useState('');
+  open,
+  onClose,
+  onVerify,
+  onResend,
+  contact,
+  sentAt,
+}: OTPVerificationModalProps) {
+  const [otp, setOtp] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
   const [isResending, setIsResending] = useState(false);
-  const [error, setError]             = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   // ── Resend cooldown timer ──────────────────────────────────────────────────
   const [cooldown, setCooldown] = useState(RESEND_COOLDOWN_SECONDS);
-  const timerRef                = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const startCooldownFrom = useCallback((seconds: number) => {
     // Clear any existing interval before starting a new one
@@ -72,7 +72,7 @@ export function OTPVerificationModal({
     } else {
       clearInterval(timerRef.current!);
       timerRef.current = null;
-      setOtp('');
+      setOtp("");
       setError(null);
       setCooldown(RESEND_COOLDOWN_SECONDS);
     }
@@ -88,9 +88,9 @@ export function OTPVerificationModal({
     setIsVerifying(true);
     try {
       await onVerify(otp);
-      setOtp('');
+      setOtp("");
     } catch (e: any) {
-      setError(e.message ?? 'Invalid OTP. Please try again.');
+      setError(e.message ?? "Invalid OTP. Please try again.");
     } finally {
       setIsVerifying(false);
     }
@@ -106,9 +106,9 @@ export function OTPVerificationModal({
       // FIX: parent updates sentAt after resend, which triggers the useEffect
       //      above to re-seed. We don't call startCooldownFrom here directly
       //      to avoid a race; the sentAt dep handles it.
-      setOtp('');
+      setOtp("");
     } catch (e: any) {
-      setError(e.message ?? 'Failed to resend OTP. Please try again.');
+      setError(e.message ?? "Failed to resend OTP. Please try again.");
     } finally {
       setIsResending(false);
     }
@@ -120,73 +120,89 @@ export function OTPVerificationModal({
   };
 
   return (
-      <Dialog open={open} onOpenChange={handleClose}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Verify OTP</DialogTitle>
-            <DialogDescription>
-              Enter the 6-digit OTP sent to <span className="font-medium">{contact}</span>
-            </DialogDescription>
-          </DialogHeader>
+    <Dialog open={open} onOpenChange={handleClose}>
+      <DialogContent
+        className="sm:max-w-md"
+        onInteractOutside={(e) => {
+          // The dev-only "DEV OTP" toast (sonner) renders in a portal at
+          // the document root, outside this Dialog's content. Radix treats
+          // clicks there as an "outside interaction" and closes the dialog
+          // by default — so clicking "Copy" on the toast was closing this
+          // OTP verification modal. Ignore interactions that originate
+          // from the toaster so the modal stays open.
+          const target = e.target as HTMLElement | null;
+          if (target?.closest("[data-sonner-toaster]")) {
+            e.preventDefault();
+          }
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>Verify OTP</DialogTitle>
+          <DialogDescription>
+            Enter the 6-digit OTP sent to{" "}
+            <span className="font-medium">{contact}</span>
+          </DialogDescription>
+        </DialogHeader>
 
-          <div className="flex flex-col items-center gap-6 py-4">
-            <InputOTP
-                maxLength={6}
-                value={otp}
-                onChange={(val) => {
-                  setOtp(val);
-                  setError(null);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && otp.length === 6 && !isVerifying) {
-                    handleVerify();
-                  }
-                }}
-            >
-              <InputOTPGroup>
-                <InputOTPSlot index={0}/>
-                <InputOTPSlot index={1}/>
-                <InputOTPSlot index={2}/>
-                <InputOTPSlot index={3}/>
-                <InputOTPSlot index={4}/>
-                <InputOTPSlot index={5}/>
-              </InputOTPGroup>
-            </InputOTP>
+        <div className="flex flex-col items-center gap-6 py-4">
+          <InputOTP
+            maxLength={6}
+            value={otp}
+            onChange={(val) => {
+              setOtp(val);
+              setError(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && otp.length === 6 && !isVerifying) {
+                handleVerify();
+              }
+            }}
+          >
+            <InputOTPGroup>
+              <InputOTPSlot index={0} />
+              <InputOTPSlot index={1} />
+              <InputOTPSlot index={2} />
+              <InputOTPSlot index={3} />
+              <InputOTPSlot index={4} />
+              <InputOTPSlot index={5} />
+            </InputOTPGroup>
+          </InputOTP>
 
-            {error && (
-                <p className="text-sm text-red-600 text-center">{error}</p>
-            )}
+          {error && <p className="text-sm text-red-600 text-center">{error}</p>}
 
-            <div className="text-sm text-muted-foreground text-center">
-              {cooldown > 0 ? (
-                  <span>Resend OTP in <span className="font-medium tabular-nums">{cooldown}s</span></span>
-              ) : (
-                  <button
-                      type="button"
-                      onClick={handleResend}
-                      disabled={isResending}
-                      className="text-primary underline-offset-4 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {isResending ? 'Resending…' : 'Resend OTP'}
-                  </button>
-              )}
-            </div>
-
-            <div className="flex gap-3 w-full">
-              <Button variant="outline" onClick={handleClose} className="flex-1">
-                Cancel
-              </Button>
-              <Button
-                  onClick={handleVerify}
-                  disabled={otp.length !== 6 || isVerifying}
-                  className="flex-1"
+          <div className="text-sm text-muted-foreground text-center">
+            {cooldown > 0 ? (
+              <span>
+                Resend OTP in{" "}
+                <span className="font-medium tabular-nums">{cooldown}s</span>
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={handleResend}
+                disabled={isResending}
+                className="text-primary underline-offset-4 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isVerifying && <Loader2 className="mr-2 h-4 w-4 animate-spin"/>}
-                Verify
-              </Button>
-            </div>
+                {isResending ? "Resending…" : "Resend OTP"}
+              </button>
+            )}
           </div>
-        </DialogContent>
-      </Dialog>
+
+          <div className="flex gap-3 w-full">
+            <Button variant="outline" onClick={handleClose} className="flex-1">
+              Cancel
+            </Button>
+            <Button
+              onClick={handleVerify}
+              disabled={otp.length !== 6 || isVerifying}
+              className="flex-1"
+            >
+              {isVerifying && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Verify
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -139,7 +139,7 @@ export class EventsService {
 
     if (!event) throw new NotFoundException('Event not found');
 
-    await this.assertEventVisible(user, event);
+    //await this.assertEventVisible(user, event);
 
     let has_voted = false;
     if (user.type === 'ORG' && user.uid) {
@@ -442,17 +442,15 @@ export class EventsService {
   }
 
   private async assertEventVisible(user: JwtUser, event: any) {
-    const identities = await this.resolveOrgIdentities(user);
-    for (const { orgid, scope_id } of identities) {
-      if (orgid !== event.orgid) continue;
-
-      const rows = await this.prisma.$queryRaw<{ event_id: number }[]>`
-        SELECT event_id FROM get_visible_events(${orgid}::varchar, ${scope_id}::int)
-        WHERE event_id = ${event.event_id}
-      `;
-      if (rows.length > 0) return;
+    const rows = await this.prisma.$queryRaw<{ event_id: number }[]>`
+    SELECT event_id 
+    FROM get_visible_events(${event.orgid}, ${user.uid})
+    WHERE event_id = ${event.event_id}
+  `;
+    //console.log(event.orgid,user.uid);
+    if (rows.length === 0) {
+      throw new ForbiddenException('Event not visible to your account');
     }
-    throw new ForbiddenException('Event not visible to your account');
   }
 
   /**

@@ -57,6 +57,14 @@ export class PrismaExceptionFilter implements ExceptionFilter {
           status = HttpStatus.BAD_REQUEST;
           message = 'Required field missing';
           break;
+        // A database constraint failed (e.g. a CHECK constraint such as
+        // org_members.mobile's 10-digit format) — surface as a clean 400
+        // instead of a raw 500, as a safety net for any app/DB validation
+        // mismatch we haven't caught at the application layer.
+        case 'P2004':
+          status = HttpStatus.BAD_REQUEST;
+          message = 'Value violates a database constraint';
+          break;
         default:
           this.logger.error(
             `Unhandled Prisma error ${exception.code}: ${exception.message}`,

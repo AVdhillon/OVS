@@ -10,6 +10,7 @@ import { RegisterOrgDto, ParticipantRowDto } from './dto/register-org.dto';
 import { AddMembersDto } from './dto/add-members.dto';
 import { UpdateMemberDto } from './dto/update-member.dto';
 import { splitIdentifier } from '../common/utils/check.utilities';
+import type { JwtUser } from '../common/decorators/current-user.decorator';
 
 // ─── CSV Parser ───────────────────────────────────────────────────────────────
 // Parses: uid,contact,role  (header row required)
@@ -512,6 +513,12 @@ export class OrgService {
       callerOrganizerScopes,
     );
 
+    // Jurisdiction check FIRST — must not leak whether a role exists at a
+    // scope outside the caller's visibility.
+    if (!visibleScopes.includes(dto.scope_id)) {
+      throw new ForbiddenException('Cannot edit member outside your scope');
+    }
+
     // Locate the specific role row being updated
     const targetRole = await this.prisma.member_roles.findUnique({
       where: {
@@ -524,8 +531,8 @@ export class OrgService {
       );
     }
 
-    if (!visibleScopes.includes(dto.scope_id)) {
-      throw new ForbiddenException('Cannot edit member outside your scope');
+    if (dto.is_organizer === false && targetRole.is_organizer === true) {
+      await this.assertNotLastOrganizer(orgid, targetUid, dto.scope_id);
     }
 
     const updated = await this.prisma.member_roles.update({
@@ -560,7 +567,6 @@ export class OrgService {
       callerOrganizerScopes,
     );
 
-    // Member must exist and have at least one role within caller's visible scopes
     const memberRoles = await this.prisma.member_roles.findMany({
       where: { orgid, uid: targetUid },
     });
@@ -568,16 +574,31 @@ export class OrgService {
       throw new NotFoundException('Member not found');
     }
 
-    const inVisibleScope = memberRoles.some((r) =>
-      visibleScopes.includes(r.scope_id),
+    // Every one of the target's role rows must be inside the caller's
+    // jurisdiction — not just one of them. If the target holds roles outside
+    // the caller's visible scopes, the caller cannot fully remove them.
+    const outOfJurisdiction = memberRoles.filter(
+      (r) => !visibleScopes.includes(r.scope_id),
     );
-    if (!inVisibleScope) {
-      throw new ForbiddenException('Cannot remove member outside your scope');
+    if (outOfJurisdiction.length > 0) {
+      throw new ForbiddenException(
+        'Member holds roles outside your scope; remove those role assignments ' +
+          '(via a higher-scoped organizer) before this member can be fully removed.',
+      );
     }
 
-    await this.prisma.org_members.update({
-      where: { orgid_uid: { orgid, uid: targetUid } },
-      data: { is_deleted: true },
+    for (const role of memberRoles) {
+      if (role.is_organizer === true) {
+        await this.assertNotLastOrganizer(orgid, targetUid, role.scope_id);
+      }
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.member_roles.deleteMany({ where: { orgid, uid: targetUid } });
+      await tx.org_members.update({
+        where: { orgid_uid: { orgid, uid: targetUid } },
+        data: { is_deleted: true },
+      });
     });
 
     return { message: `Member ${targetUid} removed from ${orgid}` };
@@ -666,6 +687,10 @@ export class OrgService {
       throw new NotFoundException(
         `No role found for member ${targetUid} at scope ${scopeId}`,
       );
+    }
+
+    if (targetRole.is_organizer === true) {
+      await this.assertNotLastOrganizer(orgid, targetUid, scopeId);
     }
 
     await this.prisma.member_roles.delete({
@@ -787,6 +812,62 @@ export class OrgService {
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
   /**
+   * Resolves the uid the caller is allowed to act as within `orgid`.
+   * - ORG session: uid is baked into the JWT — trust it as-is.
+   * - UNIFIED session: uid must come from org_members.pid = user.pid.
+   *   An optional client-supplied `requestedUid` is only honored if it
+   *   matches a row actually owned by this pid — otherwise 403.
+   * - GOV session: never has an org identity.
+   */
+  async resolveCallerUid(
+    user: JwtUser,
+    orgid: string,
+    requestedUid?: string,
+  ): Promise<string> {
+    if (user.type === 'ORG') {
+      if (!user.uid) throw new ForbiddenException('Invalid ORG session');
+      return user.uid;
+    }
+
+    if (user.type === 'UNIFIED') {
+      if (!user.pid) throw new ForbiddenException('Invalid session');
+
+      const links = await this.prisma.org_members.findMany({
+        where: { orgid, pid: BigInt(user.pid), is_deleted: false },
+        select: { uid: true },
+      });
+
+      if (links.length === 0) {
+        throw new ForbiddenException(
+          'You are not a member of this organization',
+        );
+      }
+
+      if (requestedUid) {
+        const requestedNorm = requestedUid.trim().toUpperCase();
+        const match = links.find((l) => l.uid === requestedNorm);
+        if (!match) {
+          throw new ForbiddenException(
+            'requested uid does not belong to your account',
+          );
+        }
+        return match.uid;
+      }
+
+      if (links.length > 1) {
+        // Same pid holds multiple uids in this org — caller must disambiguate.
+        throw new BadRequestException(
+          'Multiple identities found in this org; specify uid explicitly',
+        );
+      }
+
+      return links[0].uid;
+    }
+
+    throw new ForbiddenException('GOV sessions have no org identity');
+  }
+
+  /**
    * Throws ForbiddenException unless the caller has at least one
    * is_organizer = true role row in the given org.
    */
@@ -796,6 +877,32 @@ export class OrgService {
     });
     if (!role) {
       throw new ForbiddenException('Organizer access required');
+    }
+  }
+
+  /**
+   * Throws if removing/downgrading `targetUid`'s organizer row at `scopeId`
+   * would leave the org with zero organizers. Intentionally a simple
+   * org-wide organizer count rather than a precise subtree-coverage check —
+   * precise per-scope coverage checking is more correct but meaningfully
+   * more complex; start simple and tighten later if actually needed.
+   */
+  async assertNotLastOrganizer(
+    orgid: string,
+    targetUid: string,
+    scopeId: number,
+  ) {
+    const otherOrganizerCount = await this.prisma.member_roles.count({
+      where: {
+        orgid,
+        is_organizer: true,
+        NOT: { AND: [{ uid: targetUid }, { scope_id: scopeId }] },
+      },
+    });
+    if (otherOrganizerCount === 0) {
+      throw new ConflictException(
+        'Cannot remove the last organizer of this organization',
+      );
     }
   }
 

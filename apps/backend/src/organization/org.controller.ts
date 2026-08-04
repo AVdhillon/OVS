@@ -23,19 +23,6 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequireOrganizer } from '../common/decorators/require-organizer.decorator';
 import type { JwtUser } from '../common/decorators/current-user.decorator';
 import { AddMemberRoleDto, MoveMemberRoleDto } from './dto/member-role.dto';
-// ─── Helper: resolve caller uid ───────────────────────────────────────────────
-// ORG sessions: uid is baked into JWT.
-// UNIFIED sessions: caller passes uid via x-caller-uid header or query param.
-function resolveCallerUid(user: JwtUser, req: any): string {
-  if (user.uid) return user.uid;
-  const fromHeader = req.headers?.['x-caller-uid'];
-  if (typeof fromHeader === 'string' && fromHeader.trim())
-    return fromHeader.trim().toUpperCase();
-  const fromQuery = req.query?.uid;
-  if (typeof fromQuery === 'string' && fromQuery.trim())
-    return fromQuery.trim().toUpperCase();
-  return '';
-}
 
 @UseGuards(JwtAuthGuard)
 @Controller('org')
@@ -58,11 +45,10 @@ export class OrgController {
     // FIX: removed the `& { caller_uid?: string }` intersection type —
     //      caller_uid is now a proper validated field on RegisterOrgDto itself.
     @Body() dto: RegisterOrgDto,
-    @Req() req: any,
   ) {
     const pid = BigInt(user.pid!);
-    // ORG session → uid from JWT. UNIFIED → from DTO body field (now validated).
-    const callerUid = user.uid ?? dto.caller_uid ?? resolveCallerUid(user, req);
+    // ORG session → uid from JWT. UNIFIED → from DTO body field (validated).
+    const callerUid = user.uid ?? dto.caller_uid;
     const callerIdentifier = dto.caller_identifier;
     return this.orgService.registerOrg(pid, callerUid, callerIdentifier, dto);
   }
@@ -93,7 +79,7 @@ export class OrgController {
     @Query('scope_id') scopeId?: string,
     @Query('search') search?: string,
   ) {
-    const callerUid = resolveCallerUid(user, req);
+    const callerUid = req.orgContext.uid;
     return this.orgService.getMembers(BigInt(user.pid!), orgid, callerUid, {
       role,
       scope_id: scopeId ? Number(scopeId) : undefined,
@@ -114,7 +100,7 @@ export class OrgController {
     @Body() dto: AddMembersDto,
     @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, req);
+    const callerUid = req.orgContext.uid;
     return this.orgService.addMembers(BigInt(user.pid!), orgid, callerUid, dto);
   }
 
@@ -132,7 +118,7 @@ export class OrgController {
     @Body() dto: UpdateMemberDto,
     @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, req);
+    const callerUid = req.orgContext.uid;
 
     return this.orgService.updateMember(
       BigInt(user.pid!),
@@ -156,7 +142,7 @@ export class OrgController {
     @Param('uid') targetUid: string,
     @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, req);
+    const callerUid = req.orgContext.uid;
     return this.orgService.removeMember(
       BigInt(user.pid!),
       orgid,
@@ -178,7 +164,7 @@ export class OrgController {
     @Body() dto: AddMemberRoleDto,
     @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, req);
+    const callerUid = req.orgContext.uid;
     return this.orgService.addMemberRole(
       BigInt(user.pid!),
       orgid,
@@ -203,7 +189,7 @@ export class OrgController {
     @Param('scopeId', ParseIntPipe) scopeId: number,
     @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, req);
+    const callerUid = req.orgContext.uid;
     return this.orgService.removeMemberRole(
       BigInt(user.pid!),
       orgid,
@@ -229,7 +215,7 @@ export class OrgController {
     @Body() dto: MoveMemberRoleDto,
     @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, req);
+    const callerUid = req.orgContext.uid;
     return this.orgService.moveMemberRole(
       BigInt(user.pid!),
       orgid,
@@ -252,7 +238,7 @@ export class OrgController {
     @Param('orgid') orgid: string,
     @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, req);
+    const callerUid = req.orgContext.uid;
     return this.scopeService.getScopeTree(orgid, callerUid);
   }
 
@@ -269,7 +255,7 @@ export class OrgController {
     @Body() dto: CreateScopeDto,
     @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, req);
+    const callerUid = req.orgContext.uid;
     return this.scopeService.createScope(orgid, callerUid, dto);
   }
 
@@ -288,7 +274,7 @@ export class OrgController {
     @Body() dto: UpdateScopeDto,
     @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, req);
+    const callerUid = req.orgContext.uid;
     return this.scopeService.updateScope(orgid, callerUid, scopeId, dto);
   }
 
@@ -305,7 +291,7 @@ export class OrgController {
     @Param('scope_id', ParseIntPipe) scopeId: number,
     @Req() req: any,
   ) {
-    const callerUid = resolveCallerUid(user, req);
+    const callerUid = req.orgContext.uid;
     return this.scopeService.deleteScope(orgid, callerUid, scopeId);
   }
 }

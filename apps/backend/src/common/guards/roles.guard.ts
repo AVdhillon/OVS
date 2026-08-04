@@ -9,12 +9,14 @@ import {
 import { Reflector } from '@nestjs/core';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { ORGANIZER_KEY } from '../decorators/require-organizer.decorator';
+import { OrgService } from '../../organization/org.service';
 
 @Injectable()
 export class RolesGuard implements CanActivate {
   constructor(
     private reflector: Reflector,
     private prisma: PrismaService,
+    private orgService: OrgService,
   ) {}
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
@@ -34,27 +36,32 @@ export class RolesGuard implements CanActivate {
       req.params?.[meta.orgidParam] ??
       req.body?.[meta.orgidParam];
 
-    // Resolve uid: from JWT payload first, then route param / body
-    const uid: string =
-      user?.uid ??
-      req.params?.uid ??
-      req.query?.uid ??
-      req.body?.uid ??
-      req.params?.actingUid;
-    if (!orgid || !uid) {
+    if (!orgid) {
       throw new ForbiddenException(
         'org context required to check organizer role',
       );
     }
+
+    // Resolve the uid the caller is actually allowed to act as. For UNIFIED
+    // sessions this is verified against org_members.pid — never trusted
+    // blindly from a header/query/body value.
+    const requestedUid =
+      req.headers?.['x-caller-uid'] ?? req.query?.uid ?? req.body?.uid;
+    const uid = await this.orgService.resolveCallerUid(
+      user,
+      orgid,
+      requestedUid,
+    );
+
     const role = await this.prisma.member_roles.findFirst({
-      where: { orgid, uid },
-      select: { is_organizer: true },
+      where: { orgid, uid, is_organizer: true },
     });
-    if (!role?.is_organizer) {
+    if (!role) {
       throw new ForbiddenException('Organizer role required');
     }
 
-    // Attach resolved context to request for downstream use
+    // Attach resolved context to request for downstream use — controller
+    // methods should read req.orgContext.uid rather than re-resolving it.
     req.orgContext = { orgid, uid };
 
     return true;
