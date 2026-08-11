@@ -78,28 +78,45 @@ export interface MemberRole {
 // this intersection extends it without changing the context type globally.
 export type OrgMemberWithRoles = OrgMember & { roles: MemberRole[] };
 
-// ── Token helpers ─────────────────────────────────────────────────────────────
-export function setToken(t: string | null) {
-    t ? localStorage.setItem('ovp_token', t) : localStorage.removeItem('ovp_token');
+// ── CSRF helper ────────────────────────────────────────────────────────────────
+// The JWT itself lives in an httpOnly cookie now and is never readable from
+// JS (see plan-httponly-cookie-jwt.md). The `ovp_csrf` cookie is the one
+// exception — it's intentionally non-httpOnly so the double-submit check
+// can read it here and echo it back as a header. It is not the auth
+// secret; it's meaningless without the httpOnly `ovp_token` riding along.
+function getCsrfToken(): string | null {
+    const match = document.cookie.match(/(?:^|; )ovp_csrf=([^;]*)/);
+    return match ? decodeURIComponent(match[1]) : null;
 }
 
-export function getToken() {
-    return localStorage.getItem('ovp_token');
-}
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 // ── Base request ──────────────────────────────────────────────────────────────
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+// `silent401`: skip the global redirect-to-`/` on a 401 and just reject
+// instead. Needed for the boot-time "am I logged in" probe (getProfile,
+// called unconditionally now that there's no localStorage token to check
+// first) — an unauthenticated visitor hitting that probe is an expected
+// outcome, not a session that just expired mid-use.
+async function request<T>(path: string, init: RequestInit = {}, opts: { silent401?: boolean } = {}): Promise<T> {
+    const method = (init.method ?? 'GET').toUpperCase();
+    const csrfToken = getCsrfToken();
+
     const res = await fetch(`${BASE_URL}${path}`, {
         ...init,
+        credentials: 'include', // send the httpOnly ovp_token cookie
         headers: {
             'Content-Type': 'application/json',
-            ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
+            ...(MUTATING_METHODS.has(method) && csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
             ...init.headers,
         },
     });
 
     if (res.status === 401) {
-        setToken(null);
+        if (opts.silent401) {
+            throw new Error('Unauthorized');
+        }
+        // Cookie is either absent or was already cleared/expired server-side;
+        // there's nothing left in JS to clean up (no more localStorage token).
         window.location.href = '/';
         return new Promise(() => {});
     }
@@ -154,11 +171,11 @@ export const api = {
         request('/auth/verify-otp', { method: 'POST', body: JSON.stringify({ identifier, otp }) }),
 
     login: (body: LoginBody) =>
-        request<{ access_token: string }>('/auth/login', { method: 'POST', body: JSON.stringify(body) }),
+        request<{ message: string }>('/auth/login', { method: 'POST', body: JSON.stringify(body) }),
 
     logout: () => request('/auth/logout', { method: 'POST' }),
 
-    getProfile: () => request<User>('/auth/profile'),
+    getProfile: (opts?: { silent401?: boolean }) => request<User>('/auth/profile', {}, opts),
 
     // ── Users ──────────────────────────────────────────────────────────────────
 

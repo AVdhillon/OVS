@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -12,6 +13,7 @@ import { OtpModule } from './otp/otp.module';
 import { IdentityModule } from './identity/identity.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { CommonModule } from './common/common.module';
+import { CsrfGuard } from './common/guards/csrf.guard';
 @Module({
   imports: [
     CommonModule,
@@ -30,6 +32,12 @@ import { CommonModule } from './common/common.module';
     IdentityModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    // Global double-submit CSRF check (plan-httponly-cookie-jwt.md, Finding
+    // #2, step 6) — see CsrfGuard for why this is registered app-wide
+    // rather than per-controller.
+    { provide: APP_GUARD, useClass: CsrfGuard },
+  ],
 })
 export class AppModule {}

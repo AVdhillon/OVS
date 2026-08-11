@@ -23,7 +23,7 @@ import {useAppContext, type SessionType} from '../context/app-context';
 import {Shield, Info} from 'lucide-react';
 import {Tooltip, TooltipContent, TooltipProvider, TooltipTrigger} from '../components/ui/tooltip';
 import {ImageWithFallback} from '../components/figma/ImageWithFallback';
-import {api, setToken, type LoginBody} from '../../lib/api';
+import {api, type LoginBody} from '../../lib/api';
 import {countryStateMap} from '../../constants/location';
 
 type LoginMode = 'UNIFIED' | 'ORG' | 'GOV';
@@ -201,8 +201,7 @@ export function AuthPage() {
                 loginBody = {type: 'GOV', epic_id: epicId.trim().toUpperCase(), otp};
             }
 
-            const {access_token} = await api.login(loginBody);
-            setToken(access_token);
+            await api.login(loginBody);
 
             const profile = await api.getProfile() as any;
             setSession({

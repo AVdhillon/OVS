@@ -7,21 +7,22 @@ import { ManageOrganizationsView } from "./pages/manage-organizations-view";
 import { IdentityWalletView } from "./pages/identity-wallet-view";
 import { ManageEventsView } from "./pages/manage-events-view";
 import { useAppContext } from "./context/app-context";
-import { getToken } from "../lib/api";
 
 function PublicRoute() {
-  const { loading } = useAppContext();
+  const { loading, session } = useAppContext();
   if (loading) return <div className="flex h-screen items-center justify-center text-muted-foreground">Loading...</div>;
-  // If a token exists the user is already authenticated (any session type)
-  if (getToken()) return <Navigate to="/dashboard" replace />;
+  // Session is populated on mount via a cookie-authenticated /auth/profile
+  // call (see app-context.tsx) — the JWT itself is no longer readable from
+  // JS, so this is the only way to know "is there a valid session".
+  if (session) return <Navigate to="/dashboard" replace />;
   return <Outlet />;
 }
 
 function ProtectedRoute() {
-  const { loading } = useAppContext();
+  const { loading, session } = useAppContext();
   if (loading) return <div className="flex h-screen items-center justify-center text-muted-foreground">Loading...</div>;
-  // Guard on token — ORG/GOV sessions have no `user` object but are still authenticated
-  if (!getToken()) return <Navigate to="/" replace />;
+  // Guard on session — ORG/GOV sessions have no `user` object but are still authenticated
+  if (!session) return <Navigate to="/" replace />;
   return <Outlet />;
 }
 

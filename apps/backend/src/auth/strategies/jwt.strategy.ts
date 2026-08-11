@@ -3,16 +3,22 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
-import { ExtractJwt, Strategy } from 'passport-jwt';
+import { Strategy } from 'passport-jwt';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { getJwtSecret } from '../../common/utils/jwt-secret.util';
 import * as express from 'express';
+
+// JWT now travels as an httpOnly cookie, not an Authorization header — see
+// plan-httponly-cookie-jwt.md, Finding #2. Cookie name must match the one
+// set/cleared in auth.controller.ts.
+const cookieExtractor = (req: express.Request): string | null =>
+  req?.cookies?.['ovp_token'] ?? null;
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(private prisma: PrismaService) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest: cookieExtractor,
       ignoreExpiration: false, // ✅ JWT expiry check
       // SECURITY: no hardcoded fallback secret — see jwt-secret.util.ts.
       // Throws at module-init time in production if JWT_SECRET is unset.
@@ -22,11 +28,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(req: express.Request, payload: any) {
-    // 🔑 Extract token from header
-    const authHeader = req.headers.authorization || '';
-    const token = authHeader.startsWith('Bearer ')
-      ? authHeader.slice(7).trim()
-      : null;
+    // 🔑 Extract token from the httpOnly cookie (not the Authorization header)
+    const token = req.cookies?.['ovp_token'] ?? null;
 
     if (!token) {
       throw new UnauthorizedException('Token missing');

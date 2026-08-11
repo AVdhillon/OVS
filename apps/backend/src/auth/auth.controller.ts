@@ -1,10 +1,18 @@
-import { Controller, Post, Body, Req, Get, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, Req, Res, Get, UseGuards } from '@nestjs/common';
+import { randomBytes } from 'crypto';
 import { AuthService } from './auth.service';
 import { SendOtpDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { LoginDto } from './dto/login.dto';
 import { AuthGuard } from '@nestjs/passport';
 import * as express from 'express';
+
+// Cookie names + shared options for the auth cookie pair. Kept alongside
+// the controller (rather than a config file) since jwt.strategy.ts is the
+// only other reader and it only needs the name, not these options.
+const TOKEN_COOKIE = 'ovp_token';
+const CSRF_COOKIE = 'ovp_csrf';
+const SESSION_MAX_AGE_MS = 60 * 60 * 1000; // keep in sync with auth.service.ts expires_at (1 hour)
 
 @Controller('auth')
 export class AuthController {
@@ -41,18 +49,51 @@ export class AuthController {
   }
 
   /**
-   * Authenticate and obtain a JWT session token.
+   * Authenticate and obtain a session.
    * Includes OTP verification atomically — no prior /verify-otp call needed.
+   *
+   * The JWT is no longer returned in the response body — it's set as an
+   * httpOnly cookie so client-side JS (and therefore XSS) can never read
+   * it. A second, non-httpOnly `ovp_csrf` cookie is set alongside it for
+   * double-submit CSRF protection on mutating requests (see CsrfGuard).
    */
   @Post('login')
-  login(@Body() dto: LoginDto, @Req() req: express.Request) {
-    return this.authService.login(dto, req);
+  async login(
+    @Body() dto: LoginDto,
+    @Req() req: express.Request,
+    @Res({ passthrough: true }) res: express.Response,
+  ) {
+    const { access_token } = await this.authService.login(dto, req);
+    const isProd = process.env.NODE_ENV === 'production';
+
+    res.cookie(TOKEN_COOKIE, access_token, {
+      httpOnly: true,
+      secure: isProd, // local HTTP dev needs this off; see plan doc's "Dev environment" note
+      sameSite: 'lax',
+      path: '/',
+      maxAge: SESSION_MAX_AGE_MS,
+    });
+
+    res.cookie(CSRF_COOKIE, randomBytes(32).toString('hex'), {
+      httpOnly: false, // intentionally readable by JS — that's how double-submit works
+      secure: isProd,
+      sameSite: 'lax',
+      path: '/',
+      maxAge: SESSION_MAX_AGE_MS,
+    });
+
+    return { message: 'Logged in' };
   }
 
   @Post('logout')
   @UseGuards(AuthGuard('jwt'))
-  logout(@Req() req: express.Request) {
-    const token = req.headers.authorization?.split(' ')[1];
+  logout(
+    @Req() req: express.Request,
+    @Res({ passthrough: true }) res: express.Response,
+  ) {
+    const token = req.cookies?.[TOKEN_COOKIE];
+    res.clearCookie(TOKEN_COOKIE, { path: '/' });
+    res.clearCookie(CSRF_COOKIE, { path: '/' });
     return this.authService.logout(token!);
   }
 

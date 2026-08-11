@@ -1,5 +1,4 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { getToken, setToken } from '../../lib/api';
 import { api } from '../../lib/api';
 
 // ─── Identity / Session types ─────────────────────────────────────────────────
@@ -160,52 +159,51 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [events, setEvents]   = useState<EventsListing>(emptyEvents);
   const [loading, setLoading] = useState(true);
 
-  // On mount: if token exists, rehydrate user profile
+  // On mount: the JWT lives in an httpOnly cookie now, so JS can't read or
+  // decode it directly. Instead, ask the backend who the cookie belongs to
+  // — GET /auth/profile is guarded by AuthGuard('jwt') and returns exactly
+  // the payload + session_id this used to be decoded from locally. A 401
+  // here (no cookie, or an invalid/expired one) just means "not logged in".
   useEffect(() => {
-    const token = getToken();
-    if (!token) { setLoading(false); return; }
+    let cancelled = false;
 
-    // Decode JWT payload — no library needed, JWT middle segment is base64url
-    let payload: Session;
-    try {
-      const raw = JSON.parse(atob(token.split('.')[1]));
-      payload = {
-        type:       raw.type,
-        pid:        raw.pid != null ? String(raw.pid) : undefined,
-        orgid:      raw.orgid,
-        uid:        raw.uid,
-        epic_id:    raw.epic_id,
-        session_id: raw.session_id,
-      };
-      setSession(payload);
-    } catch {
-      // Token is malformed — wipe it and stop
-      setToken(null);
-      setLoading(false);
-      return;
-    }
-    if (payload.type === 'UNIFIED') {
-      (api.getMe() as Promise<any>)
-          .then(data => {
-            setUser({
-              pid: String(data.pid ?? ''),
-              first_name: data.first_name,
-              middle_name: data.middle_name,
-              last_name: data.last_name,
-              email: data.email,
-              mobile: data.mobile,
-              state: data.state,
-              country: data.country,
+    (api.getProfile({ silent401: true }) as Promise<any>)
+        .then(raw => {
+          if (cancelled) return;
+          const payload: Session = {
+            type:       raw.type,
+            pid:        raw.pid != null ? String(raw.pid) : undefined,
+            orgid:      raw.orgid,
+            uid:        raw.uid,
+            epic_id:    raw.epic_id,
+            session_id: raw.session_id,
+          };
+          setSession(payload);
+
+          if (payload.type === 'UNIFIED') {
+            return (api.getMe() as Promise<any>).then(data => {
+              if (cancelled) return;
+              setUser({
+                pid: String(data.pid ?? ''),
+                first_name: data.first_name,
+                middle_name: data.middle_name,
+                last_name: data.last_name,
+                email: data.email,
+                mobile: data.mobile,
+                state: data.state,
+                country: data.country,
+              });
             });
-          })
-          .catch(() => {
-            setToken(null);
-            setSession(null);   // ← also clear session if profile fetch fails
-          })
-          .finally(() => setLoading(false));
-    } else {
-      setLoading(false);
-    }
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setSession(null);
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+
+    return () => { cancelled = true; };
   }, []);
   const updateEventInList = (eventId: number, updates: Partial<VotingEvent>) => {
     setEvents(prev => {
@@ -221,7 +219,6 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
   const logout = async () => {
     try { await api.logout(); } catch { /* best-effort */ }
-    setToken(null);
     setSession(null);
     setUser(null);
     setWallet([]);

@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
@@ -9,29 +10,38 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  // ── 0. Cookies ─────────────────────────────────────────────────────────────
+  // Needed before route handling: auth now reads the JWT from an httpOnly
+  // cookie (see jwt.strategy.ts) instead of the Authorization header.
+  app.use(cookieParser());
+
   // Swagger config
   if (process.env.NODE_ENV !== 'production') {
+    // EDIT (JWT-in-cookie migration): the API no longer accepts a bearer
+    // token — auth is via the httpOnly `ovp_token` cookie set on login, so
+    // advertising a Bearer "Authorize" button here would be misleading.
+    // Swagger has no first-class "httpOnly cookie" scheme to document, and
+    // since the cookie can't be set manually from the Swagger UI anyway
+    // (the browser only accepts it from a real Set-Cookie response), the
+    // most honest option is to drop the auth scheme entirely: exercise
+    // /auth/login from the docs UI itself (same-origin, credentials
+    // included by the browser) rather than pasting in a token.
     const config = new DocumentBuilder()
       .setTitle('My API')
-      .setDescription('API documentation')
-      .setVersion('1.0')
-      .addBearerAuth(
-        {
-          type: 'http',
-          scheme: 'bearer',
-          bearerFormat: 'JWT',
-          name: 'Authorization',
-          in: 'header',
-        },
-        'access-token',
+      .setDescription(
+        'API documentation. Authentication is via an httpOnly session ' +
+          'cookie set by POST /auth/login — there is no bearer token to ' +
+          'paste in here.',
       )
+      .setVersion('1.0')
       .build();
 
     const document = SwaggerModule.createDocument(app, config);
 
     SwaggerModule.setup('api-docs', app, document, {
       swaggerOptions: {
-        persistAuthorization: true, // 🔥 keeps token after refresh
+        withCredentials: true, // send the ovp_token/ovp_csrf cookies on "Try it out"
       },
     });
   }
