@@ -4,10 +4,10 @@ on:
   push:
     branches: [N-Roles]
     paths:
-      - Dockerfile
-      - src/**
-      - prisma/**
-      - package*.json
+      - apps/backend/Dockerfile
+      - apps/backend/src/**
+      - apps/backend/prisma/**
+      - apps/backend/package*.json
   workflow_dispatch:
 
 jobs:
@@ -33,7 +33,8 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ./apps/backend
+          file: ./apps/backend/Dockerfile
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/ovs-backend:latest
           cache-from: type=gha
