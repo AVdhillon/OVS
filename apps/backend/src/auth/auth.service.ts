@@ -106,39 +106,57 @@ export class AuthService {
     await this.otpService.verifyOtp(otpIdentifier, dto.otp);
 
     // Step 3: Build JWT payload per identity type.
-    let payload: Record<string, any> = {};
+    // FIX (finding #10): was sequential `if` blocks (each independently
+    // testing dto.type), which TypeScript can't exhaustiveness-check and
+    // which silently falls through to an empty payload `{}` if dto.type
+    // is ever something unexpected. resolveOtpIdentifier() above already
+    // throws on an unknown type, so today this is unreachable — but that
+    // safety currently lives in a *different* method and could drift out
+    // of sync with this one. An exhaustive switch with `default: throw`
+    // makes login() safe on its own and gives a compile-time error
+    // (TS2339 down where dto.type is used) if a new LoginDto type is ever
+    // added without updating this switch.
+    let payload: Record<string, any>;
 
-    if (dto.type === 'UNIFIED') {
-      const identifier = otpIdentifier; // already normalised
-      const user = await this.prisma.uaccount.findFirst({
-        where: {
-          OR: [{ mobile: identifier }, { email: identifier }],
-        },
-        select: { pid: true },
-      });
-      if (!user) throw new BadRequestException('User not found');
-      payload = { pid: user.pid.toString(), type: 'UNIFIED' };
-    }
+    switch (dto.type) {
+      case 'UNIFIED': {
+        const identifier = otpIdentifier; // already normalised
+        const user = await this.prisma.uaccount.findFirst({
+          where: {
+            OR: [{ mobile: identifier }, { email: identifier }],
+          },
+          select: { pid: true },
+        });
+        if (!user) throw new BadRequestException('User not found');
+        payload = { pid: user.pid.toString(), type: 'UNIFIED' };
+        break;
+      }
 
-    if (dto.type === 'ORG') {
-      // Member was already validated in resolveOtpIdentifier; fetch role info.
-      const member = await this.prisma.org_members.findUnique({
-        where: { orgid_uid: { orgid: dto.orgid!, uid: dto.uid! } },
-        select: { pid: true },
-      });
-      // member existence guaranteed by resolveOtpIdentifier, but guard anyway
-      if (!member) throw new BadRequestException('Member not found');
-      payload = {
-        type: 'ORG',
-        orgid: dto.orgid,
-        uid: dto.uid,
-        pid: member.pid?.toString() ?? null,
-      };
-    }
+      case 'ORG': {
+        // Member was already validated in resolveOtpIdentifier; fetch role info.
+        const member = await this.prisma.org_members.findUnique({
+          where: { orgid_uid: { orgid: dto.orgid!, uid: dto.uid! } },
+          select: { pid: true },
+        });
+        // member existence guaranteed by resolveOtpIdentifier, but guard anyway
+        if (!member) throw new BadRequestException('Member not found');
+        payload = {
+          type: 'ORG',
+          orgid: dto.orgid,
+          uid: dto.uid,
+          pid: member.pid?.toString() ?? null,
+        };
+        break;
+      }
 
-    if (dto.type === 'GOV') {
-      // gov_identity existence guaranteed by resolveOtpIdentifier
-      payload = { type: 'GOV', epic_id: dto.epic_id };
+      case 'GOV': {
+        // gov_identity existence guaranteed by resolveOtpIdentifier
+        payload = { type: 'GOV', epic_id: dto.epic_id };
+        break;
+      }
+
+      default:
+        throw new BadRequestException('Unknown login type');
     }
 
     // Step 4: Deactivate previous active sessions for this identity.

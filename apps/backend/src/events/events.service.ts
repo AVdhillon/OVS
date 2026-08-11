@@ -145,10 +145,18 @@ export class EventsService {
 
     //await this.assertEventVisible(user, event);
 
+    // FIX (finding #5): previously only checked `user.type === 'ORG'`, so
+    // has_voted always evaluated to false for UNIFIED sessions — even when
+    // that account had actually voted via a linked org identity, since
+    // UNIFIED JWTs carry a pid, not a uid. resolveViewerUidInOrg (already
+    // used by assertEventVisible below) resolves the correct uid for both
+    // session types: it returns the ORG session's own uid directly, or hops
+    // pid -> org_members -> uid for UNIFIED sessions via resolveOrgIdentities.
     let has_voted = false;
-    if (user.type === 'ORG' && user.uid) {
+    const viewerUid = await this.resolveViewerUidInOrg(user, event.orgid ?? '');
+    if (viewerUid) {
       const ep = await this.prisma.event_participants.findFirst({
-        where: { event_id: eventId, orgid: user.orgid!, uid: user.uid },
+        where: { event_id: eventId, orgid: event.orgid!, uid: viewerUid },
       });
       has_voted = ep?.has_voted ?? false;
     }

@@ -27,13 +27,13 @@ describe('EventsService', () => {
 
   const unifiedOrgAUser: JwtUser = {
     type: 'UNIFIED',
-    pid: 42,
+    pid: '42',
     session_id: 's1',
   };
 
   const unifiedOrgBUser: JwtUser = {
     type: 'UNIFIED',
-    pid: 99,
+    pid: '99',
     session_id: 's2',
   };
 
@@ -157,9 +157,9 @@ describe('EventsService', () => {
         new ForbiddenException('You are not a member of this organization'),
       );
 
-      await expect(
-        service.getParticipants(unifiedOrgAUser, 1),
-      ).rejects.toThrow(ForbiddenException);
+      await expect(service.getParticipants(unifiedOrgAUser, 1)).rejects.toThrow(
+        ForbiddenException,
+      );
 
       expect(prisma.member_roles.findFirst).not.toHaveBeenCalled();
     });
@@ -170,9 +170,9 @@ describe('EventsService', () => {
       orgService.resolveCallerUid.mockResolvedValue('U_B_VOTER');
       prisma.member_roles.findFirst.mockResolvedValue(null);
 
-      await expect(
-        service.getParticipants(unifiedOrgBUser, 1),
-      ).rejects.toThrow(ForbiddenException);
+      await expect(service.getParticipants(unifiedOrgBUser, 1)).rejects.toThrow(
+        ForbiddenException,
+      );
     });
 
     it('allows UNIFIED organizer of org B viewing participants for their own org B event', async () => {
@@ -283,10 +283,9 @@ describe('EventsService', () => {
       });
       prisma.$queryRaw.mockResolvedValue([{ scope_id: 5 }]);
 
-      const result = await service.createEvent(
-        unifiedOrgBUser,
-        { ...baseDto } as any,
-      );
+      const result = await service.createEvent(unifiedOrgBUser, {
+        ...baseDto,
+      } as any);
 
       expect(result).toBeDefined();
       expect(prisma.events.create).toHaveBeenCalled();
@@ -311,10 +310,9 @@ describe('EventsService', () => {
       });
       prisma.$queryRaw.mockResolvedValue([{ scope_id: 5 }]);
 
-      const result = await service.createEvent(
-        orgSessionOrgBUser,
-        { ...baseDto } as any,
-      );
+      const result = await service.createEvent(orgSessionOrgBUser, {
+        ...baseDto,
+      } as any);
 
       expect(result).toBeDefined();
       expect(prisma.events.create).toHaveBeenCalled();

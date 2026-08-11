@@ -5,6 +5,7 @@ import {
   NotFoundException,
   ConflictException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RegisterOrgDto, ParticipantRowDto } from './dto/register-org.dto';
 import { AddMembersDto } from './dto/add-members.dto';
@@ -64,6 +65,24 @@ function generateOrgId(
   return `${p}${s}`;
 }
 
+// FIX (finding #8): identifies a Prisma unique-constraint violation on
+// organization.orgid specifically (as opposed to org_email or any other
+// unique field that create() could also collide on), so the TOCTOU retry
+// below only fires for the collision it's actually meant to handle.
+function isOrgIdUniqueConflict(err: unknown): boolean {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError)) return false;
+  if (err.code !== 'P2002') return false;
+  const target = err.meta?.target;
+  const targetStr = Array.isArray(target)
+    ? target.join(',')
+    : String(target ?? '');
+  return (
+    targetStr.includes('orgid') ||
+    targetStr.includes('organization_pkey') ||
+    err.meta?.modelName === 'organization'
+  );
+}
+
 @Injectable()
 export class OrgService {
   constructor(private prisma: PrismaService) {}
@@ -114,7 +133,12 @@ export class OrgService {
     // Generate org ID
     const preferredOrgId = dto.preferred_orgid?.trim().toUpperCase();
     let orgid: string;
-
+    // FIX (finding #8): this stays as a cheap pre-check to reject an
+    // obviously-taken preferred_orgid, or to steer the generator away from
+    // an obvious collision, without paying for a transaction. It does NOT
+    // by itself close the race — see the retry loop around $transaction
+    // below, which is what actually handles two requests passing this
+    // check for the same orgid at the same time.
     if (preferredOrgId) {
       const exists = await this.prisma.organization.findUnique({
         where: { orgid: preferredOrgId },
@@ -142,97 +166,133 @@ export class OrgService {
       }
     }
 
-    // Run everything in a transaction
-    const result = await this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`
-        SELECT set_config('app.current_uid', ${callerUidNorm}, true)
-      `;
+    // FIX (finding #8 — TOCTOU race): the findUnique() checks above only
+    // reduce the *probability* of a collision, they don't prevent one.
+    // Two concurrent registrations can both pass the check for the same
+    // orgid before either has inserted it, then race to insert inside
+    // tx.organization.create() below. The orgid PRIMARY KEY is what
+    // actually prevents the duplicate — so the loser previously failed
+    // with a raw Prisma P2002 unique-violation propagating out of
+    // registerOrg() to whatever generic handling caught it, rather than a
+    // clean, specific 409.
+    //
+    // The retry behavior differs by how orgid was chosen:
+    //   - preferred_orgid (caller-chosen): don't retry with a different ID
+    //     — silently substituting an ID the caller didn't ask for would be
+    //     surprising. Report the conflict directly.
+    //   - auto-generated: the collision is just an unlucky random clash
+    //     between two concurrent signups, not a meaningful conflict for
+    //     this caller. Regenerate and retry the whole transaction rather
+    //     than failing their registration on bad timing.
+    const isGenerated = !preferredOrgId;
+    const maxAttempts = isGenerated ? 3 : 1;
 
-      // 1. Create org (trigger auto-creates ROOT scope)
-      const org = await tx.organization.create({
-        data: {
-          orgid,
-          org_name: dto.org_name,
-          org_email: dto.org_email ?? null,
-          is_active: true,
-        },
-      });
+    let result: { org: { org_name: string }; rootScope: { scope_id: number } };
+    for (let attempt = 1; ; attempt++) {
+      try {
+        result = await this.prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`
+            SELECT set_config('app.current_uid', ${callerUidNorm}, true)
+          `;
 
-      // 2. Fetch the auto-created ROOT scope
-      const rootScope = await tx.org_scope.findFirst({
-        where: { orgid, parent_scope_id: null },
-      });
-      if (!rootScope) throw new Error('ROOT scope not created');
+          // 1. Create org (trigger auto-creates ROOT scope)
+          const org = await tx.organization.create({
+            data: {
+              orgid,
+              org_name: dto.org_name,
+              org_email: dto.org_email ?? null,
+              is_active: true,
+            },
+          });
 
-      // 3. Insert caller as member
-      const { email, mobile } = splitIdentifier(callerIdentifier);
+          // 2. Fetch the auto-created ROOT scope
+          const rootScope = await tx.org_scope.findFirst({
+            where: { orgid, parent_scope_id: null },
+          });
+          if (!rootScope) throw new Error('ROOT scope not created');
 
-      await tx.org_members.create({
-        data: {
-          orgid,
-          uid: callerUidNorm,
-          pid,
-          email,
-          mobile,
-          is_deleted: false,
-        },
-      });
+          // 3. Insert caller as member
+          const { email, mobile } = splitIdentifier(callerIdentifier);
 
-      // 4. Assign caller a single role row: voter + organizer at ROOT scope
-      await tx.member_roles.create({
-        data: {
-          orgid,
-          uid: callerUidNorm,
-          is_voter: true,
-          is_organizer: true,
-          scope_id: rootScope.scope_id,
-        },
-      });
+          await tx.org_members.create({
+            data: {
+              orgid,
+              uid: callerUidNorm,
+              pid,
+              email,
+              mobile,
+              is_deleted: false,
+            },
+          });
 
-      // 5. Add organizer identity to wallet
-      await tx.identity_wallet.create({
-        data: {
-          pid,
-          identity_type: 'ORG',
-          identity_id: orgid,
-          uid: callerUidNorm,
-        },
-      });
+          // 4. Assign caller a single role row: voter + organizer at ROOT scope
+          await tx.member_roles.create({
+            data: {
+              orgid,
+              uid: callerUidNorm,
+              is_voter: true,
+              is_organizer: true,
+              scope_id: rootScope.scope_id,
+            },
+          });
 
-      // 6. Insert participants (skip if uid === caller)
-      for (const p of deduped) {
-        if (p.uid === callerUidNorm) continue;
-        if (!p.participant_identifier)
-          throw new BadRequestException(
-            `Participant ${p.uid}: contact is required`,
+          // 5. Add organizer identity to wallet
+          await tx.identity_wallet.create({
+            data: {
+              pid,
+              identity_type: 'ORG',
+              identity_id: orgid,
+              uid: callerUidNorm,
+            },
+          });
+
+          // 6. Insert participants (skip if uid === caller)
+          for (const p of deduped) {
+            if (p.uid === callerUidNorm) continue;
+            if (!p.participant_identifier)
+              throw new BadRequestException(
+                `Participant ${p.uid}: contact is required`,
+              );
+
+            const { email, mobile } = splitIdentifier(p.participant_identifier);
+
+            await tx.org_members.create({
+              data: {
+                orgid,
+                uid: p.uid,
+                mobile,
+                email,
+                is_deleted: false,
+              },
+            });
+
+            // One role row per participant at ROOT scope
+            await tx.member_roles.create({
+              data: {
+                orgid,
+                uid: p.uid,
+                is_voter: p.role === 'v' || p.role === 'vo',
+                is_organizer: p.role === 'o' || p.role === 'vo',
+                scope_id: rootScope.scope_id,
+              },
+            });
+          }
+
+          return { org, rootScope };
+        });
+        break;
+      } catch (err) {
+        if (!isOrgIdUniqueConflict(err)) throw err;
+
+        if (!isGenerated || attempt >= maxAttempts) {
+          throw new ConflictException(
+            `Organization ID "${orgid}" is already taken.`,
           );
-
-        const { email, mobile } = splitIdentifier(p.participant_identifier);
-
-        await tx.org_members.create({
-          data: {
-            orgid,
-            uid: p.uid,
-            mobile,
-            email,
-            is_deleted: false,
-          },
-        });
-
-        // One role row per participant at ROOT scope
-        await tx.member_roles.create({
-          data: {
-            orgid,
-            uid: p.uid,
-            is_voter: p.role === 'v' || p.role === 'vo',
-            is_organizer: p.role === 'o' || p.role === 'vo',
-            scope_id: rootScope.scope_id,
-          },
-        });
+        }
+        // Lost the race on a random ID — pick a fresh one and try again.
+        orgid = generateOrgId(dto.org_name, dto.org_prefix);
       }
-
-      return { org, rootScope };
-    });
+    }
 
     return {
       orgid,

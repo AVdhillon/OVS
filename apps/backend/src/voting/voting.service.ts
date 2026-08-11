@@ -103,29 +103,37 @@ export class VotingService {
       throw new BadRequestException('Candidate does not belong to this event');
     }
 
-    // ── 7. Check voter role ──────────────────────────────────────────────
-    const role = await this.prisma.member_roles.findFirst({
+    // ── 7 & 8. Check voter role + scope eligibility ────────────────────────
+    // Mirrors the DB trigger check_vote_validity exactly.
+    //
+    // FIX (multi-scope roles): member_roles PK is (orgid, uid, scope_id), so
+    // a voter can hold several role rows across different scopes (e.g.
+    // is_voter = false at one scope, is_voter = true at another). The old
+    // code did member_roles.findFirst({ is_voter: true }) and evaluated
+    // scope eligibility against that ONE arbitrary row — which could wrongly
+    // deny a legitimate voter (if the non-matching row got picked) or, in
+    // principle, evaluate eligibility under the wrong scope entirely. We now
+    // fetch every is_voter = true role row for this member and accept the
+    // vote if ANY of those rows clears scope eligibility for the event.
+    //
+    // Three eligibility cases based on event visibility flags:
+    //   scope_only = TRUE  → a voter role's scope must exactly match event scope
+    //   default (downward) → a voter role's scope must be a descendant of event scope
+    //   visibility_upward  → additionally allow voter roles in ancestor scopes
+    const voterRoles = await this.prisma.member_roles.findMany({
       where: { orgid: member.orgid, uid: member.uid, is_voter: true },
+      select: { scope_id: true },
     });
-    if (!role) {
+    if (voterRoles.length === 0) {
       throw new ForbiddenException(
         'Your account does not have voter permissions',
       );
     }
 
-    // ── 8. Check scope eligibility ───────────────────────────────────────
-    // Mirrors the DB trigger check_vote_validity exactly.
-    // Three cases based on event visibility flags:
-    //
-    //   scope_only = TRUE  → voter's scope must exactly match event scope
-    //   default (downward) → voter's scope must be a descendant of event scope
-    //   visibility_upward  → additionally allow voters in ancestor scopes
-    //
-    // FIX: the previous code only checked get_scope_descendants(), which:
-    //   • incorrectly allowed ALL descendants when scope_only = TRUE
-    //     (only the exact scope should be eligible)
-    //   • incorrectly rejected ancestor scopes when visibility_upward = TRUE
-    await this.assertScopeEligibility(event, role.scope_id);
+    await this.assertScopeEligibilityForAny(
+      event,
+      voterRoles.map((r) => r.scope_id),
+    );
 
     // ── 9. Extract IP ────────────────────────────────────────────────────
     const ip =
@@ -214,25 +222,29 @@ export class VotingService {
    *      wrong — silently allowing ineligible descendants under scope_only,
    *      and silently rejecting eligible ancestors under visibility_upward.
    */
-  private async assertScopeEligibility(
+  /**
+   * FIX (multi-scope roles): accepts ALL of the voter's is_voter = true
+   * scope_ids and succeeds if ANY one of them clears eligibility — instead
+   * of the old single-scope-id version, which only ever saw one arbitrarily
+   * chosen role row.
+   */
+  private async assertScopeEligibilityForAny(
     event: {
       scope_id: number | null;
       scope_only: boolean | null;
       visibility_upward: boolean | null;
     },
-    voterScopeId: number,
+    voterScopeIds: number[],
   ) {
     const eventScopeId = event.scope_id;
     if (eventScopeId === null) return; // org-wide event — always eligible
 
     // ── Case 1: scope_only ───────────────────────────────────────────────
     if (event.scope_only) {
-      if (voterScopeId !== eventScopeId) {
-        throw new ForbiddenException(
-          'This event is restricted to a specific scope. Your scope is not eligible.',
-        );
-      }
-      return;
+      if (voterScopeIds.includes(eventScopeId)) return;
+      throw new ForbiddenException(
+        'This event is restricted to a specific scope. Your scope is not eligible.',
+      );
     }
 
     // ── Case 2 & 3: downward (always) + upward (optional) ───────────────
@@ -241,7 +253,7 @@ export class VotingService {
     `;
     const descendants = descendantRows.map((r) => Number(r.scope_id));
 
-    if (descendants.includes(voterScopeId)) return; // eligible via downward
+    if (voterScopeIds.some((id) => descendants.includes(id))) return; // eligible via downward
 
     // ── Case 3: check ancestors if visibility_upward is set ─────────────
     if (event.visibility_upward) {
@@ -250,7 +262,7 @@ export class VotingService {
       `;
       const ancestors = ancestorRows.map((r) => Number(r.scope_id));
 
-      if (ancestors.includes(voterScopeId)) return; // eligible via upward
+      if (voterScopeIds.some((id) => ancestors.includes(id))) return; // eligible via upward
     }
 
     throw new ForbiddenException(
