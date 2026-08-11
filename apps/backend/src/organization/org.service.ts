@@ -931,8 +931,13 @@ export class OrgService {
   async getDescendantScopeIds(scopeIds: number[]): Promise<number[]> {
     const allIds = new Set<number>();
     for (const scopeId of scopeIds) {
+      if (!Number.isInteger(scopeId)) {
+        throw new BadRequestException(
+          `Invalid scope_id "${scopeId}": expected an integer`,
+        );
+      }
       const rows = await this.prisma.$queryRaw<{ scope_id: number }[]>`
-        SELECT scope_id FROM get_scope_descendants(${scopeId})
+        SELECT scope_id FROM get_scope_descendants(${scopeId}::int)
       `;
       rows.forEach((r) => allIds.add(Number(r.scope_id)));
     }

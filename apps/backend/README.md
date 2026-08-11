@@ -31,6 +31,21 @@
 $ npm install
 ```
 
+## Environment variables
+
+These must be set — none of them has a safe hardcoded default:
+
+| Variable | Required | Notes |
+|---|---|---|
+| `JWT_SECRET` | **Yes, always** | Signs and verifies all session JWTs. The app will refuse to start in production if this is unset (see `src/common/utils/jwt-secret.util.ts`). In non-production it falls back to a clearly-labelled insecure dev value with a console warning — never rely on that outside local development. |
+| `VOTER_HASH_SALT` | **Yes, always** | Used by `VotingService` to anonymize vote records (`voter_hash`). Must be set before any vote can be cast. |
+| `ALLOWED_ORIGINS` | Yes, in production | Comma-separated list of allowed CORS origins. `main.ts` throws at boot if unset in production. |
+| `VERCEL_PREVIEW_PREFIX` | Recommended in production | Scopes the Vercel-preview CORS allowance to origins whose hostname starts with this prefix (e.g. `ovs-frontend`, matching `ovs-frontend-git-branch-team.vercel.app`). If unset, **any** `*.vercel.app` origin is trusted regardless of `ALLOWED_ORIGINS` — `main.ts` logs a warning at boot in production when this happens. Set it to your Vercel project slug to tighten this. |
+| `OTP_DEVMODE` | No — **must never be `true` in production** | When `true`, `/auth/send-otp` and related endpoints echo the raw OTP back in the API response instead of only sending it via the delivery channel. This exists purely for local dev/testing convenience. |
+
+Set these via a `.env` file locally (not committed) and via your deployment
+platform's secret/config management in staging and production.
+
 ## Compile and run the project
 
 ```bash

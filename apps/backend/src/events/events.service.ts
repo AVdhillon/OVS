@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { OrgService } from '../organization/org.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
 // FIX: import canonical JwtUser instead of redefining locally with wrong pid type.
@@ -15,7 +16,10 @@ import type { events as PrismaEvent } from '@prisma/client';
 
 @Injectable()
 export class EventsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private orgService: OrgService,
+  ) {}
 
   // ─────────────────────────────────────────────────────────────────────────
   // GET VISIBLE EVENTS
@@ -184,7 +188,25 @@ export class EventsService {
     if (new Date(dto.start_time) < new Date()) {
       throw new BadRequestException('start_time cannot be in the past');
     }
-    this.assertOrgIdentity(user, dto.orgid, dto.uid);
+    // FIX (Phase 2b): the old assertOrgIdentity() was a no-op for UNIFIED
+    // sessions, so dto.orgid/dto.uid were trusted verbatim from the request
+    // body. The member_roles check below only confirms *some* member holds
+    // that uid+organizer role in that org — it does NOT confirm the caller
+    // themselves is linked to that uid. A UNIFIED caller could previously
+    // supply any real organizer's uid (their own org or another org
+    // entirely) and pass straight through, impersonating that organizer to
+    // create events in their name. Resolving the caller's identity first —
+    // and requiring dto.uid to match it — closes that gap.
+    const callerUid = await this.resolveCallerIdentityInOrg(
+      user,
+      dto.orgid,
+      dto.uid,
+    );
+    if (callerUid !== dto.uid) {
+      throw new ForbiddenException(
+        'Action not permitted for your current session identity',
+      );
+    }
 
     const role = await this.prisma.member_roles.findFirst({
       where: { orgid: dto.orgid, uid: dto.uid, is_organizer: true },
@@ -248,7 +270,7 @@ export class EventsService {
   async updateEvent(user: JwtUser, eventId: number, dto: UpdateEventDto) {
     const event = await this.getEventOrThrow(eventId);
 
-    this.assertOrgIdentity(user, event.orgid ?? '', event.created_by_uid ?? '');
+    await this.assertCallerOwnsEvent(user, event);
     this.assertEventNotStarted(event);
 
     // FIX: validate mutual exclusion. Resolve effective values (dto may only
@@ -300,7 +322,7 @@ export class EventsService {
   async deleteEvent(user: JwtUser, eventId: number) {
     const event = await this.getEventOrThrow(eventId);
 
-    this.assertOrgIdentity(user, event.orgid ?? '', event.created_by_uid ?? '');
+    await this.assertCallerOwnsEvent(user, event);
     this.assertEventNotStarted(event);
 
     await this.prisma.events.update({
@@ -361,11 +383,18 @@ export class EventsService {
   async getParticipants(user: JwtUser, eventId: number) {
     const event = await this.getEventOrThrow(eventId);
 
-    if (user.type !== 'ORG' || user.orgid !== event.orgid) {
-      throw new ForbiddenException('Organizer access required');
-    }
+    // FIX (Phase 2b): previously hard-blocked any non-ORG session type
+    // (`user.type !== 'ORG'`), so UNIFIED-session organizers could never
+    // view participant lists for orgs they legitimately organize. Now
+    // resolves the caller's identity against the EVENT's actual orgid,
+    // using the same pattern as updateEvent/deleteEvent (Phase 2a) —
+    // instead of trusting `user.orgid` (which doesn't even exist on a
+    // UNIFIED session).
+    const orgid = event.orgid ?? '';
+    const callerUid = await this.resolveCallerIdentityInOrg(user, orgid);
+
     const role = await this.prisma.member_roles.findFirst({
-      where: { orgid: user.orgid, uid: user.uid!, is_organizer: true },
+      where: { orgid, uid: callerUid, is_organizer: true },
     });
     if (!role) throw new ForbiddenException('Not an organizer');
 
@@ -409,15 +438,55 @@ export class EventsService {
     }
   }
 
-  private assertOrgIdentity(user: JwtUser, orgid: string, uid: string) {
-    if (user.type === 'ORG') {
-      if (user.orgid !== orgid || user.uid !== uid) {
-        throw new ForbiddenException(
-          'Action not permitted for your current session identity',
-        );
-      }
+  /**
+   * Resolves the uid the caller is actually allowed to act as within
+   * `orgid`, safely for both session types.
+   *
+   * IMPORTANT: OrgService.resolveCallerUid() trusts its `orgid` argument
+   * unconditionally for ORG sessions — it just returns `user.uid` without
+   * ever checking that arg against `user.orgid`. So callers here MUST
+   * confirm an ORG session's own orgid actually equals the target `orgid`
+   * *before* calling it. For UNIFIED sessions, resolveCallerUid does the
+   * real work of verifying the caller's pid is linked (via org_members) to
+   * a uid in `orgid` — and, if `requestedUid` is supplied, that it actually
+   * belongs to the caller rather than being trusted from the request body.
+   *
+   * Used by assertCallerOwnsEvent (update/delete), getParticipants, and
+   * createEvent, so the same cross-org IDOR fix from Phase 2a is applied
+   * consistently everywhere caller identity needs resolving.
+   */
+  private async resolveCallerIdentityInOrg(
+    user: JwtUser,
+    orgid: string,
+    requestedUid?: string,
+  ): Promise<string> {
+    if (user.type === 'ORG' && user.orgid !== orgid) {
+      throw new ForbiddenException(
+        'Action not permitted for your current session identity',
+      );
     }
-    // UNIFIED users pass — ownership is verified via created_by_uid comparison
+    return requestedUid !== undefined
+      ? this.orgService.resolveCallerUid(user, orgid, requestedUid)
+      : this.orgService.resolveCallerUid(user, orgid);
+  }
+
+  /**
+   * FIX (cross-org IDOR, Phase 2a): verifies the caller's resolved
+   * org-identity for the EVENT's actual orgid matches the event's
+   * created_by_uid. For ORG sessions this is equivalent to the old check.
+   * For UNIFIED sessions this now actually resolves the caller's uid via
+   * pid → org_members (same pattern as RolesGuard/OrgService
+   * .resolveCallerUid), instead of the prior no-op that let any UNIFIED
+   * organizer mutate any org's events.
+   */
+  private async assertCallerOwnsEvent(user: JwtUser, event: PrismaEvent) {
+    const orgid = event.orgid ?? '';
+    const callerUid = await this.resolveCallerIdentityInOrg(user, orgid);
+    if (callerUid !== event.created_by_uid) {
+      throw new ForbiddenException(
+        'Action not permitted for your current session identity',
+      );
+    }
   }
 
   private async assertScopeInOrg(orgid: string, scopeId: number) {
@@ -442,15 +511,65 @@ export class EventsService {
   }
 
   private async assertEventVisible(user: JwtUser, event: any) {
+    // FIX: previously passed user.uid straight through, but uid is only
+    // ever populated on ORG-session JWTs. UNIFIED sessions carry a pid
+    // instead, so this always evaluated as uid=undefined for them —
+    // get_visible_events() then returns zero rows and every UNIFIED user
+    // gets falsely told an event (including ones they've already voted
+    // in) isn't visible to their account. Resolve the caller's real uid
+    // for this event's org first, same pattern as resolveOrgIdentities /
+    // resolveCallerIdentityInOrg used elsewhere in this file.
+    const uid = await this.resolveViewerUidInOrg(user, event.orgid ?? '');
+
+    // FIX: get_visible_events() in the database is
+    // get_visible_events(p_orgid VARCHAR, p_scope INT) — it takes a
+    // scope_id, not a uid. Calling it with (orgid::text, uid::text) has
+    // no matching overload and throws Postgres 42883 / Prisma P2010
+    // ("function get_visible_events(text, text) does not exist") on
+    // every call, so getResults() was 500ing for everyone. Resolve the
+    // caller's scope_id in this org (via member_roles) and pass that.
+    if (!uid) {
+      throw new ForbiddenException('Event not visible to your account');
+    }
+    const role = await this.prisma.member_roles.findFirst({
+      where: { orgid: event.orgid ?? '', uid },
+    });
+    if (!role) {
+      throw new ForbiddenException('Event not visible to your account');
+    }
+
     const rows = await this.prisma.$queryRaw<{ event_id: number }[]>`
     SELECT event_id 
-    FROM get_visible_events(${event.orgid}, ${user.uid})
-    WHERE event_id = ${event.event_id}
+    FROM get_visible_events(${event.orgid}::varchar, ${role.scope_id}::int)
+    WHERE event_id = ${event.event_id}::int
   `;
-    //console.log(event.orgid,user.uid);
     if (rows.length === 0) {
       throw new ForbiddenException('Event not visible to your account');
     }
+  }
+
+  /**
+   * Resolves the uid the caller should be evaluated as for visibility
+   * checks against a specific org's event.
+   * - ORG session    → its own uid, but only if it actually belongs to
+   *                     this orgid (an ORG session for a different org
+   *                     must not be evaluated under this org's uid).
+   * - UNIFIED session → the org_members-linked uid for this orgid, via
+   *                     resolveOrgIdentities (handles the pid → uid hop).
+   * - GOV session, or no matching org identity → undefined; the caller
+   *                     has no org-scoped uid here, so get_visible_events
+   *                     will correctly find nothing unless the event is
+   *                     visible independent of org membership.
+   */
+  private async resolveViewerUidInOrg(
+    user: JwtUser,
+    orgid: string,
+  ): Promise<string | undefined> {
+    if (user.type === 'ORG') {
+      return user.orgid === orgid ? user.uid : undefined;
+    }
+    const identities = await this.resolveOrgIdentities(user);
+    return identities.find((i) => i.orgid === orgid)?.uid;
   }
 
   /**

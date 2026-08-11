@@ -97,7 +97,6 @@ export class AuthService {
   async login(dto: LoginDto, req: Request) {
     // Step 1: Resolve the canonical OTP identifier for this login type.
     // This prevents the client from directing OTPs to an arbitrary address.
-    console.log(dto);
     const otpIdentifier = await this.resolveOtpIdentifier(dto);
 
     // Step 2: Verify OTP atomically before doing anything else.

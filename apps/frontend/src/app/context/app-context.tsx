@@ -166,22 +166,6 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     if (!token) { setLoading(false); return; }
 
     // Decode JWT payload — no library needed, JWT middle segment is base64url
-    try {
-      const payload = JSON.parse(atob(token.split('.')[1]));
-      setSession({
-        type:       payload.type,
-        pid:        payload.pid != null ? String(payload.pid) : undefined,
-        orgid:      payload.orgid,
-        uid:        payload.uid,
-        epic_id:    payload.epic_id,
-        session_id: payload.session_id,
-      });
-    } catch {
-      // Token is malformed — wipe it and stop
-      setToken(null);
-      setLoading(false);
-      return;
-    }
     let payload: Session;
     try {
       const raw = JSON.parse(atob(token.split('.')[1]));
@@ -195,6 +179,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       };
       setSession(payload);
     } catch {
+      // Token is malformed — wipe it and stop
       setToken(null);
       setLoading(false);
       return;

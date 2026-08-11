@@ -29,20 +29,30 @@ import { toast } from 'sonner';
 
 // ─── Nav items ────────────────────────────────────────────────────────────────
 
-const NAV_ITEMS = [
-  { path: '/dashboard/events',          label: 'Events',           icon: Vote     },
-  { path: '/dashboard/manage-events',   label: 'Manage Events',    icon: Calendar },
-  { path: '/dashboard/organizations',   label: 'Organizations',    icon: Building2 },
-  { path: '/dashboard/identity-wallet', label: 'Identity Wallet',  icon: Wallet   },
-  { path: '/dashboard/account',         label: 'Account',          icon: Settings },
-] as const;
-
 // ─── Explicit nav item type ───────────────────────────────────────────────────
 
 interface NavItemConfig {
   path: string;
   label: string;
   icon: React.ElementType;
+  hiddenFor?: readonly SessionType[];
+}
+
+const NAV_ITEMS: NavItemConfig[] = [
+  { path: '/dashboard/events',          label: 'Events',           icon: Vote     },
+  { path: '/dashboard/manage-events',   label: 'Manage Events',    icon: Calendar, hiddenFor: ['GOV'] },
+  { path: '/dashboard/organizations',   label: 'Organizations',    icon: Building2, hiddenFor: ['GOV'] },
+  { path: '/dashboard/identity-wallet', label: 'Identity Wallet',  icon: Wallet   },
+  { path: '/dashboard/account',         label: 'Account',          icon: Settings },
+];
+
+// NOTE: this is purely a UX nicety (declutters the nav for sessions that
+// can't organize anything) — the backend is the real gate for these routes
+// and doesn't change based on this filtering.
+function getVisibleNavItems(sessionType: SessionType | undefined): NavItemConfig[] {
+  return NAV_ITEMS.filter(
+      (item) => !item.hiddenFor || !sessionType || !item.hiddenFor.includes(sessionType),
+  );
 }
 
 // ─── Session type badge ───────────────────────────────────────────────────────
@@ -110,9 +120,10 @@ interface SidebarProps {
   onToggle: () => void;
   onNavigate: (path: string) => void;
   isActive: (path: string) => boolean;
+  navItems: NavItemConfig[];
 }
 
-function Sidebar({ collapsed, showToggle, onToggle, onNavigate, isActive }: SidebarProps) {
+function Sidebar({ collapsed, showToggle, onToggle, onNavigate, isActive, navItems }: SidebarProps) {
   return (
       <nav className="flex flex-col h-full">
         {/* Logo */}
@@ -135,7 +146,7 @@ function Sidebar({ collapsed, showToggle, onToggle, onNavigate, isActive }: Side
 
         {/* Nav items */}
         <div className="flex-1 space-y-0.5 px-2 overflow-y-auto">
-          {NAV_ITEMS.map((item) => (
+          {navItems.map((item) => (
               <NavItem
                   key={item.path}
                   item={item}
@@ -176,6 +187,13 @@ export function DashboardLayout() {
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  // Nav items are filtered by session type (GOV sessions don't see
+  // organizer-only items) — backend enforcement is unchanged either way.
+  const visibleNavItems = useMemo(
+      () => getVisibleNavItems(session?.type as SessionType | undefined),
+      [session?.type],
+  );
 
   // FIX 6: Memoize derived values that depend on stable inputs so they are
   //         not recomputed on every render caused by unrelated state changes.
@@ -351,6 +369,7 @@ export function DashboardLayout() {
                       onToggle={() => setSidebarCollapsed((c) => !c)}
                       onNavigate={handleSidebarNavigate}
                       isActive={isActive}
+                      navItems={visibleNavItems}
                   />
                 </aside>
               </div>
@@ -369,6 +388,7 @@ export function DashboardLayout() {
                 onToggle={() => setSidebarCollapsed((c) => !c)}
                 onNavigate={(path) => navigate(path)}
                 isActive={isActive}
+                navItems={visibleNavItems}
             />
           </aside>
 

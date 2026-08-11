@@ -5,6 +5,7 @@ import {
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { getJwtSecret } from '../../common/utils/jwt-secret.util';
 import * as express from 'express';
 
 @Injectable()
@@ -13,14 +14,15 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false, // ✅ JWT expiry check
-      secretOrKey: process.env.JWT_SECRET || 'SECRET_KEY',
+      // SECURITY: no hardcoded fallback secret — see jwt-secret.util.ts.
+      // Throws at module-init time in production if JWT_SECRET is unset.
+      secretOrKey: getJwtSecret(),
       passReqToCallback: true, // ✅ to access req in validate
     });
   }
 
   async validate(req: express.Request, payload: any) {
     // 🔑 Extract token from header
-    console.log('here');
     const authHeader = req.headers.authorization || '';
     const token = authHeader.startsWith('Bearer ')
       ? authHeader.slice(7).trim()

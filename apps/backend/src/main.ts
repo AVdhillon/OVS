@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
@@ -63,6 +64,35 @@ async function bootstrap() {
   if (!allowedOrigins.length && process.env.NODE_ENV === 'production') {
     throw new Error('ALLOWED_ORIGINS must be set in production');
   }
+
+  // Preview-deployment allowance: by default any *.vercel.app origin is
+  // trusted, which is broader than intended (any Vercel project/user can
+  // stand up a subdomain that ends in vercel.app). If VERCEL_PREVIEW_PREFIX
+  // is set (e.g. "ovs-frontend" for previews like
+  // ovs-frontend-git-branch-team.vercel.app), only origins starting with
+  // that prefix are trusted. Leave unset only if you intentionally want to
+  // trust all Vercel preview URLs.
+  const vercelPreviewPrefix = process.env.VERCEL_PREVIEW_PREFIX?.trim();
+  if (!vercelPreviewPrefix && process.env.NODE_ENV === 'production') {
+    console.warn(
+      'VERCEL_PREVIEW_PREFIX is not set — CORS will trust ANY *.vercel.app origin. ' +
+        'Set VERCEL_PREVIEW_PREFIX to your Vercel project slug to scope this down.',
+    );
+  }
+  const isTrustedVercelPreview = (origin: string): boolean => {
+    if (!origin.endsWith('.vercel.app') && origin !== 'https://vercel.app') {
+      return false;
+    }
+    if (!vercelPreviewPrefix) return true; // unscoped fallback (see warning above)
+    let host: string;
+    try {
+      host = new URL(origin).hostname;
+    } catch {
+      return false;
+    }
+    return host.startsWith(vercelPreviewPrefix);
+  };
+
   app.enableCors({
     origin: (origin, callback) => {
       // allow non-browser requests
@@ -73,8 +103,9 @@ async function bootstrap() {
         return callback(null, true);
       }
 
-      // allow all Vercel previews (VERY useful)
-      if (origin.includes('vercel.app')) {
+      // allow Vercel previews (VERY useful), optionally scoped to a
+      // specific project prefix via VERCEL_PREVIEW_PREFIX
+      if (isTrustedVercelPreview(origin)) {
         return callback(null, true);
       }
 

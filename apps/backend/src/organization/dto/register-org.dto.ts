@@ -10,7 +10,7 @@ import {
   IsIn,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { IsEmailOrPhone } from '../../common/decorators/org-context.decorator';
+import { IsEmailOrPhone } from '../../common/decorators/validators.decorator';
 
 // ─── Participant row (used in table input) ────────────────────────────────────
 export class ParticipantRowDto {

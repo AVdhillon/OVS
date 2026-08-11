@@ -135,22 +135,28 @@ function ScopeTreeSelectNode({
   depth,
   value,
   onSelect,
+  exclude = [],
 }: {
   node: ScopeNode;
   depth: number;
   value: string;
   onSelect: (v: string) => void;
+  exclude?: number[];
 }) {
   const [expanded, setExpanded] = useState(true);
   const hasChildren = (node.children?.length ?? 0) > 0;
   const isSelected = value === String(node.scope_id);
+  const isDisabled = exclude.includes(node.scope_id);
   return (
     <div>
       <div
-        className={`flex items-center gap-1 py-1.5 rounded-md cursor-pointer text-sm select-none transition-colors
-          ${isSelected ? "bg-primary text-primary-foreground" : "hover:bg-accent text-foreground"}`}
+        className={`flex items-center gap-1 py-1.5 rounded-md text-sm select-none transition-colors
+          ${isDisabled ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}
+          ${isSelected ? "bg-primary text-primary-foreground" : isDisabled ? "text-muted-foreground" : "hover:bg-accent text-foreground"}`}
         style={{ paddingLeft: `${depth * 14 + 6}px`, paddingRight: 6 }}
-        onClick={() => onSelect(String(node.scope_id))}
+        onClick={() => {
+          if (!isDisabled) onSelect(String(node.scope_id));
+        }}
       >
         {hasChildren ? (
           <button
@@ -168,7 +174,10 @@ function ScopeTreeSelectNode({
         ) : (
           <span className="w-4 flex-shrink-0" />
         )}
-        <span className="truncate flex-1">{node.scope_name}</span>
+        <span className="truncate flex-1">
+          {node.scope_name}
+          {isDisabled ? " (current)" : ""}
+        </span>
       </div>
       {expanded &&
         hasChildren &&
@@ -179,6 +188,7 @@ function ScopeTreeSelectNode({
             depth={depth + 1}
             value={value}
             onSelect={onSelect}
+            exclude={exclude}
           />
         ))}
     </div>
@@ -219,13 +229,6 @@ function ScopeTreeSelect({
     onChange(val);
     setOpen(false);
   };
-
-  const filterTree = (nodes: ScopeNode[]): ScopeNode[] =>
-    nodes
-      .filter((n) => !exclude.includes(n.scope_id))
-      .map((n) => ({ ...n, children: filterTree(n.children ?? []) }));
-
-  const filteredTree = exclude.length ? filterTree(scopeTree) : scopeTree;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -272,18 +275,19 @@ function ScopeTreeSelect({
               <div className="my-1 border-t" />
             </>
           )}
-          {filteredTree.length === 0 ? (
+          {scopeTree.length === 0 ? (
             <p className="text-xs text-muted-foreground px-2.5 py-2">
               No scopes available
             </p>
           ) : (
-            filteredTree.map((node) => (
+            scopeTree.map((node) => (
               <ScopeTreeSelectNode
                 key={node.scope_id}
                 node={node}
                 depth={0}
                 value={value}
                 onSelect={handleSelect}
+                exclude={exclude}
               />
             ))
           )}
