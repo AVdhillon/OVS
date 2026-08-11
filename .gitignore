@@ -50,7 +50,6 @@ coverage/
 # =========================
 pnpm-lock.yaml
 yarn.lock
-package-lock.json
 
 # (Optional: keep ONE of above, not all)
 
