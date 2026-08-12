@@ -10,7 +10,7 @@ import { OtpService } from '../otp/otp.service'; // FIX: inject OtpService inste
 import { UpdateUserDto } from './dto/update-user.dto';
 import { RegisterDto } from './dto/register.dto';
 
-// ─── Shape returned by thinness check ────────────────────────────────────────
+// ─── Shape returned by thinness check ────────────────────────────
 interface ConflictAccount {
   pid: bigint;
   mobile: string | null;
