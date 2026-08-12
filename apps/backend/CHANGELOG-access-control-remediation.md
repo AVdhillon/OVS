@@ -2,7 +2,7 @@
 
 Summary of all changes made across Phases 1–5 of the access-control
 remediation, file by file. Backend paths are relative to `backend/`,
-frontend paths relative to `frontend/`.
+frontend paths relative to `frontend/`
 
 ## Phase 1 — JWT secret + log hygiene
 - `src/auth/strategies/jwt.strategy.ts`, `src/auth/auth.module.ts`: removed
