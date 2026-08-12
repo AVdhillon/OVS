@@ -13,7 +13,7 @@ on:
 
 env:
   WORKING_DIR: apps/frontend
-  AZURE_WEBAPP_NAME: frontend-votecore # <-- replace with your App Service name
+  AZURE_WEBAPP_NAME: your-app-name # <-- replace with your App Service name
   AZURE_RESOURCE_GROUP: VoteCore # <-- adjust if frontend lives in a different RG
 
 jobs:
@@ -58,6 +58,11 @@ jobs:
           name: frontend-build
           path: ${{ env.WORKING_DIR }}
 
+      - name: Zip artifact for deployment
+        run: |
+          cd ${{ env.WORKING_DIR }}
+          zip -r ../../frontend-deploy.zip . -x "node_modules/*"
+
       - name: Log in to Azure
         uses: azure/login@v2
         with:
@@ -67,10 +72,8 @@ jobs:
         uses: azure/CLI@v2
         with:
           inlineScript: |
-            cd ${{ env.WORKING_DIR }}
-            zip -r ../frontend-deploy.zip . -x "node_modules/*"
             az webapp deploy \
               --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
               --name ${{ env.AZURE_WEBAPP_NAME }} \
-              --src-path ../frontend-deploy.zip \
+              --src-path frontend-deploy.zip \
               --type zip
