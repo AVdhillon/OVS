@@ -1,0 +1,76 @@
+name: Build and Deploy Frontend
+
+on:
+  push:
+    branches: [N-Roles]
+    paths:
+      - apps/frontend/src/**
+      - apps/frontend/public/**
+      - apps/frontend/package*.json
+      - apps/frontend/vite.config.ts
+      - apps/frontend/index.html
+  workflow_dispatch:
+
+env:
+  WORKING_DIR: apps/frontend
+  AZURE_WEBAPP_NAME: frontend-votecore # <-- replace with your App Service name
+  AZURE_RESOURCE_GROUP: VoteCore # <-- adjust if frontend lives in a different RG
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: ${{ env.WORKING_DIR }}/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ${{ env.WORKING_DIR }}
+        run: npm ci
+
+      - name: Build
+        working-directory: ${{ env.WORKING_DIR }}
+        run: npm run build
+        env:
+          VITE_API_URL: ${{ vars.VITE_API_URL }}
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build
+          path: |
+            ${{ env.WORKING_DIR }}
+            !${{ env.WORKING_DIR }}/node_modules
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-build
+          path: ${{ env.WORKING_DIR }}
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_FRONTEND }}
+
+      - name: Deploy to App Service
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            cd ${{ env.WORKING_DIR }}
+            zip -r ../frontend-deploy.zip . -x "node_modules/*"
+            az webapp deploy \
+              --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+              --name ${{ env.AZURE_WEBAPP_NAME }} \
+              --src-path ../frontend-deploy.zip \
+              --type zip
