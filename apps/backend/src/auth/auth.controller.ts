@@ -1,4 +1,12 @@
-import { Controller, Post, Body, Req, Res, Get, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  Req,
+  Res,
+  Get,
+  UseGuards,
+} from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { AuthService } from './auth.service';
 import { SendOtpDto } from './dto/send-otp.dto';
@@ -69,7 +77,7 @@ export class AuthController {
     res.cookie(TOKEN_COOKIE, access_token, {
       httpOnly: true,
       secure: isProd, // local HTTP dev needs this off; see plan doc's "Dev environment" note
-      sameSite: 'lax',
+      sameSite: 'none',
       path: '/',
       maxAge: SESSION_MAX_AGE_MS,
     });
@@ -77,7 +85,7 @@ export class AuthController {
     res.cookie(CSRF_COOKIE, randomBytes(32).toString('hex'), {
       httpOnly: false, // intentionally readable by JS — that's how double-submit works
       secure: isProd,
-      sameSite: 'lax',
+      sameSite: 'none',
       path: '/',
       maxAge: SESSION_MAX_AGE_MS,
     });
