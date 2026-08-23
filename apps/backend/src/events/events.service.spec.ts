@@ -9,7 +9,7 @@ describe('EventsService', () => {
   let service: EventsService;
   let prisma: {
     events: { findFirst: jest.Mock; update: jest.Mock; create: jest.Mock };
-    member_roles: { findFirst: jest.Mock };
+    member_roles: { findFirst: jest.Mock; findMany: jest.Mock };
     org_scope: { findFirst: jest.Mock };
     candidates: { createMany: jest.Mock; findMany: jest.Mock };
     vote_results: { createMany: jest.Mock };
@@ -58,7 +58,7 @@ describe('EventsService', () => {
         update: jest.fn().mockResolvedValue({ ...orgBEvent }),
         create: jest.fn().mockResolvedValue({ ...orgBEvent, event_id: 2 }),
       },
-      member_roles: { findFirst: jest.fn() },
+      member_roles: { findFirst: jest.fn(), findMany: jest.fn() },
       org_scope: { findFirst: jest.fn() },
       candidates: {
         createMany: jest.fn().mockResolvedValue({ count: 2 }),
@@ -247,7 +247,7 @@ describe('EventsService', () => {
         service.createEvent(unifiedOrgAUser, { ...baseDto } as any),
       ).rejects.toThrow(ForbiddenException);
 
-      expect(prisma.member_roles.findFirst).not.toHaveBeenCalled();
+      expect(prisma.member_roles.findMany).not.toHaveBeenCalled();
       expect(prisma.events.create).not.toHaveBeenCalled();
     });
 
@@ -271,12 +271,7 @@ describe('EventsService', () => {
 
     it('allows a UNIFIED caller creating an event as their own verified uid in their own org', async () => {
       orgService.resolveCallerUid.mockResolvedValue('U_B1');
-      prisma.member_roles.findFirst.mockResolvedValue({
-        orgid: 'ORG_B',
-        uid: 'U_B1',
-        is_organizer: true,
-        scope_id: 5,
-      });
+      prisma.member_roles.findMany.mockResolvedValue([{ scope_id: 5 }]);
       prisma.org_scope.findFirst.mockResolvedValue({
         scope_id: 5,
         orgid: 'ORG_B',
@@ -294,16 +289,15 @@ describe('EventsService', () => {
         'ORG_B',
         'U_B1',
       );
+      expect(prisma.member_roles.findMany).toHaveBeenCalledWith({
+        where: { orgid: 'ORG_B', uid: 'U_B1', is_organizer: true },
+        select: { scope_id: true },
+      });
     });
 
     it('allows an ORG-session organizer creating an event in their own org (regression)', async () => {
       orgService.resolveCallerUid.mockResolvedValue('U_B1');
-      prisma.member_roles.findFirst.mockResolvedValue({
-        orgid: 'ORG_B',
-        uid: 'U_B1',
-        is_organizer: true,
-        scope_id: 5,
-      });
+      prisma.member_roles.findMany.mockResolvedValue([{ scope_id: 5 }]);
       prisma.org_scope.findFirst.mockResolvedValue({
         scope_id: 5,
         orgid: 'ORG_B',
@@ -316,6 +310,96 @@ describe('EventsService', () => {
 
       expect(result).toBeDefined();
       expect(prisma.events.create).toHaveBeenCalled();
+    });
+
+    it('rejects when the caller holds no organizer role row in this org', async () => {
+      orgService.resolveCallerUid.mockResolvedValue('U_B1');
+      prisma.member_roles.findMany.mockResolvedValue([]);
+
+      await expect(
+        service.createEvent(orgSessionOrgBUser, { ...baseDto } as any),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(prisma.org_scope.findFirst).not.toHaveBeenCalled();
+      expect(prisma.events.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('createEvent multi-scope organizer roles (finding #4)', () => {
+    const baseDto = {
+      orgid: 'ORG_B',
+      uid: 'U_B1',
+      scope_id: 9,
+      title: 'Multi-scope Event',
+      start_time: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      end_time: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+      candidates: [{ candidate_name: 'A' }, { candidate_name: 'B' }],
+    };
+
+    beforeEach(() => {
+      orgService.resolveCallerUid.mockResolvedValue('U_B1');
+      prisma.org_scope.findFirst.mockResolvedValue({
+        scope_id: 9,
+        orgid: 'ORG_B',
+      });
+    });
+
+    it('succeeds when the organizer holds multiple scope rows and only a non-first one reaches the target scope', async () => {
+      // Organizer holds organizer roles at scope 3 (unrelated branch) and
+      // scope 7 (ancestor of target scope 9). The old findFirst-based code
+      // could arbitrarily pick either row; this must succeed regardless of
+      // row order because scope 7 alone makes scope 9 reachable.
+      prisma.member_roles.findMany.mockResolvedValue([
+        { scope_id: 3 },
+        { scope_id: 7 },
+      ]);
+      // First $queryRaw call (descendants of scope 3) does NOT include 9;
+      // second call (descendants of scope 7) DOES include 9.
+      prisma.$queryRaw
+        .mockResolvedValueOnce([{ scope_id: 3 }])
+        .mockResolvedValueOnce([{ scope_id: 7 }, { scope_id: 9 }]);
+
+      const result = await service.createEvent(orgSessionOrgBUser, {
+        ...baseDto,
+      } as any);
+
+      expect(result).toBeDefined();
+      expect(prisma.events.create).toHaveBeenCalled();
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+    });
+
+    it("rejects when none of the organizer's several scope rows reach the target scope", async () => {
+      prisma.member_roles.findMany.mockResolvedValue([
+        { scope_id: 3 },
+        { scope_id: 4 },
+      ]);
+      prisma.$queryRaw
+        .mockResolvedValueOnce([{ scope_id: 3 }])
+        .mockResolvedValueOnce([{ scope_id: 4 }]);
+
+      await expect(
+        service.createEvent(orgSessionOrgBUser, { ...baseDto } as any),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(prisma.events.create).not.toHaveBeenCalled();
+    });
+
+    it('stops checking further scope rows once a reachable one is found (short-circuits)', async () => {
+      prisma.member_roles.findMany.mockResolvedValue([
+        { scope_id: 7 }, // reachable — should short-circuit here
+        { scope_id: 3 },
+      ]);
+      prisma.$queryRaw.mockResolvedValueOnce([
+        { scope_id: 7 },
+        { scope_id: 9 },
+      ]);
+
+      const result = await service.createEvent(orgSessionOrgBUser, {
+        ...baseDto,
+      } as any);
+
+      expect(result).toBeDefined();
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
     });
   });
 });

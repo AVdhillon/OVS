@@ -216,14 +216,29 @@ export class EventsService {
       );
     }
 
-    const role = await this.prisma.member_roles.findFirst({
+    // FIX (finding #4, events.service.ts half): member_roles' PK is
+    // (orgid, uid, scope_id), so a member can legitimately hold the
+    // organizer role at more than one scope. The old code did
+    // member_roles.findFirst({ is_organizer: true }) and evaluated scope
+    // reachability against that ONE arbitrarily-picked row (Postgres gives
+    // no ordering guarantee for findFirst without an orderBy) — which could
+    // wrongly reject a legitimate multi-scope organizer depending on which
+    // row happened to come back. We now fetch every organizer role row for
+    // this member and accept the event if ANY of those scopes makes
+    // dto.scope_id reachable. Mirrors the equivalent fix in
+    // voting.service.ts::castVote and the DB trigger check_event_creator().
+    const organizerRoles = await this.prisma.member_roles.findMany({
       where: { orgid: dto.orgid, uid: dto.uid, is_organizer: true },
+      select: { scope_id: true },
     });
-    if (!role)
+    if (organizerRoles.length === 0)
       throw new ForbiddenException('You are not an organizer in this org');
 
     await this.assertScopeInOrg(dto.orgid, dto.scope_id);
-    await this.assertScopeReachable(role.scope_id, dto.scope_id);
+    await this.assertScopeReachableForAny(
+      organizerRoles.map((r) => r.scope_id),
+      dto.scope_id,
+    );
 
     const start = new Date(dto.start_time);
     const end = new Date(dto.end_time);
@@ -505,17 +520,27 @@ export class EventsService {
       throw new BadRequestException('Scope does not belong to this org');
   }
 
-  private async assertScopeReachable(
-    organizerScopeId: number,
+  /**
+   * FIX (finding #4): accepts ALL of the organizer's is_organizer = true
+   * scope_ids and succeeds if the target scope is a descendant (or self)
+   * of ANY one of them — instead of the old single-scope-id version, which
+   * only ever saw one arbitrarily chosen role row. Mirrors
+   * voting.service.ts::assertScopeEligibilityForAny.
+   */
+  private async assertScopeReachableForAny(
+    organizerScopeIds: number[],
     targetScopeId: number,
   ) {
-    const rows = await this.prisma.$queryRaw<{ scope_id: number }[]>`
-      SELECT scope_id FROM get_scope_descendants(${organizerScopeId}::int)
-    `;
-    const ids = rows.map((r) => r.scope_id);
-    if (!ids.includes(targetScopeId)) {
-      throw new ForbiddenException('Cannot create event outside your scope');
+    for (const organizerScopeId of organizerScopeIds) {
+      const rows = await this.prisma.$queryRaw<{ scope_id: number }[]>`
+        SELECT scope_id FROM get_scope_descendants(${organizerScopeId}::int)
+      `;
+      const ids = rows.map((r) => r.scope_id);
+      if (ids.includes(targetScopeId)) return;
     }
+    throw new ForbiddenException(
+      'Cannot create event outside your organizer scope(s)',
+    );
   }
 
   private async assertEventVisible(user: JwtUser, event: any) {
