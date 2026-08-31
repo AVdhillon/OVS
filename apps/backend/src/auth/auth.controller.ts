@@ -6,6 +6,7 @@ import {
   Res,
   Get,
   UseGuards,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { AuthService } from './auth.service';
@@ -100,7 +101,22 @@ export class AuthController {
       maxAge: SESSION_MAX_AGE_MS,
     });
 
-    res.cookie(CSRF_COOKIE, randomBytes(32).toString('hex'), {
+    // FIX (cross-origin CSRF cookie unreadable): the ovp_csrf cookie is set
+    // as before for backends/frontends that DO share a registrable domain
+    // (where document.cookie can read it directly). But when frontend and
+    // backend live on unrelated hosts — e.g. two separate *.azurewebsites.net
+    // apps — that's a public suffix, so the cookie can't even be scoped
+    // broader via `domain`, and frontend JS can never read a cookie that
+    // was set for a different origin. The browser still stores + resends it
+    // automatically (SameSite=None; Secure), which is all CsrfGuard needs on
+    // the way in — but the frontend needs the *value* to echo back as the
+    // X-CSRF-Token header, and can no longer get it from document.cookie.
+    // So we also hand it back directly in the login response body; the
+    // frontend keeps it in memory/sessionStorage instead of reading the
+    // cookie. See GET /auth/csrf-token below for how a page reload/new tab
+    // rehydrates this without forcing a fresh login.
+    const csrfToken = randomBytes(32).toString('hex');
+    res.cookie(CSRF_COOKIE, csrfToken, {
       httpOnly: false, // intentionally readable by JS — that's how double-submit works
       secure: isProd,
       sameSite: 'none',
@@ -108,7 +124,28 @@ export class AuthController {
       maxAge: SESSION_MAX_AGE_MS,
     });
 
-    return { message: 'Logged in' };
+    return { message: 'Logged in', csrf_token: csrfToken };
+  }
+
+  /**
+   * GET /auth/csrf-token
+   * Rehydrates the CSRF token for a frontend that already has a valid
+   * ovp_token session cookie but lost its in-memory/sessionStorage copy of
+   * the CSRF value (e.g. a fresh tab, or a hard reload that cleared
+   * sessionStorage in some browsers). Reads the ovp_csrf cookie straight
+   * off the request — the browser already attaches it automatically even
+   * though frontend JS can't read it directly (see login() above) — and
+   * echoes it back in the response body. Requires a valid session, so this
+   * can't be used to fish for a token without already being authenticated.
+   */
+  @Get('csrf-token')
+  @UseGuards(AuthGuard('jwt'))
+  getCsrfToken(@Req() req: express.Request) {
+    const csrfToken = req.cookies?.[CSRF_COOKIE];
+    if (!csrfToken) {
+      throw new UnauthorizedException('No CSRF token for this session');
+    }
+    return { csrf_token: csrfToken };
   }
 
   @Post('logout')
