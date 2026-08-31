@@ -155,8 +155,16 @@ export class VotingService {
     // vote_ballots — which has no orgid/uid column at all. AFTER INSERT
     // triggers on vote_ballots then handle what's left:
     //   trg_vote_count       — increments vote_results
-    //   trg_detect_vote_fraud— logs suspicious IP/device patterns
     //   audit_vote_ballots   — snapshots the row (safe: no identity in it)
+    //
+    // EDIT (Module B): the old trg_detect_vote_fraud (flat >4/>3
+    // global-threshold trigger) has been dropped — it's being replaced by
+    // Module C's self-baseline aggregation pipeline, not patched. Also as
+    // of Module B, the IP passed in below is truncated to subnet
+    // granularity inside cast_ballot() itself (truncate_ip_to_subnet())
+    // before it's ever written to vote_ballots — this file still passes
+    // the full-precision `ip` value in, but it never reaches disk at that
+    // precision.
     //
     // The pre-flight checks above (steps 1-9) are unchanged and still what a
     // caller sees first — cast_ballot()'s own guards are the DB-level
