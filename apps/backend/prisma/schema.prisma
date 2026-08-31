@@ -45,7 +45,6 @@ model org_members {
   member_roles       member_roles[]
   organization       organization         @relation(fields: [orgid], references: [orgid], onDelete: NoAction, onUpdate: NoAction)
   uaccount           uaccount?            @relation(fields: [pid], references: [pid], onUpdate: NoAction)
-  votes              votes[]
 
   @@id([orgid, uid])
   @@unique([orgid, email], map: "unique_org_email")
@@ -90,33 +89,33 @@ model events {
   organization       organization?        @relation(fields: [orgid], references: [orgid], onDelete: NoAction, onUpdate: NoAction)
   org_scope          org_scope?           @relation(fields: [scope_id], references: [scope_id], onDelete: NoAction, onUpdate: NoAction)
   vote_results       vote_results[]
-  votes              votes[]
+  vote_ballots       vote_ballots[]
 
   @@index([orgid], map: "idx_events_orgid")
   @@index([scope_id], map: "idx_events_scope")
 }
 
-model votes {
-  vote_id            Int                 @id @default(autoincrement())
-  event_id           Int?
-  orgid              String?             @db.VarChar(20)
-  uid                String?             @db.VarChar(20)
-  candidate_id       Int?
-  voter_hash         String?
-  voted_at           DateTime?           @default(now()) @db.Timestamp(6)
-  ip_address         String?             @db.Inet
+// Finding #1 fix: replaces `votes`. Deliberately carries no orgid/uid and no
+// FK to org_members/event_participants — no row here can ever be joined back
+// to an identity. Eligibility + double-vote guarding live on
+// event_participants.has_voted instead, claimed atomically inside
+// cast_ballot(), the only function permitted to write here.
+// See prisma/migrations/manual/finding1_vote_anonymization_split.sql.
+model vote_ballots {
+  ballot_id          Int         @id @default(autoincrement())
+  event_id           Int
+  candidate_id       Int
+  voter_hash         String
+  ip_address         String?     @db.Inet
   device_fingerprint String?
-  org_members        org_members?        @relation(fields: [orgid, uid], references: [orgid, uid], onDelete: NoAction, onUpdate: NoAction, map: "fk_vote_member")
-  event_participants event_participants? @relation(fields: [event_id, orgid, uid], references: [event_id, orgid, uid], onDelete: NoAction, onUpdate: NoAction, map: "fk_vote_participant")
-  candidates         candidates?         @relation(fields: [candidate_id], references: [candidate_id], onDelete: NoAction, onUpdate: NoAction)
-  events             events?             @relation(fields: [event_id], references: [event_id], onDelete: NoAction, onUpdate: NoAction)
+  voted_at           DateTime?   @default(now()) @db.Timestamp(6)
+  events             events      @relation(fields: [event_id], references: [event_id], onDelete: NoAction, onUpdate: NoAction)
+  candidates         candidates  @relation(fields: [candidate_id], references: [candidate_id], onDelete: Restrict, onUpdate: NoAction)
 
-  @@unique([event_id, orgid, uid])
-  @@index([candidate_id], map: "idx_votes_candidate")
-  @@index([device_fingerprint], map: "idx_votes_device")
-  @@index([event_id], map: "idx_votes_event")
-  @@index([ip_address], map: "idx_votes_ip")
-  @@index([uid], map: "idx_votes_uid")
+  @@index([candidate_id], map: "idx_vote_ballots_candidate")
+  @@index([device_fingerprint], map: "idx_vote_ballots_device")
+  @@index([event_id], map: "idx_vote_ballots_event")
+  @@index([ip_address], map: "idx_vote_ballots_ip")
 }
 
 model audit_logs {
@@ -138,7 +137,7 @@ model candidates {
   description    String?
   events         events         @relation(fields: [event_id], references: [event_id], onDelete: Cascade, onUpdate: NoAction)
   vote_results   vote_results[]
-  votes          votes[]
+  vote_ballots   vote_ballots[]
 
   @@unique([event_id, candidate_name], map: "unique_candidate_per_event")
 }
@@ -150,7 +149,6 @@ model event_participants {
   has_voted   Boolean?    @default(false)
   events      events      @relation(fields: [event_id], references: [event_id], onDelete: NoAction, onUpdate: NoAction)
   org_members org_members @relation(fields: [orgid, uid], references: [orgid, uid], onDelete: Cascade, onUpdate: NoAction, map: "fk_event_participant_member")
-  votes       votes?
 
   @@id([event_id, orgid, uid])
   @@index([event_id], map: "idx_event_participants")

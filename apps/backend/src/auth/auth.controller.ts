@@ -13,7 +13,21 @@ import { SendOtpDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { LoginDto } from './dto/login.dto';
 import { AuthGuard } from '@nestjs/passport';
+import { Throttle } from '@nestjs/throttler';
 import * as express from 'express';
+
+// Route-specific overrides of the global ThrottlerModule default (see
+// app.module.ts), applied to the endpoints that actually gate access —
+// OTP dispatch/verification and login (fraud-heuristic-implementation-plan.md,
+// Module A). These are deliberately tighter than the app-wide default:
+// each is keyed per-IP by ThrottlerGuard, so a single client can't hammer
+// OTP generation/guessing or credential attempts past these caps even
+// though otp_verification.attempts already locks a *given* OTP record —
+// attempts resets whenever a fresh OTP is issued, so without this the
+// per-record lockout can be sidestepped by just requesting new OTPs.
+const OTP_SEND_THROTTLE = { default: { ttl: 60_000, limit: 3 } }; // 3/min/IP
+const OTP_VERIFY_THROTTLE = { default: { ttl: 60_000, limit: 5 } }; // 5/min/IP
+const LOGIN_THROTTLE = { default: { ttl: 60_000, limit: 5 } }; // 5/min/IP
 
 // Cookie names + shared options for the auth cookie pair. Kept alongside
 // the controller (rather than a config file) since jwt.strategy.ts is the
@@ -31,6 +45,7 @@ export class AuthController {
    * For login-time OTP dispatch, use POST /auth/send-login-otp instead,
    * which resolves the correct contact address from the identity record.
    */
+  @Throttle(OTP_SEND_THROTTLE)
   @Post('send-otp')
   sendOtp(@Body() dto: SendOtpDto) {
     return this.authService.sendOtp(dto.identifier);
@@ -42,6 +57,7 @@ export class AuthController {
    * For ORG/GOV types, looks up the stored contact and sends OTP there —
    * the client does not supply the contact address directly.
    */
+  @Throttle(OTP_SEND_THROTTLE)
   @Post('send-login-otp')
   sendLoginOtp(@Body() dto: LoginDto) {
     return this.authService.sendLoginOtp(dto);
@@ -51,6 +67,7 @@ export class AuthController {
    * Standalone OTP verify — for two-step flows (e.g. registration confirm).
    * Login does its own atomic OTP verify; this endpoint is not needed there.
    */
+  @Throttle(OTP_VERIFY_THROTTLE)
   @Post('verify-otp')
   verifyOtp(@Body() dto: VerifyOtpDto) {
     return this.authService.verifyOtp(dto.identifier, dto.otp);
@@ -65,6 +82,7 @@ export class AuthController {
    * it. A second, non-httpOnly `ovp_csrf` cookie is set alongside it for
    * double-submit CSRF protection on mutating requests (see CsrfGuard).
    */
+  @Throttle(LOGIN_THROTTLE)
   @Post('login')
   async login(
     @Body() dto: LoginDto,

@@ -88,6 +88,7 @@ foreach ($Part in $Parts) {
         "-tzip"
         "`"$ZipPath`""
         "."
+        "-xr!dist"
         "-xr!node_modules"
         "-xr!.env"
         "-xr!.env.*"

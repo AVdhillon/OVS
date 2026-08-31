@@ -86,14 +86,12 @@ export class VotingService {
       throw new ConflictException('You have already voted in this event');
     }
 
-    // Secondary check via votes table as a race-condition guard.
-    // The UNIQUE(event_id, orgid, uid) DB constraint is the final safety net.
-    const existingVote = await this.prisma.votes.findFirst({
-      where: { event_id: dto.event_id, orgid: member.orgid, uid: member.uid },
-    });
-    if (existingVote) {
-      throw new ConflictException('You have already voted in this event');
-    }
+    // Secondary "already voted" check used to live here as a read against
+    // the old `votes` table. votes no longer exists (finding #1 fix —
+    // vote_ballots carries no identity to query by), so the race-condition
+    // guard is now the atomic UPDATE ... WHERE has_voted = FALSE claim
+    // inside cast_ballot() itself (step 10 below) — that claim IS the final
+    // safety net now, in place of the old UNIQUE(event_id, orgid, uid).
 
     // ── 6. Validate candidate belongs to the event ───────────────────────
     const candidate = await this.prisma.candidates.findFirst({
@@ -141,38 +139,49 @@ export class VotingService {
       req.socket.remoteAddress ||
       null;
 
-    // ── 10. Insert vote ──────────────────────────────────────────────────
-    // DB triggers fire after insert:
-    //   trg_anonymize_vote          — sets voter_hash from uid + salt
-    //   trg_validate_vote_candidate — confirms candidate belongs to event
-    //   trg_check_voter_role        — confirms is_voter = true
-    //   trg_vote_validity           — final scope eligibility check
-    //   trg_vote_count              — increments vote_results
-    //   trg_mark_participant_voted  — flips event_participants.has_voted
-    //   trg_detect_vote_fraud       — logs suspicious IP/device patterns
+    // ── 10. Cast the ballot ──────────────────────────────────────────────
+    // FIX (finding #1 — vote anonymization split-table design): the old
+    // `INSERT INTO votes (...)` wrote orgid/uid in cleartext into the same
+    // row as voter_hash, which meant anyone with DB read access (or a
+    // leaked backup, or the audit_votes snapshot) could see exactly who
+    // voted for what. `votes` and its identity-keyed triggers are retired.
+    //
+    // cast_ballot() is now the only code path permitted to write a ballot.
+    // In one transaction it: re-validates candidate/voter-role/scope
+    // eligibility, atomically claims event_participants.has_voted (the sole
+    // remaining identity <-> "has voted" intersection point, replacing the
+    // old UNIQUE(event_id, orgid, uid) safety net), computes voter_hash from
+    // (event_id, uid, salt), and inserts the anonymous row into
+    // vote_ballots — which has no orgid/uid column at all. AFTER INSERT
+    // triggers on vote_ballots then handle what's left:
+    //   trg_vote_count       — increments vote_results
+    //   trg_detect_vote_fraud— logs suspicious IP/device patterns
+    //   audit_vote_ballots   — snapshots the row (safe: no identity in it)
+    //
+    // The pre-flight checks above (steps 1-9) are unchanged and still what a
+    // caller sees first — cast_ballot()'s own guards are the DB-level
+    // last-resort, not the primary UX.
     const SALT = process.env.VOTER_HASH_SALT!;
 
     const vote = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`
     SELECT set_config('app.voter_hash_salt', ${SALT}, true)
   `;
-      return tx.votes.create({
-        data: {
-          event_id: dto.event_id,
-          orgid: member.orgid,
-          uid: member.uid,
-          candidate_id: dto.candidate_id,
-          ip_address: ip,
-          device_fingerprint: dto.device_fingerprint ?? null,
-        },
-        select: {
-          vote_id: true,
-          event_id: true,
-          candidate_id: true,
-          voted_at: true,
-          voter_hash: true,
-        },
-      });
+      const rows = await tx.$queryRaw<
+        {
+          vote_id: number;
+          event_id: number;
+          candidate_id: number;
+          voted_at: Date;
+          voter_hash: string;
+        }[]
+      >`
+    SELECT * FROM cast_ballot(
+      ${member.orgid}, ${member.uid}, ${dto.event_id}, ${dto.candidate_id},
+      ${ip}::inet, ${dto.device_fingerprint ?? null}
+    )
+  `;
+      return rows[0];
     });
 
     // ── 11. Optionally return live results ───────────────────────────────
