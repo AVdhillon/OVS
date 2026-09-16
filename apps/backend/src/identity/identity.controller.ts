@@ -20,7 +20,10 @@ export class IdentityController {
   }
 
   // POST /identity/wallet/add
-  // Links a new GOV or ORG identity to the caller's unified account.
+  // EDIT (Phase 1 — auth model consolidation, subphase 1.4): stale comment
+  // updated — only ORG identities can be linked now (GOV retired platform-
+  // wide; see AddIdentityDto/identity.service.ts). No behavior change.
+  // Links a new ORG identity to the caller's unified account.
   // Requires a valid OTP sent to the contact on file for that identity.
   @Post('wallet/add')
   addIdentity(@CurrentUser() user: JwtUser, @Body() dto: AddIdentityDto) {

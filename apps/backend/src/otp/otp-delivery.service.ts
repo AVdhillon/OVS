@@ -2,6 +2,16 @@ import { Injectable, Logger } from '@nestjs/common';
 import sgMail from '@sendgrid/mail';
 import twilio from 'twilio';
 
+// EDIT (Phase 4 — cutover, subphase 4.3): every OTP this service has ever
+// sent was implicitly a login/registration-adjacent "prove you control this
+// identifier" message. `OtpPurpose` names that ('LOGIN', the default every
+// existing caller keeps using) and adds the one new case this subphase
+// needs: 'ORG_DOMAIN_OWNERSHIP', OrgRequestsService.submit()'s check that
+// whoever supplied an org's contact email actually controls it. Defined
+// here (not in otp.service.ts) so otp.service.ts can import it from this
+// file without the two files importing from each other.
+export type OtpPurpose = 'LOGIN' | 'ORG_DOMAIN_OWNERSHIP';
+
 @Injectable()
 export class OtpDeliveryService {
   private readonly logger = new Logger(OtpDeliveryService.name);
@@ -20,17 +30,48 @@ export class OtpDeliveryService {
    * Dispatch OTP to the correct channel based on identifier format.
    *   Email (contains @) → SendGrid
    *   10-digit mobile    → Twilio WhatsApp sandbox
+   *
+   * EDIT (Phase 4 — cutover, subphase 4.3): `purpose` is passed through to
+   * sendEmail() so the message can say what it's actually confirming — see
+   * that method. WhatsApp delivery doesn't take it: 'ORG_DOMAIN_OWNERSHIP'
+   * only ever targets org_email (SubmitOrgRequestDto validates it with
+   * @IsEmail()), so the mobile channel never carries anything but a LOGIN
+   * OTP in practice.
    */
-  async send(identifier: string, otp: string): Promise<void> {
+  async send(
+    identifier: string,
+    otp: string,
+    purpose: OtpPurpose = 'LOGIN',
+  ): Promise<void> {
     if (identifier.includes('@')) {
-      await this.sendEmail(identifier, otp);
+      await this.sendEmail(identifier, otp, purpose);
     } else {
       await this.sendWhatsApp(identifier, otp);
     }
   }
 
   // ─── Email via SendGrid ──────────────────────────────────────────────────
-  private async sendEmail(to: string, otp: string): Promise<void> {
+  private async sendEmail(
+    to: string,
+    otp: string,
+    purpose: OtpPurpose = 'LOGIN',
+  ): Promise<void> {
+    // EDIT (Phase 4 — cutover, subphase 4.3): purpose-specific copy so an
+    // org-request submitter opening this email sees a message about
+    // confirming their organization's email, not a generic "OTP Code" one
+    // that reads like a login attempt they may not recognize.
+    const { subject, intro } =
+      purpose === 'ORG_DOMAIN_OWNERSHIP'
+        ? {
+            subject: 'Confirm your organization email — VoteCore',
+            intro:
+              "Enter this code to confirm you control this organization's " +
+              'email address for your VoteCore organization request:',
+          }
+        : {
+            subject: 'Your OTP Code',
+            intro: 'Your one-time password:',
+          };
     try {
       await sgMail.send({
         to,
@@ -38,12 +79,12 @@ export class OtpDeliveryService {
           email: process.env.SENDGRID_SENDER_EMAIL!,
           name: 'VoteCore',
         },
-        subject: 'Your OTP Code',
+        subject,
         html: `
           <div style="font-family:sans-serif;max-width:400px;margin:auto;
                       padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
             <h2 style="color:#1d4ed8;">VoteCore</h2>
-            <p>Your one-time password:</p>
+            <p>${intro}</p>
             <div style="font-size:32px;font-weight:700;letter-spacing:8px;padding:16px 0;">
               ${otp}
             </div>
@@ -53,7 +94,7 @@ export class OtpDeliveryService {
           </div>
         `,
       });
-      this.logger.log(`OTP email sent → ${to}`);
+      this.logger.log(`OTP email sent → ${to} (${purpose})`);
     } catch (err) {
       this.logger.error(`Failed to send OTP email to ${to}`, err);
       throw err;

@@ -39,41 +39,27 @@ export class IdentityService {
     // 2. Verify OTP for the supplied identifier
     await this.otpService.verifyOtp(dto.identifier, dto.otp);
     return await this.prisma.$transaction(async (tx) => {
-      // 3. Validate the identity exists and the identifier matches it
-      if (dto.identity_type === 'GOV') {
-        const gov = await tx.gov_identity.findUnique({
-          where: { epic_id: dto.identity_id },
-        });
-        if (!gov) throw new NotFoundException('Government identity not found');
+      // 3. Validate the identity exists and the identifier matches it.
+      // EDIT (Phase 1 — auth model consolidation, subphase 1.4): the GOV
+      // branch (gov_identity lookup) is removed — GOV identities can no
+      // longer be linked (AddIdentityDto.identity_type is now 'ORG' only,
+      // matching identity_wallet's chk_identity_type CHECK constraint from
+      // subphase 1.1). dto.uid is guaranteed present by AddIdentityDto's
+      // validation now that it's no longer conditional on identity_type.
+      const member = await tx.org_members.findFirst({
+        where: { orgid: dto.identity_id, uid: dto.uid },
+      });
+      if (!member) throw new NotFoundException('Org member not found');
 
-        const contact = dto.identifier.includes('@') ? 'email' : 'mobile';
-        if (gov[contact] !== dto.identifier) {
-          throw new ForbiddenException(
-            'Identifier does not match the GOV identity on record',
-          );
-        }
-      }
+      const identifierIsEmail = dto.identifier.includes('@');
+      const match = identifierIsEmail
+        ? member.email === dto.identifier
+        : member.mobile === dto.identifier;
 
-      if (dto.identity_type === 'ORG') {
-        if (!dto.uid) {
-          throw new BadRequestException('uid is required for ORG identity');
-        }
-
-        const member = await tx.org_members.findFirst({
-          where: { orgid: dto.identity_id, uid: dto.uid },
-        });
-        if (!member) throw new NotFoundException('Org member not found');
-
-        const identifierIsEmail = dto.identifier.includes('@');
-        const match = identifierIsEmail
-          ? member.email === dto.identifier
-          : member.mobile === dto.identifier;
-
-        if (!match) {
-          throw new ForbiddenException(
-            'Identifier does not match the org member record',
-          );
-        }
+      if (!match) {
+        throw new ForbiddenException(
+          'Identifier does not match the org member record',
+        );
       }
 
       // 4. Check not already linked
@@ -82,7 +68,7 @@ export class IdentityService {
           pid,
           identity_type: dto.identity_type,
           identity_id: dto.identity_id,
-          ...(dto.uid ? { uid: dto.uid } : {}),
+          uid: dto.uid,
         },
       });
       if (existing) throw new BadRequestException('Identity already in wallet');
@@ -93,7 +79,7 @@ export class IdentityService {
           pid,
           identity_type: dto.identity_type,
           identity_id: dto.identity_id,
-          uid: dto.uid ?? null,
+          uid: dto.uid,
         },
         select: {
           identity_type: true,
@@ -102,15 +88,13 @@ export class IdentityService {
         },
       });
 
-      // 6. If ORG — also bind pid to org_members so the org can resolve
-      //    the unified account from their roster.
+      // 6. Also bind pid to org_members so the org can resolve the unified
+      //    account from their roster.
       //    org_members.pid is the authoritative link; no separate join table exists.
-      if (dto.identity_type === 'ORG' && dto.uid) {
-        await tx.org_members.updateMany({
-          where: { orgid: dto.identity_id, uid: dto.uid, pid: null },
-          data: { pid },
-        });
-      }
+      await tx.org_members.updateMany({
+        where: { orgid: dto.identity_id, uid: dto.uid, pid: null },
+        data: { pid },
+      });
       return entry;
     });
   }

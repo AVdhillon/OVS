@@ -9,7 +9,16 @@ import { api } from "../../lib/api";
 
 // ─── Identity / Session types ─────────────────────────────────────────────────
 
-export type SessionType = "UNIFIED" | "ORG" | "GOV";
+// EDIT (Phase 1 — auth model consolidation, subphase 1.5): GOV retired
+// platform-wide, SITEADMIN added — mirrors the backend's JwtUser narrowing
+// (subphase 1.2: 'UNIFIED' | 'ORG' | 'SITEADMIN'). Note this app's own
+// GET /auth/profile call can in practice only ever resolve to UNIFIED or
+// ORG — SITEADMIN sessions live on the separate ovp_admin_token cookie,
+// read by the standalone admin app (subphase 1.10), never by this app's
+// JwtStrategy. SITEADMIN is included in the union anyway so this type
+// stays a complete, accurate mirror of the JWT payload shape rather than
+// one that's silently wrong the moment anything shares it.
+export type SessionType = "UNIFIED" | "ORG" | "SITEADMIN";
 
 /** Mirrors JWT payload. pid is string (BigInt serialised). */
 export interface Session {
@@ -17,7 +26,8 @@ export interface Session {
   pid?: string; // UNIFIED + ORG (when linked)
   orgid?: string; // ORG
   uid?: string; // ORG
-  epic_id?: string; // GOV
+  admin_id?: string; // SITEADMIN
+  is_super_admin?: boolean; // SITEADMIN
   session_id: number;
 }
 
@@ -36,9 +46,13 @@ export interface User {
 
 // ─── Identity Wallet entry ────────────────────────────────────────────────────
 
+// EDIT (Phase 1 — auth model consolidation, subphase 1.5): narrowed to
+// 'ORG' only — matches the backend's identity_wallet.chk_identity_type
+// CHECK constraint (subphase 1.1) and AddIdentityDto (subphase 1.4). GOV
+// identities can no longer exist in any wallet.
 export interface WalletIdentity {
-  identity_type: "ORG" | "GOV";
-  identity_id: string; // orgid or epic_id
+  identity_type: "ORG";
+  identity_id: string; // orgid
   uid?: string; // present for ORG entries
 }
 
@@ -192,7 +206,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
           pid: raw.pid != null ? String(raw.pid) : undefined,
           orgid: raw.orgid,
           uid: raw.uid,
-          epic_id: raw.epic_id,
+          admin_id: raw.admin_id,
+          is_super_admin: raw.is_super_admin,
           session_id: raw.session_id,
         };
         setSession(payload);

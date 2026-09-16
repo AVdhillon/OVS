@@ -17,29 +17,23 @@ import {
   DialogTitle,
   DialogDescription,
 } from '../components/ui/dialog';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '../components/ui/select';
 import { OTPVerificationModal } from '../components/otp-verification-modal';
 import { Shield, Building2, Plus, Loader2, User } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type IdentityType = 'GOV' | 'ORG';
-
+// EDIT (Phase 1 — auth model consolidation, subphase 1.7): GOV identity
+// linking removed. Wallet entries are ORG-only now (matches WalletIdentity,
+// narrowed in 1.5, and AddIdentityDto, narrowed in 1.4), so there's no
+// longer an identity-type choice to make in this form — Org ID + UID are
+// the only fields left.
 interface AddFormState {
-  identity_type: IdentityType;
-  identity_id: string; // epic_id for GOV, orgid for ORG
-  uid: string;         // required for ORG
+  identity_id: string; // orgid
+  uid: string;         // member UID in that org
   contact: string;     // mobile or email OTP is sent to
 }
 
 const EMPTY_FORM: AddFormState = {
-  identity_type: 'GOV',
   identity_id: '',
   uid: '',
   contact: '',
@@ -48,47 +42,32 @@ const EMPTY_FORM: AddFormState = {
 // ─── Wallet Entry Card ────────────────────────────────────────────────────────
 
 function WalletCard({ entry }: { entry: WalletIdentity }) {
-  const isGov = entry.identity_type === 'GOV';
   return (
-      <Card className={`transition-shadow hover:shadow-md ${isGov ? 'border-blue-200' : 'border-violet-200'}`}>
+      <Card className="transition-shadow hover:shadow-md border-violet-200">
         <CardHeader className="pb-3">
           <div className="flex items-start justify-between">
-            <div className={`p-2 rounded-lg ${isGov ? 'bg-blue-100 text-blue-700' : 'bg-violet-100 text-violet-700'}`}>
-              {isGov ? <Shield className="h-5 w-5" /> : <Building2 className="h-5 w-5" />}
+            <div className="p-2 rounded-lg bg-violet-100 text-violet-700">
+              <Building2 className="h-5 w-5" />
             </div>
-            <Badge
-                variant="outline"
-                className={`text-xs ${isGov ? 'border-blue-300 text-blue-700' : 'border-violet-300 text-violet-700'}`}
-            >
-              {isGov ? 'Government' : 'Organization'}
+            <Badge variant="outline" className="text-xs border-violet-300 text-violet-700">
+              Organization
             </Badge>
           </div>
-          <CardTitle className="text-sm mt-3">
-            {isGov ? 'Government Identity' : entry.identity_id}
-          </CardTitle>
+          <CardTitle className="text-sm mt-3">{entry.identity_id}</CardTitle>
           <CardDescription className="text-xs font-mono">
-            {isGov ? entry.identity_id : `UID: ${entry.uid ?? '—'}`}
+            UID: {entry.uid ?? '—'}
           </CardDescription>
         </CardHeader>
         <CardContent className="pt-0">
           <div className="space-y-1.5 text-xs">
-            {isGov ? (
-                <div className="flex justify-between text-muted-foreground">
-                  <span>EPIC ID</span>
-                  <span className="font-mono font-medium text-foreground">{entry.identity_id}</span>
-                </div>
-            ) : (
-                <>
-                  <div className="flex justify-between text-muted-foreground">
-                    <span>Org ID</span>
-                    <span className="font-mono font-medium text-foreground">{entry.identity_id}</span>
-                  </div>
-                  <div className="flex justify-between text-muted-foreground">
-                    <span>Member UID</span>
-                    <span className="font-mono font-medium text-foreground">{entry.uid ?? '—'}</span>
-                  </div>
-                </>
-            )}
+            <div className="flex justify-between text-muted-foreground">
+              <span>Org ID</span>
+              <span className="font-mono font-medium text-foreground">{entry.identity_id}</span>
+            </div>
+            <div className="flex justify-between text-muted-foreground">
+              <span>Member UID</span>
+              <span className="font-mono font-medium text-foreground">{entry.uid ?? '—'}</span>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -114,12 +93,10 @@ function AddIdentityDialog({
   const set = (field: keyof AddFormState, value: string) =>
       setForm((f) => ({ ...f, [field]: value }));
 
-  const isGov = form.identity_type === 'GOV';
-
   const canRequestOtp =
       form.contact.trim() !== '' &&
       form.identity_id.trim() !== '' &&
-      (isGov || form.uid.trim() !== '');
+      form.uid.trim() !== '';
 
   const handleClose = () => {
     setForm(EMPTY_FORM);
@@ -145,11 +122,11 @@ function AddIdentityDialog({
     setSubmitting(true);
     try {
       await api.addIdentity({
-        identity_type: form.identity_type,
+        identity_type: 'ORG',
         identity_id: form.identity_id.trim(),
         otp,
         identifier: form.contact.trim(),
-        ...(form.identity_type === 'ORG' && { uid: form.uid.trim() }),
+        uid: form.uid.trim(),
       });
 
       // Re-fetch wallet to get the canonical server state
@@ -160,7 +137,7 @@ function AddIdentityDialog({
           .at(-1);
 
       toast.success('Identity linked successfully');
-      onSuccess(added ?? { identity_type: form.identity_type, identity_id: form.identity_id.trim(), uid: form.uid.trim() || undefined });
+      onSuccess(added ?? { identity_type: 'ORG', identity_id: form.identity_id.trim(), uid: form.uid.trim() });
       handleClose();
     } catch (e: any) {
       toast.error(e.message ?? 'Failed to add identity');
@@ -177,66 +154,31 @@ function AddIdentityDialog({
             <DialogHeader>
               <DialogTitle>Link Identity</DialogTitle>
               <DialogDescription>
-                Connect a Government or Organization identity to your wallet.
+                Connect an Organization identity to your wallet.
               </DialogDescription>
             </DialogHeader>
 
             <div className="space-y-4 mt-2">
-              {/* Identity type */}
+              {/* Org ID + UID */}
               <div className="space-y-1.5">
-                <Label>Identity Type</Label>
-                <Select
-                    value={form.identity_type}
-                    onValueChange={(v) => setForm({ ...EMPTY_FORM, identity_type: v as IdentityType })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="GOV">Government (EPIC ID)</SelectItem>
-                    <SelectItem value="ORG">Organization</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Label>Organization ID <span className="text-destructive">*</span></Label>
+                <Input
+                    placeholder="e.g. ABC1234"
+                    value={form.identity_id}
+                    onChange={(e) => set('identity_id', e.target.value.toUpperCase())}
+                    className="font-mono"
+                    autoFocus
+                />
               </div>
-
-              {/* GOV: EPIC ID */}
-              {isGov && (
-                  <div className="space-y-1.5">
-                    <Label>EPIC ID <span className="text-destructive">*</span></Label>
-                    <Input
-                        placeholder="Enter your EPIC ID"
-                        value={form.identity_id}
-                        onChange={(e) => set('identity_id', e.target.value)}
-                        className="font-mono"
-                        autoFocus
-                    />
-                  </div>
-              )}
-
-              {/* ORG: Org ID + UID */}
-              {!isGov && (
-                  <>
-                    <div className="space-y-1.5">
-                      <Label>Organization ID <span className="text-destructive">*</span></Label>
-                      <Input
-                          placeholder="e.g. ABC1234"
-                          value={form.identity_id}
-                          onChange={(e) => set('identity_id', e.target.value.toUpperCase())}
-                          className="font-mono"
-                          autoFocus
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label>Your UID in that Org <span className="text-destructive">*</span></Label>
-                      <Input
-                          placeholder="e.g. EMP001"
-                          value={form.uid}
-                          onChange={(e) => set('uid', e.target.value.toUpperCase())}
-                          className="font-mono"
-                      />
-                    </div>
-                  </>
-              )}
+              <div className="space-y-1.5">
+                <Label>Your UID in that Org <span className="text-destructive">*</span></Label>
+                <Input
+                    placeholder="e.g. EMP001"
+                    value={form.uid}
+                    onChange={(e) => set('uid', e.target.value.toUpperCase())}
+                    className="font-mono"
+                />
+              </div>
 
               <Separator />
 
@@ -304,7 +246,7 @@ export function IdentityWalletView() {
 
   const isUnified = session?.type === 'UNIFIED';
 
-  // Fetch wallet on mount — UNIFIED only (GOV/ORG → 403)
+  // Fetch wallet on mount — UNIFIED only (ORG/SITEADMIN sessions → 403)
   useEffect(() => {
     if (!isUnified) { setLoading(false); return; }
     api.getWallet()
@@ -319,8 +261,10 @@ export function IdentityWalletView() {
         .catch(() => setWallet([...wallet, entry]));
   };
 
-  const govEntries = wallet.filter((w) => w.identity_type === 'GOV');
-  const orgEntries = wallet.filter((w) => w.identity_type === 'ORG');
+  // EDIT (Phase 1 — auth model consolidation, subphase 1.7): wallet entries
+  // are ORG-only now (WalletIdentity narrowed in 1.5), so there's no GOV
+  // group left to split out — every entry is an org entry.
+  const orgEntries = wallet;
 
   return (
       <div className="max-w-4xl mx-auto space-y-8">
@@ -409,9 +353,6 @@ export function IdentityWalletView() {
                   <Card>
                     <CardContent className="py-16 text-center space-y-4">
                       <div className="flex justify-center gap-3">
-                        <div className="p-3 rounded-xl bg-blue-100 text-blue-600">
-                          <Shield className="h-7 w-7" />
-                        </div>
                         <div className="p-3 rounded-xl bg-violet-100 text-violet-600">
                           <Building2 className="h-7 w-7" />
                         </div>
@@ -419,7 +360,7 @@ export function IdentityWalletView() {
                       <div>
                         <p className="font-semibold mb-1">No linked identities</p>
                         <p className="text-sm text-muted-foreground">
-                          Link a Government or Organization identity to enable voting under that identity.
+                          Link an Organization identity to enable voting under that identity.
                         </p>
                       </div>
                       <Button onClick={() => setAddOpen(true)}>
@@ -433,23 +374,6 @@ export function IdentityWalletView() {
               {/* Identity groups */}
               {!loading && wallet.length > 0 && (
                   <div className="space-y-6">
-                    {govEntries.length > 0 && (
-                        <section>
-                          <div className="flex items-center gap-2 mb-3">
-                            <Shield className="h-4 w-4 text-blue-600" />
-                            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-                              Government
-                            </h2>
-                            <Badge variant="secondary" className="text-xs">{govEntries.length}</Badge>
-                          </div>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                            {govEntries.map((w) => (
-                                <WalletCard key={`${w.identity_type}-${w.identity_id}`} entry={w} />
-                            ))}
-                          </div>
-                        </section>
-                    )}
-
                     {orgEntries.length > 0 && (
                         <section>
                           <div className="flex items-center gap-2 mb-3">

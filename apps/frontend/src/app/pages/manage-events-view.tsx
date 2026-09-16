@@ -1242,7 +1242,6 @@ export function ManageEventsView() {
 
   const isUnified = session?.type === "UNIFIED";
   const isOrg = session?.type === "ORG";
-  const isGov = session?.type === "GOV";
 
   const loadOrgs = useCallback(async () => {
     setOrgsLoading(true);
@@ -1266,7 +1265,6 @@ export function ManageEventsView() {
   }, [setEvents]);
 
   useEffect(() => {
-    if (isGov) return; // GOV has no org events to manage
     if (orgs.length === 0) loadOrgs();
     refreshEvents();
   }, []);
@@ -1288,29 +1286,13 @@ export function ManageEventsView() {
       !isFuture(new Date(e.start_time)),
   ).length;
 
-  // GOV sessions have no event management access
-  if (isGov) {
-    return (
-      <div className="max-w-4xl mx-auto space-y-6">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Manage Events
-          </h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            Create and manage voting events for your organisations
-          </p>
-        </div>
-        <Card>
-          <CardContent className="py-10 text-center space-y-2">
-            <p className="font-semibold">Not available</p>
-            <p className="text-sm text-muted-foreground">
-              Event management requires a Unified or Organization session.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
+  // EDIT (Phase 1 — auth model consolidation, subphase 1.9): the
+  // "GOV sessions have no event management access" early return removed
+  // along with `isGov` above — GOV was the only session type that this
+  // page ever refused to render for. UNIFIED and ORG (this app's only real
+  // session types — SITEADMIN sessions live on the separate admin app, see
+  // app-context.tsx's SessionType note) both reach the full page below now,
+  // same as they always could.
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">

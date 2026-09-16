@@ -1,5 +1,6 @@
 import { Outlet, useNavigate, useLocation } from 'react-router';
 import { useAppContext } from '../context/app-context';
+import type { SessionType } from '../context/app-context';
 import { useState, useMemo } from 'react';
 import {
   Vote,
@@ -12,6 +13,7 @@ import {
   ChevronRight,
   Menu,
   X,
+  ClipboardList,
 } from 'lucide-react';
 import {
   DropdownMenu,
@@ -31,38 +33,38 @@ import { toast } from 'sonner';
 
 // ─── Explicit nav item type ───────────────────────────────────────────────────
 
+// EDIT (Phase 1 — auth model consolidation, subphase 1.8): dropped the
+// `hiddenFor` mechanism — it existed solely to hide organizer-only items
+// from GOV sessions, which no longer exist. UNIFIED and ORG (the only
+// session types this app's own login ever produces — see app-context.tsx's
+// SessionType note) were always shown these items regardless, so nothing
+// is hidden now and there's no remaining case for a hiddenFor list to gate.
 interface NavItemConfig {
   path: string;
   label: string;
   icon: React.ElementType;
-  hiddenFor?: readonly SessionType[];
 }
 
 const NAV_ITEMS: NavItemConfig[] = [
   { path: '/dashboard/events',          label: 'Events',           icon: Vote     },
-  { path: '/dashboard/manage-events',   label: 'Manage Events',    icon: Calendar, hiddenFor: ['GOV'] },
-  { path: '/dashboard/organizations',   label: 'Organizations',    icon: Building2, hiddenFor: ['GOV'] },
+  { path: '/dashboard/manage-events',   label: 'Manage Events',    icon: Calendar },
+  { path: '/dashboard/organizations',   label: 'Organizations',    icon: Building2 },
+  // EDIT (Phase 4 — cutover, subphase 4.7): tracking counterpart to the
+  // Organizations page's "Request Org" flow (4.6) — not gated out of
+  // NAV_ITEMS for non-UNIFIED sessions, same as every other item here since
+  // 1.8; the page itself shows a notice instead (mirrors Identity Wallet's
+  // own UNIFIED-only gate one row up).
+  { path: '/dashboard/my-requests',     label: 'My Requests',      icon: ClipboardList },
   { path: '/dashboard/identity-wallet', label: 'Identity Wallet',  icon: Wallet   },
   { path: '/dashboard/account',         label: 'Account',          icon: Settings },
 ];
 
-// NOTE: this is purely a UX nicety (declutters the nav for sessions that
-// can't organize anything) — the backend is the real gate for these routes
-// and doesn't change based on this filtering.
-function getVisibleNavItems(sessionType: SessionType | undefined): NavItemConfig[] {
-  return NAV_ITEMS.filter(
-      (item) => !item.hiddenFor || !sessionType || !item.hiddenFor.includes(sessionType),
-  );
-}
-
 // ─── Session type badge ───────────────────────────────────────────────────────
 
-type SessionType = 'UNIFIED' | 'ORG' | 'GOV';
-
 const SESSION_BADGE: Record<SessionType, { label: string; className: string }> = {
-  UNIFIED: { label: 'Unified',      className: 'bg-primary/10 text-primary border-primary/20'       },
-  ORG:     { label: 'Organization', className: 'bg-violet-50 text-violet-700 border-violet-200'     },
-  GOV:     { label: 'Government',   className: 'bg-blue-50 text-blue-700 border-blue-200'           },
+  UNIFIED:   { label: 'Unified',      className: 'bg-primary/10 text-primary border-primary/20'   },
+  ORG:       { label: 'Organization', className: 'bg-violet-50 text-violet-700 border-violet-200' },
+  SITEADMIN: { label: 'Site Admin',   className: 'bg-amber-50 text-amber-700 border-amber-200'    },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -188,13 +190,6 @@ export function DashboardLayout() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  // Nav items are filtered by session type (GOV sessions don't see
-  // organizer-only items) — backend enforcement is unchanged either way.
-  const visibleNavItems = useMemo(
-      () => getVisibleNavItems(session?.type as SessionType | undefined),
-      [session?.type],
-  );
-
   // FIX 6: Memoize derived values that depend on stable inputs so they are
   //         not recomputed on every render caused by unrelated state changes.
   const currentNav = useMemo(
@@ -281,9 +276,6 @@ export function DashboardLayout() {
                   {session?.type === 'ORG' && session.uid && (
                       <span className="ml-1.5 font-mono opacity-75">{session.uid}</span>
                   )}
-                  {session?.type === 'GOV' && session.epic_id && (
-                      <span className="ml-1.5 font-mono opacity-75">{session.epic_id}</span>
-                  )}
                 </Badge>
             )}
 
@@ -369,7 +361,7 @@ export function DashboardLayout() {
                       onToggle={() => setSidebarCollapsed((c) => !c)}
                       onNavigate={handleSidebarNavigate}
                       isActive={isActive}
-                      navItems={visibleNavItems}
+                      navItems={NAV_ITEMS}
                   />
                 </aside>
               </div>
@@ -388,7 +380,7 @@ export function DashboardLayout() {
                 onToggle={() => setSidebarCollapsed((c) => !c)}
                 onNavigate={(path) => navigate(path)}
                 isActive={isActive}
-                navItems={visibleNavItems}
+                navItems={NAV_ITEMS}
             />
           </aside>
 

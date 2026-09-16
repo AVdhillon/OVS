@@ -76,8 +76,14 @@ import {
   TriangleAlert,
   UserPlus,
   ChevronDown,
+  Loader2,
 } from "lucide-react";
 import React from "react";
+// EDIT (Phase 4 — cutover, subphase 4.6): the request-submit flow's optional
+// org-email verification step reuses this generic OTP modal — same
+// component auth-page.tsx/identity-wallet-view.tsx already use for their
+// own send-then-verify flows, not a new one.
+import { OTPVerificationModal } from "../components/otp-verification-modal";
 
 // FIX: use OrgMemberWithRoles from api.tsx instead of redefining a local OrgMember.
 // This removes the stale local type and ensures the cast in fetchMembers is no longer needed.
@@ -358,8 +364,19 @@ function ScopeTreeNode({
   );
 }
 
-// ─── Register Org Modal ───────────────────────────────────────────────────────
-function RegisterOrgModal({
+// ─── Submit Org Request Modal ──────────────────────────────────────────────────
+// EDIT (Phase 4 — cutover, subphase 4.6): replaces RegisterOrgModal.
+// Organization creation is no longer instant — this submits an org_requests
+// row (OrgRequestsService.submit(), 2.3, via POST /org/request, wired 4.1)
+// that a site admin reviews and decides on through the admin portal (3.1/
+// 3.5); approval is what actually creates the organization (2.4), not this
+// form. Accordingly this form no longer collects preferred_orgid/caller_uid/
+// caller_identifier/participants — SubmitOrgRequestDto has none of those
+// (see that DTO's own comment for why: there's nothing to be a member of,
+// or an orgid to pick, until a request is approved), so the "Initial
+// Participants" table/CSV UI and the orgid-suggestion helper are gone with
+// them, not just hidden.
+function SubmitOrgRequestModal({
   open,
   onClose,
   onSuccess,
@@ -369,92 +386,106 @@ function RegisterOrgModal({
   onSuccess: () => void;
 }) {
   const [orgName, setOrgName] = useState("");
-  const [preferredOrgId, setPreferredOrgId] = useState("");
-  const [callerUid, setCallerUid] = useState("");
-  const [callerIdentifier, setCallerIdentifier] = useState("");
-  const [memberTab, setMemberTab] = useState<"table" | "csv">("table");
-  const [csvText, setCsvText] = useState("");
-  // FIX: role type was 'v' | 'vo' — missing 'o' and 'none' which are valid backend values.
-  const [tableRows, setTableRows] = useState([
-    { uid: "", contact: "", role: "v" as "v" | "vo" | "o" | "none" },
-  ]);
-  const [loading, setLoading] = useState(false);
+  const [orgEmail, setOrgEmail] = useState("");
+  const [expectedMemberCount, setExpectedMemberCount] = useState("");
+  const [justification, setJustification] = useState("");
+  const [sendingOtp, setSendingOtp] = useState(false);
+  const [otpOpen, setOtpOpen] = useState(false);
+  const [otpSentAt, setOtpSentAt] = useState<number | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  const suggestedOrgId =
-    preferredOrgId.trim() || (orgName ? generateOrgId(orgName) : "");
-  const addRow = () =>
-    setTableRows((r) => [...r, { uid: "", contact: "", role: "v" as const }]);
-  const updateRow = (idx: number, field: string, val: string) =>
-    setTableRows((rows) =>
-      rows.map((r, i) => (i === idx ? { ...r, [field]: val } : r)),
-    );
-  const removeRow = (idx: number) =>
-    setTableRows((rows) => rows.filter((_, i) => i !== idx));
+  const isEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(orgEmail.trim());
 
-  const buildParticipants = () =>
-    memberTab === "csv"
-      ? parseCsv(csvText)
-          .filter((r) => (r.uid ?? "").trim())
-          .map((r) => ({
-            uid: (r.uid ?? "").trim().toUpperCase(),
-            participant_identifier:
-              (r.contact ?? r.email ?? r.mobile ?? "").trim() || undefined,
-            // FIX: cast now includes 'o' and 'none' which the backend ParticipantRowDto supports.
-            role: (r.role as "v" | "vo" | "o" | "none") || "v",
-          }))
-      : tableRows
-          .filter((r) => r.uid.trim())
-          .map((r) => ({
-            uid: r.uid.trim().toUpperCase(),
-            participant_identifier: r.contact.trim() || undefined,
-            role: r.role,
-          }));
+  const resetForm = () => {
+    setOrgName("");
+    setOrgEmail("");
+    setExpectedMemberCount("");
+    setJustification("");
+    setOtpOpen(false);
+    setOtpSentAt(null);
+  };
 
-  const handleSubmit = async () => {
+  const handleClose = () => {
+    resetForm();
+    onClose();
+  };
+
+  // Does the actual submit — called directly when no org_email was given,
+  // or as the OTP modal's onVerify once a domain-ownership code has been
+  // entered (mirrors identity-wallet-view.tsx's AddIdentityDialog: the OTP
+  // modal's "verify" step IS the create call, not a separate step before it).
+  const handleSubmit = async (orgEmailOtp?: string) => {
     if (!orgName.trim()) return toast.error("Organization name is required");
-    if (!callerUid.trim())
-      return toast.error("Your UID in this org is required");
-    if (!callerIdentifier.trim())
-      return toast.error("Your mobile or email is required");
-    setLoading(true);
+    let memberCount: number | undefined;
+    if (expectedMemberCount.trim()) {
+      memberCount = Number(expectedMemberCount.trim());
+      if (!Number.isInteger(memberCount) || memberCount < 1) {
+        return toast.error(
+          "Expected member count must be a positive whole number",
+        );
+      }
+    }
+    setSubmitting(true);
     try {
-      const result = await api.registerOrg({
+      const result = await api.submitOrgRequest({
         org_name: orgName.trim(),
-        preferred_orgid: preferredOrgId.trim() || undefined,
-        caller_uid: callerUid.trim().toUpperCase(),
-        caller_identifier: callerIdentifier.trim(),
-        participants: buildParticipants(),
+        org_email: orgEmail.trim() || undefined,
+        org_email_otp: orgEmailOtp,
+        expected_member_count: memberCount,
+        justification: justification.trim() || undefined,
       });
-      toast.success(
-        `Organization "${result.org_name}" registered as ${result.orgid}`,
-      );
+      toast.success(result.message);
       onSuccess();
-      onClose();
-      setOrgName("");
-      setPreferredOrgId("");
-      setCallerUid("");
-      setCallerIdentifier("");
-      setTableRows([{ uid: "", contact: "", role: "v" }]);
-      setCsvText("");
+      handleClose();
     } catch (e: any) {
-      toast.error(e.message ?? "Failed to register organization");
+      toast.error(e.message ?? "Failed to submit organization request");
     } finally {
-      setLoading(false);
+      setSubmitting(false);
+      setOtpOpen(false);
     }
   };
 
+  // Step 1 (only reached when org_email is supplied): send the
+  // domain-ownership OTP (backend, 4.3) to org_email before the request can
+  // be submitted with it attached.
+  const handleSendOtp = async () => {
+    if (!orgName.trim()) return toast.error("Organization name is required");
+    if (!isEmailValid)
+      return toast.error("Enter a valid organization email");
+    setSendingOtp(true);
+    try {
+      await api.sendOrgDomainOtp(orgEmail.trim());
+      setOtpSentAt(Date.now());
+      setOtpOpen(true);
+    } catch (e: any) {
+      toast.error(e.message ?? "Failed to send verification code");
+    } finally {
+      setSendingOtp(false);
+    }
+  };
+
+  const handleResendOtp = async () => {
+    await api.sendOrgDomainOtp(orgEmail.trim());
+    setOtpSentAt(Date.now());
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>Register New Organization</DialogTitle>
-          <DialogDescription>
-            You will be assigned Voter + Organizer roles at the ROOT scope
-            automatically.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-5 mt-2">
-          <div className="grid grid-cols-2 gap-4">
+    <>
+      <Dialog
+        open={open && !otpOpen}
+        onOpenChange={(o) => {
+          if (!o) handleClose();
+        }}
+      >
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Request a New Organization</DialogTitle>
+            <DialogDescription>
+              A site admin reviews every request. You'll be notified once
+              it's approved, rejected, or sent back for more information.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-5 mt-2">
             <div className="space-y-1.5">
               <Label>
                 Organization Name <span className="text-destructive">*</span>
@@ -467,170 +498,106 @@ function RegisterOrgModal({
               />
             </div>
             <div className="space-y-1.5">
-              <Label>Preferred Org ID</Label>
+              <Label>
+                Organization Email{" "}
+                <span className="text-muted-foreground font-normal">
+                  (optional, strengthens your request)
+                </span>
+              </Label>
               <Input
-                placeholder="e.g. ACM1234"
-                value={preferredOrgId}
-                onChange={(e) =>
-                  setPreferredOrgId(e.target.value.toUpperCase())
-                }
-                maxLength={7}
-                className="font-mono"
+                type="email"
+                placeholder="e.g. contact@acme.com"
+                value={orgEmail}
+                onChange={(e) => setOrgEmail(e.target.value)}
               />
-              {suggestedOrgId && (
-                <p className="text-xs text-muted-foreground">
-                  Suggested:{" "}
-                  <button
-                    className="font-mono font-semibold text-foreground hover:underline"
-                    onClick={() => setPreferredOrgId(suggestedOrgId)}
-                  >
-                    {suggestedOrgId}
-                  </button>
-                </p>
-              )}
+              <p className="text-xs text-muted-foreground">
+                If provided, you'll verify a code sent here before the
+                request can be submitted.
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label>
+                Expected Member Count{" "}
+                <span className="text-muted-foreground font-normal">
+                  (optional)
+                </span>
+              </Label>
+              <Input
+                type="number"
+                min={1}
+                placeholder="e.g. 50"
+                value={expectedMemberCount}
+                onChange={(e) => setExpectedMemberCount(e.target.value)}
+                className="max-w-xs"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>
+                Why does this organization need to exist?{" "}
+                <span className="text-muted-foreground font-normal">
+                  (optional)
+                </span>
+              </Label>
+              <Textarea
+                placeholder="A brief case for the reviewing admin…"
+                value={justification}
+                onChange={(e) => setJustification(e.target.value)}
+                rows={4}
+                className="text-sm"
+              />
             </div>
           </div>
-          <div className="space-y-1.5">
-            <Label>
-              Your UID in this Org <span className="text-destructive">*</span>
-            </Label>
-            <Input
-              placeholder="e.g. EMP001"
-              value={callerUid}
-              onChange={(e) => setCallerUid(e.target.value.toUpperCase())}
-              className="font-mono max-w-sm"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label>
-              Your Mobile or Email <span className="text-destructive">*</span>
-            </Label>
-            <Input
-              placeholder="e.g. 9876543210 or you@example.com"
-              value={callerIdentifier}
-              onChange={(e) => setCallerIdentifier(e.target.value)}
-              className="max-w-sm"
-            />
-          </div>
-          <Separator />
-          <div>
-            <Label className="mb-3 block">
-              Initial Participants{" "}
-              <span className="text-muted-foreground font-normal">
-                (optional)
-              </span>
-            </Label>
-            <Tabs
-              value={memberTab}
-              onValueChange={(v) => setMemberTab(v as any)}
+          <DialogFooter className="mt-6">
+            <Button
+              variant="outline"
+              onClick={handleClose}
+              disabled={submitting || sendingOtp}
             >
-              <TabsList className="mb-3">
-                <TabsTrigger value="table">Table</TabsTrigger>
-                <TabsTrigger value="csv">CSV Import</TabsTrigger>
-              </TabsList>
-              <TabsContent value="table">
-                <div className="border rounded-md overflow-hidden">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>UID</TableHead>
-                        <TableHead>Contact</TableHead>
-                        <TableHead>Role</TableHead>
-                        <TableHead className="w-10" />
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {tableRows.map((row, i) => (
-                        <TableRow key={i}>
-                          <TableCell>
-                            <Input
-                              placeholder="EMP002"
-                              value={row.uid}
-                              onChange={(e) =>
-                                updateRow(
-                                  i,
-                                  "uid",
-                                  e.target.value.toUpperCase(),
-                                )
-                              }
-                              className="h-8 font-mono"
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <Input
-                              placeholder="email or mobile"
-                              value={row.contact}
-                              onChange={(e) =>
-                                updateRow(i, "contact", e.target.value)
-                              }
-                              className="h-8"
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <Select
-                              value={row.role}
-                              onValueChange={(v) => updateRow(i, "role", v)}
-                            >
-                              <SelectTrigger className="h-8 w-28">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="v">Voter only</SelectItem>
-                                <SelectItem value="o">
-                                  Organizer only
-                                </SelectItem>
-                                <SelectItem value="vo">Both</SelectItem>
-                                <SelectItem value="none">None</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </TableCell>
-                          <TableCell>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
-                              onClick={() => removeRow(i)}
-                              disabled={tableRows.length === 1}
-                            >
-                              ✕
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={addRow}
-                  className="mt-2"
-                >
-                  + Add Row
-                </Button>
-              </TabsContent>
-              <TabsContent value="csv">
-                <Textarea
-                  placeholder={`uid,contact,role\nEMP002,alice@corp.com,v`}
-                  value={csvText}
-                  onChange={(e) => setCsvText(e.target.value)}
-                  rows={8}
-                  className="font-mono text-sm"
-                />
-              </TabsContent>
-            </Tabs>
-          </div>
-        </div>
-        <DialogFooter className="mt-6">
-          <Button variant="outline" onClick={onClose} disabled={loading}>
-            Cancel
-          </Button>
-          <Button onClick={handleSubmit} disabled={loading}>
-            {loading ? "Registering…" : "Register Organization"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+              Cancel
+            </Button>
+            {orgEmail.trim() ? (
+              <Button
+                onClick={handleSendOtp}
+                disabled={sendingOtp || submitting}
+              >
+                {sendingOtp && (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                )}
+                {sendingOtp ? "Sending code…" : "Send Verification Code"}
+              </Button>
+            ) : (
+              <Button onClick={() => handleSubmit()} disabled={submitting}>
+                {submitting && (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                )}
+                {submitting ? "Submitting…" : "Submit Request"}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <OTPVerificationModal
+        open={otpOpen}
+        onClose={() => setOtpOpen(false)}
+        onVerify={handleSubmit}
+        onResend={handleResendOtp}
+        contact={orgEmail}
+        sentAt={otpSentAt}
+      />
+
+      {/* Spinner overlay while the request submits after OTP verification */}
+      {submitting && !otpOpen && (
+        <Dialog open>
+          <DialogContent className="max-w-xs text-center py-8">
+            <Loader2 className="h-8 w-8 animate-spin mx-auto text-primary" />
+            <p className="text-sm text-muted-foreground mt-3">
+              Submitting request…
+            </p>
+          </DialogContent>
+        </Dialog>
+      )}
+    </>
   );
 }
 
@@ -3681,7 +3648,7 @@ export function ManageOrganizationsView() {
             onClick={() => setRegisterOpen(true)}
             className="flex-shrink-0 gap-1.5"
           >
-            <Plus className="w-4 h-4" /> Register Org
+            <Plus className="w-4 h-4" /> Request Org
           </Button>
         )}
       </div>
@@ -3699,7 +3666,7 @@ export function ManageOrganizationsView() {
                   You don't have any organizations yet.
                 </p>
                 <Button onClick={() => setRegisterOpen(true)}>
-                  Register your first organization
+                  Request your first organization
                 </Button>
               </>
             ) : (
@@ -3761,7 +3728,7 @@ export function ManageOrganizationsView() {
       )}
 
       {isUnified && (
-        <RegisterOrgModal
+        <SubmitOrgRequestModal
           open={registerOpen}
           onClose={() => setRegisterOpen(false)}
           onSuccess={fetchOrgs}

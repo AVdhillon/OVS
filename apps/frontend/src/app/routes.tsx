@@ -4,6 +4,7 @@ import { DashboardLayout } from "./pages/dashboard-layout";
 import { EventsView } from "./pages/events-view";
 import { ManageAccountView } from "./pages/manage-account-view";
 import { ManageOrganizationsView } from "./pages/manage-organizations-view";
+import { MyOrgRequestsView } from "./pages/my-org-requests-view";
 import { IdentityWalletView } from "./pages/identity-wallet-view";
 import { ManageEventsView } from "./pages/manage-events-view";
 import { useAppContext } from "./context/app-context";
@@ -45,6 +46,7 @@ export const router = createBrowserRouter([
           { path: "events", element: <EventsView /> },
           { path: "manage-events", element: <ManageEventsView /> },
           { path: "organizations", element: <ManageOrganizationsView /> },
+          { path: "my-requests", element: <MyOrgRequestsView /> },
           { path: "identity-wallet", element: <IdentityWalletView /> },
           { path: "account", element: <ManageAccountView /> },
         ],

@@ -132,10 +132,9 @@ interface EventCardProps {
     event: VotingEvent;
     onVote: (event: VotingEvent) => void;
     onViewResults: (event: VotingEvent) => void;
-    canVote: boolean;
 }
 
-function EventCard({event, onVote, onViewResults, canVote}: EventCardProps) {
+function EventCard({event, onVote, onViewResults}: EventCardProps) {
     const s = getEventStatus(event);
     const showResults =
         event.has_voted ||
@@ -187,17 +186,11 @@ function EventCard({event, onVote, onViewResults, canVote}: EventCardProps) {
 
                 {/* Actions */}
                 <div className="mt-auto pt-1">
-                    {s === 'active' && !event.has_voted && canVote && (
+                    {s === 'active' && !event.has_voted && (
                         <Button className="w-full" size="sm" onClick={() => onVote(event)}>
                             <Vote className="h-4 w-4 mr-2"/>
                             Cast Vote
                         </Button>
-                    )}
-
-                    {s === 'active' && !event.has_voted && !canVote && (
-                        <p className="text-xs text-center text-muted-foreground py-1">
-                            Not eligible to vote in this session
-                        </p>
                     )}
 
                     {event.has_voted && (
@@ -287,14 +280,12 @@ function EventGrid({
                        emptyMsg,
                        onVote,
                        onViewResults,
-                       canVote,
                        loading,
                    }: {
     events: VotingEvent[];
     emptyMsg: string;
     onVote: (e: VotingEvent) => void;
     onViewResults: (e: VotingEvent) => void;
-    canVote: boolean;
     loading: boolean;
 }) {
     if (loading) {
@@ -313,7 +304,6 @@ function EventGrid({
                     event={event}
                     onVote={onVote}
                     onViewResults={onViewResults}
-                    canVote={canVote}
                 />
             ))}
         </div>
@@ -323,7 +313,16 @@ function EventGrid({
 // ─── Main View ────────────────────────────────────────────────────────────────
 
 export function EventsView() {
-    const {events, setEvents, updateEventInList, session} = useAppContext();
+    // EDIT (Phase 1 — auth model consolidation, subphase 1.8): GOV removed.
+    // GOV was the only session type that couldn't cast a vote, so the
+    // `canVote`/"Not eligible to vote in this session" gating has no
+    // remaining case that trips it — UNIFIED and ORG sessions (the only
+    // types that ever load this app, see app-context.tsx's SessionType
+    // note) can both vote. Dropped the gating entirely rather than hardcode
+    // it to `true` and leave dead branches around. `session` is no longer
+    // read anywhere else in this file, so it's dropped from the destructure
+    // too.
+    const {events, setEvents, updateEventInList} = useAppContext();
 
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -335,9 +334,6 @@ export function EventsView() {
     const [selectedCandidate, setSelectedCandidate] = useState<number | null>(null);
     const [confirmOpen, setConfirmOpen] = useState(false);
     const [submitting, setSubmitting] = useState(false);
-
-    // Can this session cast votes?
-    const canVote = session?.type !== 'GOV';
 
     const filterVoterOnly = (list: VotingEvent[]) =>
         list.filter((e) => e.is_voter);
@@ -440,7 +436,7 @@ export function EventsView() {
     const activeEvents    = filterVoterOnly(events.active_pending);
     const votedEvents     = filterVoterOnly(events.voted);
     const completedEvents = filterVoterOnly(events.completed);
-    const commonGridProps = {onVote: handleVote, onViewResults: handleViewResults, canVote, loading};
+    const commonGridProps = {onVote: handleVote, onViewResults: handleViewResults, loading};
 
     return (
         <div className="max-w-7xl mx-auto space-y-6">
@@ -470,15 +466,6 @@ export function EventsView() {
                     className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md px-4 py-3">
                     <AlertCircle className="h-4 w-4 shrink-0"/>
                     {error}
-                </div>
-            )}
-
-            {/* GOV session notice */}
-            {session?.type === 'GOV' && (
-                <div
-                    className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-4 py-3">
-                    <AlertCircle className="h-4 w-4 shrink-0"/>
-                    Government (GOV) sessions cannot cast votes. Switch to an ORG or UNIFIED session to vote.
                 </div>
             )}
 

@@ -27,9 +27,14 @@ export class VotingService {
     });
     if (!event) throw new NotFoundException('Event not found');
     // ── Resolve org member from JWT ─────────────────────────────
-    if (user.type === 'GOV') {
-      throw new ForbiddenException('Government identity cannot vote');
-    }
+    // EDIT (Phase 1 — auth model consolidation, subphase 1.4): the
+    // `if (user.type === 'GOV') throw ...` block that lived here is
+    // removed — GOV is retired and no longer a possible JwtUser.type
+    // value (subphase 1.2). No replacement check was needed: a SITEADMIN
+    // session (the other type that can't vote) falls through the
+    // ORG/UNIFIED branches below with `member` left unset and is rejected
+    // by the existing "You are not a member of this organization" check
+    // just after, same as any other type this switch doesn't recognize.
     if (!event.orgid) {
       throw new BadRequestException('Event is not linked to an organization');
     }

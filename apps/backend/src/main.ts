@@ -75,6 +75,25 @@ async function bootstrap() {
     throw new Error('ALLOWED_ORIGINS must be set in production');
   }
 
+  // EDIT (Phase 1 — auth model consolidation, subphase 1.3): the standalone
+  // admin app (skeleton lands in subphase 1.10) is served from its own
+  // origin — e.g. https://admin.example.com — separate from the regular
+  // frontend's origin(s) above. Kept as its own env var rather than just
+  // appended into ALLOWED_ORIGINS so the two lists can be configured and
+  // audited independently: the admin origin fronts SiteAdminGuard-protected
+  // routes (subphase 1.3) and is a materially higher-trust surface than the
+  // regular ALLOWED_ORIGINS list, worth being able to reason about on its
+  // own rather than buried in a combined comma-separated value.
+  const adminAllowedOrigins =
+    process.env.ADMIN_ALLOWED_ORIGINS?.split(',').map((o) => o.trim()) ?? [];
+
+  if (!adminAllowedOrigins.length && process.env.NODE_ENV === 'production') {
+    console.warn(
+      'ADMIN_ALLOWED_ORIGINS is not set — the admin app origin will be ' +
+        'rejected by CORS until this is configured.',
+    );
+  }
+
   // Preview-deployment allowance: by default any *.vercel.app origin is
   // trusted, which is broader than intended (any Vercel project/user can
   // stand up a subdomain that ends in vercel.app). If VERCEL_PREVIEW_PREFIX
@@ -108,8 +127,13 @@ async function bootstrap() {
       // allow non-browser requests
       if (!origin) return callback(null, true);
 
-      // exact match
+      // exact match — regular frontend
       if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      // exact match — admin app origin
+      if (adminAllowedOrigins.includes(origin)) {
         return callback(null, true);
       }
 

@@ -1,10 +1,6 @@
-import {
-  Injectable,
-  BadRequestException,
-  HttpException,
-} from '@nestjs/common';
+import { Injectable, BadRequestException, HttpException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { OtpDeliveryService } from './otp-delivery.service';
+import { OtpDeliveryService, OtpPurpose } from './otp-delivery.service';
 import * as crypto from 'crypto';
 
 // How long before a fresh OTP can be requested for the same identifier.
@@ -25,16 +21,27 @@ export class OtpService {
    * Generate, store, and dispatch an OTP to the given identifier.
    *
    * Identifier must be a 10-digit mobile number or a valid email address.
-   * A 30-second cooldown is enforced per identifier.
+   * A 30-second cooldown is enforced per (identifier, purpose).
    *
-   * DB note: otp_verification has a partial unique index on (identifier)
-   * WHERE is_verified = FALSE.  We delete the existing unverified record
-   * before inserting a fresh one, so the constraint is never violated.
-   * Verified records are deleted on successful verify(), so they never
-   * interfere with the cooldown check.
+   * EDIT (Phase 4 — cutover, subphase 4.3): added `purpose`, defaulting to
+   * 'LOGIN' — every call site that existed before this subphase (auth
+   * login/registration flows, IdentityService.addIdentity()) keeps calling
+   * this with one argument and gets byte-for-byte the same behavior as
+   * before. The only new caller passing 'ORG_DOMAIN_OWNERSHIP' explicitly is
+   * OrgRequestsService's org_email verification. See OtpPurpose's own doc
+   * comment (otp-delivery.service.ts) and the otp_verification table
+   * comment in the master schema for why this exists.
+   *
+   * DB note: otp_verification has a partial unique index on
+   * (identifier, purpose) WHERE is_verified = FALSE. We delete the existing
+   * unverified record for this (identifier, purpose) pair before inserting a
+   * fresh one, so the constraint is never violated. Verified records are
+   * deleted on successful verify(), so they never interfere with the
+   * cooldown check.
    */
   async sendOtp(
     identifier: string,
+    purpose: OtpPurpose = 'LOGIN',
   ): Promise<{ message: string; otp?: string }> {
     identifier = identifier.trim().toLowerCase();
 
@@ -48,7 +55,7 @@ export class OtpService {
     // Verified records no longer exist (deleted on success), so we only
     // need to filter is_verified = false to match the partial unique index.
     const existing = await this.prisma.otp_verification.findFirst({
-      where: { identifier, is_verified: false },
+      where: { identifier, purpose, is_verified: false },
       select: { created_at: true, otp_id: true },
     });
 
@@ -64,17 +71,20 @@ export class OtpService {
     const otp = crypto.randomInt(100_000, 1_000_000).toString();
     const hashedOtp = crypto.createHash('sha256').update(otp).digest('hex');
 
-    // ── Atomically replace any stale unverified record for this identifier ───
+    // ── Atomically replace any stale unverified record for this
+    // (identifier, purpose) pair ─────────────────────────────────────────────
     // FIX #4: Wrapped in a transaction to prevent a race condition where two
-    // concurrent requests for the same identifier could both pass the cooldown
-    // check and then both insert, violating the partial unique index.
+    // concurrent requests for the same (identifier, purpose) could both pass
+    // the cooldown check and then both insert, violating the partial unique
+    // index.
     await this.prisma.$transaction([
       this.prisma.otp_verification.deleteMany({
-        where: { identifier, is_verified: false },
+        where: { identifier, purpose, is_verified: false },
       }),
       this.prisma.otp_verification.create({
         data: {
           identifier,
+          purpose,
           otp_code: hashedOtp,
           attempts: 0,
           expires_at: new Date(Date.now() + EXPIRY_MS),
@@ -84,10 +94,10 @@ export class OtpService {
     ]);
     if (process.env.OTP_DEVMODE !== 'true')
       try {
-        await this.delivery.send(identifier, otp);
+        await this.delivery.send(identifier, otp, purpose);
       } catch (err) {
         await this.prisma.otp_verification.deleteMany({
-          where: { identifier, is_verified: false },
+          where: { identifier, purpose, is_verified: false },
         });
         throw err;
       }
@@ -104,13 +114,24 @@ export class OtpService {
    * Throws UnauthorizedException on any failure so callers get a clear 401.
    *
    * Returns true so callers can chain: `await this.otpService.verifyOtp(...)`.
+   *
+   * EDIT (Phase 4 — cutover, subphase 4.3): added `purpose`, defaulting to
+   * 'LOGIN' for the same backward-compatibility reason as sendOtp() above —
+   * every pre-existing caller is unaffected. A verify() call scoped to
+   * 'ORG_DOMAIN_OWNERSHIP' will not match (and will correctly 404 against)
+   * an OTP that was actually sent for 'LOGIN' to the same identifier, or
+   * vice versa.
    */
-  async verifyOtp(identifier: string, otp: string): Promise<true> {
+  async verifyOtp(
+    identifier: string,
+    otp: string,
+    purpose: OtpPurpose = 'LOGIN',
+  ): Promise<true> {
     identifier = identifier.trim().toLowerCase();
 
     // Only match active (unverified) records — consistent with partial index.
     const record = await this.prisma.otp_verification.findFirst({
-      where: { identifier, is_verified: false },
+      where: { identifier, purpose, is_verified: false },
     });
 
     if (!record) {

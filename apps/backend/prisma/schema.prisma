@@ -19,19 +19,24 @@ model uaccount {
   created_at      DateTime?         @default(now()) @db.Timestamp(6)
   identity_wallet identity_wallet[]
   org_members     org_members[]
+  org_requests    org_requests[]
   user_sessions   user_sessions[]
 }
 
 model organization {
-  orgid       String        @id @db.VarChar(20)
-  org_name    String        @db.VarChar(100)
-  org_email   String?       @unique @db.VarChar(100)
-  is_active   Boolean?      @default(false)
-  is_deleted  Boolean?      @default(false)
-  created_at  DateTime?     @default(now()) @db.Timestamp(6)
-  events      events[]
-  org_members org_members[]
-  org_scope   org_scope[]
+  orgid        String        @id @db.VarChar(20)
+  org_name     String        @db.VarChar(100)
+  org_email    String?       @unique @db.VarChar(100)
+  status       String        @default("ACTIVE") @db.VarChar(20)
+  is_active    Boolean?      @default(dbgenerated("((status)::text = 'ACTIVE'::text)"))
+  is_deleted   Boolean?      @default(false)
+  created_at   DateTime?     @default(now()) @db.Timestamp(6)
+  events       events[]
+  org_members  org_members[]
+  org_requests org_requests?
+  org_scope    org_scope[]
+
+  @@index([status], map: "idx_organization_status")
 }
 
 model org_members {
@@ -88,29 +93,23 @@ model events {
   event_participants event_participants[]
   organization       organization?        @relation(fields: [orgid], references: [orgid], onDelete: NoAction, onUpdate: NoAction)
   org_scope          org_scope?           @relation(fields: [scope_id], references: [scope_id], onDelete: NoAction, onUpdate: NoAction)
-  vote_results       vote_results[]
   vote_ballots       vote_ballots[]
+  vote_results       vote_results[]
 
   @@index([orgid], map: "idx_events_orgid")
   @@index([scope_id], map: "idx_events_scope")
 }
 
-// Finding #1 fix: replaces `votes`. Deliberately carries no orgid/uid and no
-// FK to org_members/event_participants — no row here can ever be joined back
-// to an identity. Eligibility + double-vote guarding live on
-// event_participants.has_voted instead, claimed atomically inside
-// cast_ballot(), the only function permitted to write here.
-// See prisma/migrations/manual/finding1_vote_anonymization_split.sql.
 model vote_ballots {
-  ballot_id          Int         @id @default(autoincrement())
+  ballot_id          Int        @id @default(autoincrement())
   event_id           Int
   candidate_id       Int
   voter_hash         String
-  ip_address         String?     @db.Inet
+  voted_at           DateTime?  @default(now()) @db.Timestamp(6)
+  ip_address         String?    @db.Inet
   device_fingerprint String?
-  voted_at           DateTime?   @default(now()) @db.Timestamp(6)
-  events             events      @relation(fields: [event_id], references: [event_id], onDelete: NoAction, onUpdate: NoAction)
-  candidates         candidates  @relation(fields: [candidate_id], references: [candidate_id], onDelete: Restrict, onUpdate: NoAction)
+  candidates         candidates @relation(fields: [candidate_id], references: [candidate_id], onUpdate: NoAction)
+  events             events     @relation(fields: [event_id], references: [event_id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([candidate_id], map: "idx_vote_ballots_candidate")
   @@index([device_fingerprint], map: "idx_vote_ballots_device")
@@ -136,8 +135,8 @@ model candidates {
   candidate_name String         @db.VarChar(100)
   description    String?
   events         events         @relation(fields: [event_id], references: [event_id], onDelete: Cascade, onUpdate: NoAction)
-  vote_results   vote_results[]
   vote_ballots   vote_ballots[]
+  vote_results   vote_results[]
 
   @@unique([event_id, candidate_name], map: "unique_candidate_per_event")
 }
@@ -165,15 +164,6 @@ model fraud_logs {
   created_at         DateTime? @default(now()) @db.Timestamp(6)
 
   @@index([event_id], map: "idx_fraud_event")
-}
-
-model gov_identity {
-  epic_id   String   @id @db.VarChar(20)
-  name      String?  @db.VarChar(100)
-  mobile    String?  @db.VarChar(10)
-  email     String?  @db.VarChar(100)
-  state     String?  @db.VarChar(50)
-  is_active Boolean? @default(true)
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -253,4 +243,61 @@ model scope_closure {
   @@id([ancestor_id, descendant_id])
   @@index([ancestor_id], map: "idx_closure_ancestor")
   @@index([descendant_id], map: "idx_closure_descendant")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model admin_audit_log {
+  admin_log_id BigInt      @id @default(autoincrement())
+  admin_id     String      @db.VarChar(20)
+  action       String      @db.VarChar(50)
+  target_type  String      @db.VarChar(20)
+  target_id    String      @db.VarChar(50)
+  reason       String?
+  metadata     Json?
+  created_at   DateTime?   @default(now()) @db.Timestamp(6)
+  site_admins  site_admins @relation(fields: [admin_id], references: [admin_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([admin_id, created_at(sort: Desc)], map: "idx_admin_audit_admin")
+  @@index([created_at(sort: Desc)], map: "idx_admin_audit_created")
+  @@index([target_type, target_id, created_at(sort: Desc)], map: "idx_admin_audit_target")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model org_requests {
+  request_id            BigInt        @id @default(autoincrement())
+  reference_code        String        @unique @default(dbgenerated("('ORQ-'::text || to_char(nextval('org_request_ref_seq'::regclass), 'FM0000000'::text))")) @db.VarChar(20)
+  pid                   BigInt
+  org_name              String        @db.VarChar(100)
+  org_email             String?       @db.VarChar(100)
+  expected_member_count Int?
+  justification         String?
+  status                String        @default("PENDING") @db.VarChar(20)
+  reviewed_by_admin_id  String?       @db.VarChar(20)
+  reviewed_at           DateTime?     @db.Timestamp(6)
+  review_note           String?
+  approved_orgid        String?       @unique @db.VarChar(20)
+  created_at            DateTime?     @default(now()) @db.Timestamp(6)
+  updated_at            DateTime?     @default(now()) @db.Timestamp(6)
+  organization          organization? @relation(fields: [approved_orgid], references: [orgid], onDelete: NoAction, onUpdate: NoAction)
+  uaccount              uaccount      @relation(fields: [pid], references: [pid], onUpdate: NoAction)
+  site_admins           site_admins?  @relation(fields: [reviewed_by_admin_id], references: [admin_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([pid, created_at(sort: Desc)], map: "idx_org_requests_pid")
+  @@index([status, created_at], map: "idx_org_requests_status")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model site_admins {
+  admin_id        String            @id @db.VarChar(20)
+  name            String            @db.VarChar(100)
+  email           String            @unique @db.VarChar(100)
+  mobile          String?           @unique @db.VarChar(10)
+  is_super_admin  Boolean?          @default(false)
+  is_active       Boolean?          @default(true)
+  created_at      DateTime?         @default(now()) @db.Timestamp(6)
+  admin_audit_log admin_audit_log[]
+  org_requests    org_requests[]
+
+  @@index([admin_id], map: "idx_site_admins_active", where: raw("(is_active = true)"))
 }

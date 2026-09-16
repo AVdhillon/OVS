@@ -196,6 +196,30 @@ export class EventsService {
     if (new Date(dto.start_time) < new Date()) {
       throw new BadRequestException('start_time cannot be in the past');
     }
+
+    // EDIT (Phase 3 — admin portal core, subphase 3.4): gate event creation
+    // on organization.status. A SUSPENDED/ARCHIVED org (Phase 3.2's
+    // suspend()/archive()) shouldn't be able to spin up new events while
+    // disabled — checked first, before any org-scoped identity/role
+    // queries below, so a caller in a disabled org fails fast rather than
+    // paying for those lookups. Queried as its own lookup rather than a
+    // Prisma `include`, for the same "unknown real relation field name
+    // without the outstanding prisma db pull regen" reason as
+    // auth.service.ts's ORG-branch check above and Phase 2/3.3's services.
+    // NOTE: this is an application-layer check only — the DB trigger
+    // check_event_creator() (schema) does not itself verify
+    // organization.status, and this subphase's file list only covers
+    // createEvent() here, not a schema edit. Flagged, not fixed: a direct
+    // DB write (script/migration/future code path) that bypasses this
+    // service could still insert an event for a disabled org.
+    const org = await this.prisma.organization.findUnique({
+      where: { orgid: dto.orgid },
+      select: { status: true },
+    });
+    if (!org || org.status !== 'ACTIVE') {
+      throw new ForbiddenException('This organization is not currently active');
+    }
+
     // FIX (Phase 2b): the old assertOrgIdentity() was a no-op for UNIFIED
     // sessions, so dto.orgid/dto.uid were trusted verbatim from the request
     // body. The member_roles check below only confirms *some* member holds
@@ -589,10 +613,18 @@ export class EventsService {
    *                     must not be evaluated under this org's uid).
    * - UNIFIED session → the org_members-linked uid for this orgid, via
    *                     resolveOrgIdentities (handles the pid → uid hop).
-   * - GOV session, or no matching org identity → undefined; the caller
-   *                     has no org-scoped uid here, so get_visible_events
-   *                     will correctly find nothing unless the event is
-   *                     visible independent of org membership.
+   * - SITEADMIN session, or no matching org identity → undefined; the
+   *                     caller has no org-scoped uid here, so
+   *                     get_visible_events will correctly find nothing
+   *                     unless the event is visible independent of org
+   *                     membership.
+   *
+   * EDIT (Phase 1 — auth model consolidation, subphase 1.4): GOV retired
+   * (subphase 1.2) — updated to SITEADMIN in the doc comments above and
+   * below. No code branch existed for GOV in either method; both already
+   * fell through to the undefined/[] "no org identity" case for any
+   * session type they didn't explicitly recognize, so SITEADMIN sessions
+   * are handled correctly with no code change needed here.
    */
   private async resolveViewerUidInOrg(
     user: JwtUser,
@@ -609,9 +641,9 @@ export class EventsService {
    * Resolves all (orgid, uid, scope_id) pairs the calling user can act as.
    * Exported so CandidatesService can reuse it without duplication.
    *
-   * - ORG session    → single identity from JWT
+   * - ORG session     → single identity from JWT
    * - UNIFIED session → all ORG memberships linked via org_members.pid
-   * - GOV session    → no org identities (returns empty)
+   * - SITEADMIN session → no org identities (returns empty)
    */
   async resolveOrgIdentities(
     user: JwtUser,

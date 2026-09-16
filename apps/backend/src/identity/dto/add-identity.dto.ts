@@ -1,29 +1,28 @@
-import {
-  IsIn,
-  IsNotEmpty,
-  IsOptional,
-  IsString,
-  ValidateIf,
-} from 'class-validator';
+import { IsIn, IsNotEmpty, IsString } from 'class-validator';
 
 export class AddIdentityDto {
-  @IsIn(['ORG', 'GOV'])
-  identity_type: 'ORG' | 'GOV';
+  // EDIT (Phase 1 — auth model consolidation, subphase 1.4): GOV retired
+  // platform-wide (gov_identity dropped in subphase 1.1) — only ORG
+  // identities can be linked into a unified account's wallet now. Matches
+  // identity_wallet's chk_identity_type CHECK constraint (subphase 1.1),
+  // which likewise only accepts 'ORG'.
+  @IsIn(['ORG'])
+  identity_type: 'ORG';
 
   /**
-   * orgid for ORG type, epic_id for GOV type
+   * orgid — the org this identity belongs to.
    */
   @IsString()
   @IsNotEmpty()
   identity_id: string;
 
   /**
-   * Required only for ORG type — the member's uid within that org
+   * The member's uid within that org. Required — every AddIdentityDto is
+   * now an ORG identity (see identity_type above).
    */
-  @ValidateIf((o) => o.identity_type === 'ORG')
   @IsString()
   @IsNotEmpty()
-  uid?: string;
+  uid: string;
 
   /**
    * OTP sent to the contact bound to the target identity (mobile/email)
@@ -34,7 +33,7 @@ export class AddIdentityDto {
 
   /**
    * The identifier (mobile or email) the OTP was sent to.
-   * For ORG/GOV logins this is the contact on file for that identity.
+   * This is the contact on file for the org member record being linked.
    */
   @IsString()
   @IsNotEmpty()

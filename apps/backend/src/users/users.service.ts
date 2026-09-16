@@ -271,7 +271,8 @@ export class UsersService {
     //
     // Criteria for THIN:
     //   • The OTHER contact field is null
-    //   • Zero identity_wallet entries (no GOV/ORG identities bound)
+    //   • Zero identity_wallet entries (no ORG identities bound — EDIT,
+    //     Phase 1 subphase 1.4: comment updated, GOV retired platform-wide)
     //   • Zero org_members entries linked via pid (no org memberships)
     const otherField = field === 'mobile' ? 'email' : 'mobile';
     const isThin =
@@ -299,6 +300,7 @@ export class UsersService {
    *   org_members     — pid column: re-pointed to targetPid before deletion
    *   identity_wallet — pid PK component: read → delete → upsert to retarget
    *   user_sessions   — deactivated (stale tokens are useless after merge)
+   *   org_requests    — pid column: re-pointed to targetPid before deletion
    *
    * FIX: removed the former "step 3" which operated on a non-existent user_org
    *      table. The schema stores the pid↔org link directly on org_members.pid,
@@ -334,6 +336,25 @@ export class UsersService {
       //    org_members.pid has ON DELETE SET NULL, so we must re-point before
       //    deleting the source uaccount.
       await tx.org_members.updateMany({
+        where: { pid: sourcePid },
+        data: { pid: targetPid },
+      });
+
+      // ── 2b. Re-point org_requests rows that have pid = sourcePid ─────────
+      //    EDIT (Phase 2 — subphase 2.3): org_requests.pid is ON DELETE
+      //    RESTRICT, deliberately — an org request is an accountability
+      //    record for a decision a human made about a real account, so it
+      //    must not silently become anonymous or disappear. That means the
+      //    delete in step 4 below now FAILS outright for any account that
+      //    has ever submitted a request, unless those rows are re-pointed
+      //    first. Note the thinness check above doesn't help here: it counts
+      //    identity_wallet and org_members rows only, and a thin account can
+      //    perfectly well have a rejected request behind it.
+      //
+      //    Re-pointing (rather than deleting) is the right call: the merged
+      //    account is the same person, and their request history should
+      //    follow them into it — including into 4.7's "My requests" view.
+      await tx.org_requests.updateMany({
         where: { pid: sourcePid },
         data: { pid: targetPid },
       });

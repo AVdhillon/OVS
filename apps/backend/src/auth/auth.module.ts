@@ -4,6 +4,7 @@ import { AuthController } from './auth.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 import { JwtModule } from '@nestjs/jwt';
 import { JwtStrategy } from './strategies/jwt.strategy';
+import { SiteAdminJwtStrategy } from './strategies/site-admin-jwt.strategy';
 import { OtpModule } from '../otp/otp.module'; // ← import OtpModule
 import { getJwtSecret } from '../common/utils/jwt-secret.util';
 
@@ -24,7 +25,15 @@ import { getJwtSecret } from '../common/utils/jwt-secret.util';
       }),
     }),
   ],
-  providers: [AuthService, JwtStrategy],
+  // EDIT (Phase 1 — auth model consolidation, subphase 1.3): added
+  // SiteAdminJwtStrategy alongside JwtStrategy. Passport strategies must be
+  // instantiated once through Nest's DI (same reason JwtStrategy is listed
+  // here) for the 'site-admin-jwt' name to be registered at all — without
+  // this, SiteAdminGuard's `AuthGuard('site-admin-jwt')` would fail at
+  // request time with an "Unknown authentication strategy" error. Not part
+  // of the subphase's originally-listed file set, but required for
+  // SiteAdminGuard (this subphase) to actually work — see progress notes.
+  providers: [AuthService, JwtStrategy, SiteAdminJwtStrategy],
   controllers: [AuthController],
 })
 export class AuthModule {}

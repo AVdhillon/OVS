@@ -48,11 +48,42 @@ export interface CastVoteResponse {
   live_results?: EventResults["results"];
 }
 
-export interface RegisterOrgResponse {
-  orgid: string;
+// EDIT (Phase 4 — cutover, subphase 4.6): replaces RegisterOrgResponse.
+// Submitting a request no longer creates an organization on the spot — it
+// creates an org_requests row that a site admin reviews (2.3/2.4/2.5), so
+// the response carries a tracking reference + status instead of an orgid.
+// Field shapes mirror OrgRequestsService.submit()'s actual return object
+// (request_id/pid-style bigints are stringified by the backend's global
+// BigIntInterceptor, same as everywhere else in this file).
+export interface OrgRequestSubmitResponse {
+  request_id: string;
+  reference_code: string;
   org_name: string;
-  root_scope_id: number;
+  status: "PENDING" | "NEEDS_INFO" | "APPROVED" | "REJECTED";
+  created_at: string;
   message: string;
+}
+
+// EDIT (Phase 4 — cutover, subphase 4.7): the "My requests" view's list-item
+// shape — GET /org/request/mine's response. A narrower projection than the
+// admin-facing shapes elsewhere in this file (no 4.2 verification-signal
+// columns — those are reviewer-only context, per OrgRequestsService.listMine()'s
+// own comment) but not narrower than OrgRequestSubmitResponse: unlike a fresh
+// submission's response, a listed request may be REJECTED/NEEDS_INFO, so this
+// carries review_note/reviewed_at/approved_orgid too.
+export interface OrgRequestMine {
+  request_id: string;
+  reference_code: string;
+  org_name: string;
+  org_email: string | null;
+  expected_member_count: number | null;
+  justification: string | null;
+  status: "PENDING" | "NEEDS_INFO" | "APPROVED" | "REJECTED";
+  review_note: string | null;
+  reviewed_at: string | null;
+  approved_orgid: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface AddMembersResponse {
@@ -198,7 +229,15 @@ async function request<T>(
 }
 
 // ── Auth types ────────────────────────────────────────────────────────────────
-export type LoginType = "UNIFIED" | "ORG" | "GOV";
+// EDIT (Phase 1 — auth model consolidation, subphase 1.5): GOV retired
+// platform-wide (backend narrowed LoginDto to 'UNIFIED' | 'ORG' only in
+// subphase 1.2 — GovLoginBody/epic_id had no server-side counterpart left
+// to send to). SITEADMIN is deliberately NOT added here: site-admin login
+// is a wholly separate flow served by the standalone admin app (subphase
+// 1.10) against POST /auth/admin-login, not this app's POST /auth/login —
+// mirrors the backend split, where SiteAdminLoginDto is its own class, not
+// a third arm of LoginDto's union.
+export type LoginType = "UNIFIED" | "ORG";
 
 export interface UnifiedLoginBody {
   type: "UNIFIED";
@@ -211,12 +250,7 @@ export interface OrgLoginBody {
   uid: string;
   otp?: string;
 }
-export interface GovLoginBody {
-  type: "GOV";
-  epic_id: string;
-  otp?: string;
-}
-export type LoginBody = UnifiedLoginBody | OrgLoginBody | GovLoginBody;
+export type LoginBody = UnifiedLoginBody | OrgLoginBody;
 
 // ── API ───────────────────────────────────────────────────────────────────────
 export const api = {
@@ -417,25 +451,64 @@ export const api = {
 
   getMyOrgs: () => request<OrgSummary[]>("/org/mine"),
 
-  registerOrg: (body: {
+  // EDIT (Phase 4 — cutover, subphase 4.6): replaces registerOrg(), whose
+  // route (POST /org/register) was removed outright in 4.1 — this app had
+  // no working caller for org creation until this subphase.
+  //
+  // submitOrgRequest() takes no caller_uid/caller_identifier/participants —
+  // SubmitOrgRequestDto (backend, 2.3) has none of those, since submitting
+  // a request creates nothing yet for the caller to be a member of; that
+  // binding happens on approval (2.4), not here.
+  submitOrgRequest: (body: {
     org_name: string;
-    caller_uid: string;
-    caller_identifier: string;
     org_email?: string;
-    org_prefix?: string;
-    org_suffix?: string;
-    preferred_orgid?: string;
-    participants?: {
-      uid: string;
-      participant_identifier?: string;
-      role?: "v" | "vo" | "o" | "none";
-    }[];
-    participants_csv?: string;
+    org_email_otp?: string;
+    expected_member_count?: number;
+    justification?: string;
   }) =>
-    request<RegisterOrgResponse>("/org/register", {
+    request<OrgRequestSubmitResponse>("/org/request", {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  // Sends a one-time code to org_email to prove control of it before
+  // submitOrgRequest() will accept a request referencing that address —
+  // call this first when org_email is supplied, then pass the code back as
+  // org_email_otp above. Mirrors sendOtp()'s response shape (an `otp` field
+  // is present only in non-production dev-OTP builds, same as sendOtp()).
+  sendOrgDomainOtp: (org_email: string) =>
+    request<{ message: string; otp?: string }>(
+      "/org/request/send-domain-otp",
+      {
+        method: "POST",
+        body: JSON.stringify({ org_email }),
+      },
+    ),
+
+  // EDIT (Phase 4 — cutover, subphase 4.7): the "My requests" view's two
+  // calls — listing this account's own requests, and the edit-and-resubmit
+  // action for one that's come back NEEDS_INFO. resubmitOrgRequest() takes
+  // the same body shape as submitOrgRequest() (mirrors
+  // SubmitOrgRequestDto/OrgRequestsService.resubmit() on the backend).
+  listMyOrgRequests: () => request<OrgRequestMine[]>("/org/request/mine"),
+
+  resubmitOrgRequest: (
+    requestId: string,
+    body: {
+      org_name: string;
+      org_email?: string;
+      org_email_otp?: string;
+      expected_member_count?: number;
+      justification?: string;
+    },
+  ) =>
+    request<OrgRequestSubmitResponse>(
+      `/org/request/${requestId}/resubmit`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    ),
 
   // ── Org Members ────────────────────────────────────────────────────────────
 
@@ -603,7 +676,10 @@ export const api = {
   getWallet: () => request<WalletIdentity[]>("/identity/getwallet"),
 
   addIdentity: (body: {
-    identity_type: "ORG" | "GOV";
+    // EDIT (Phase 1 — auth model consolidation, subphase 1.5): narrowed to
+    // 'ORG' only, matching the backend's AddIdentityDto (subphase 1.4) and
+    // identity_wallet's chk_identity_type CHECK constraint (subphase 1.1).
+    identity_type: "ORG";
     identity_id: string;
     otp: string;
     identifier: string;
