@@ -37,6 +37,7 @@ model organization {
   org_scope    org_scope[]
 
   @@index([status], map: "idx_organization_status")
+  @@index([org_name(ops: raw("gin_trgm_ops"))], map: "idx_organization_org_name_trgm", type: Gin)
 }
 
 model org_members {
@@ -115,8 +116,10 @@ model vote_ballots {
   @@index([device_fingerprint], map: "idx_vote_ballots_device")
   @@index([event_id], map: "idx_vote_ballots_event")
   @@index([ip_address], map: "idx_vote_ballots_ip")
+  @@index([voted_at], map: "idx_vote_ballots_voted_at")
 }
 
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
 model audit_logs {
   log_id       Int       @id @default(autoincrement())
   table_name   String?   @db.VarChar(50)
@@ -127,6 +130,7 @@ model audit_logs {
   changed_at   DateTime? @default(now()) @db.Timestamp(6)
 
   @@index([table_name], map: "idx_audit_table")
+  @@index([changed_at(sort: Desc)], map: "idx_audit_changed_at")
 }
 
 model candidates {
@@ -198,12 +202,15 @@ model org_scope {
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model otp_verification {
   otp_id      Int       @id @default(autoincrement())
-  identifier  String    @unique(map: "unique_active_otp", where: raw("(is_verified = false)")) @db.VarChar(100)
+  identifier  String    @db.VarChar(100)
   otp_code    String
   attempts    Int?      @default(0)
+  purpose     String    @default("LOGIN") @db.VarChar(30)
   created_at  DateTime? @default(now()) @db.Timestamp(6)
   expires_at  DateTime  @db.Timestamp(6)
   is_verified Boolean?  @default(false)
+
+  @@unique([identifier, purpose], map: "unique_active_otp", where: raw("(is_verified = false)"))
 }
 
 model user_sessions {
@@ -265,23 +272,29 @@ model admin_audit_log {
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 /// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
 model org_requests {
-  request_id            BigInt        @id @default(autoincrement())
-  reference_code        String        @unique @default(dbgenerated("('ORQ-'::text || to_char(nextval('org_request_ref_seq'::regclass), 'FM0000000'::text))")) @db.VarChar(20)
-  pid                   BigInt
-  org_name              String        @db.VarChar(100)
-  org_email             String?       @db.VarChar(100)
-  expected_member_count Int?
-  justification         String?
-  status                String        @default("PENDING") @db.VarChar(20)
-  reviewed_by_admin_id  String?       @db.VarChar(20)
-  reviewed_at           DateTime?     @db.Timestamp(6)
-  review_note           String?
-  approved_orgid        String?       @unique @db.VarChar(20)
-  created_at            DateTime?     @default(now()) @db.Timestamp(6)
-  updated_at            DateTime?     @default(now()) @db.Timestamp(6)
-  organization          organization? @relation(fields: [approved_orgid], references: [orgid], onDelete: NoAction, onUpdate: NoAction)
-  uaccount              uaccount      @relation(fields: [pid], references: [pid], onUpdate: NoAction)
-  site_admins           site_admins?  @relation(fields: [reviewed_by_admin_id], references: [admin_id], onDelete: NoAction, onUpdate: NoAction)
+  request_id                 BigInt        @id @default(autoincrement())
+  reference_code             String        @unique @default(dbgenerated("('ORQ-'::text || to_char(nextval('org_request_ref_seq'::regclass), 'FM0000000'::text))")) @db.VarChar(20)
+  pid                        BigInt
+  org_name                   String        @db.VarChar(100)
+  org_email                  String?       @db.VarChar(100)
+  expected_member_count      Int?
+  justification              String?
+  name_similarity_score      Float?        @db.Real
+  name_similarity_match      String?       @db.VarChar(100)
+  org_email_is_free_domain   Boolean       @default(false)
+  requester_account_age_days Int?
+  member_count_risk_flag     Boolean       @default(false)
+  org_email_verified         Boolean       @default(false)
+  status                     String        @default("PENDING") @db.VarChar(20)
+  reviewed_by_admin_id       String?       @db.VarChar(20)
+  reviewed_at                DateTime?     @db.Timestamp(6)
+  review_note                String?
+  approved_orgid             String?       @unique @db.VarChar(20)
+  created_at                 DateTime?     @default(now()) @db.Timestamp(6)
+  updated_at                 DateTime?     @default(now()) @db.Timestamp(6)
+  organization               organization? @relation(fields: [approved_orgid], references: [orgid], onDelete: NoAction, onUpdate: NoAction)
+  uaccount                   uaccount      @relation(fields: [pid], references: [pid], onUpdate: NoAction)
+  site_admins                site_admins?  @relation(fields: [reviewed_by_admin_id], references: [admin_id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([pid, created_at(sort: Desc)], map: "idx_org_requests_pid")
   @@index([status, created_at], map: "idx_org_requests_status")

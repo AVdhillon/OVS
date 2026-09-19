@@ -414,15 +414,26 @@ function SubmitOrgRequestModal({
   // or as the OTP modal's onVerify once a domain-ownership code has been
   // entered (mirrors identity-wallet-view.tsx's AddIdentityDialog: the OTP
   // modal's "verify" step IS the create call, not a separate step before it).
+  // FIX: the two guard clauses below used to `return toast.error(...)`
+  // directly, which leaked toast.error's own return value (string | number,
+  // a toast id) into handleSubmit's inferred return type — Promise<string |
+  // number> instead of Promise<void>. identity-wallet-view.tsx's
+  // handleVerify (the pattern this comment says it mirrors) never actually
+  // hits this, since it has no pre-try guard clauses of its own; this
+  // function does, so it needs its own explicit `return;` after each
+  // toast.error call to keep the same Promise<void> shape OTPVerificationModal's
+  // onVerify prop expects.
   const handleSubmit = async (orgEmailOtp?: string) => {
-    if (!orgName.trim()) return toast.error("Organization name is required");
+    if (!orgName.trim()) {
+      toast.error("Organization name is required");
+      return;
+    }
     let memberCount: number | undefined;
     if (expectedMemberCount.trim()) {
       memberCount = Number(expectedMemberCount.trim());
       if (!Number.isInteger(memberCount) || memberCount < 1) {
-        return toast.error(
-          "Expected member count must be a positive whole number",
-        );
+        toast.error("Expected member count must be a positive whole number");
+        return;
       }
     }
     setSubmitting(true);
@@ -450,8 +461,7 @@ function SubmitOrgRequestModal({
   // be submitted with it attached.
   const handleSendOtp = async () => {
     if (!orgName.trim()) return toast.error("Organization name is required");
-    if (!isEmailValid)
-      return toast.error("Enter a valid organization email");
+    if (!isEmailValid) return toast.error("Enter a valid organization email");
     setSendingOtp(true);
     try {
       await api.sendOrgDomainOtp(orgEmail.trim());
@@ -481,8 +491,8 @@ function SubmitOrgRequestModal({
           <DialogHeader>
             <DialogTitle>Request a New Organization</DialogTitle>
             <DialogDescription>
-              A site admin reviews every request. You'll be notified once
-              it's approved, rejected, or sent back for more information.
+              A site admin reviews every request. You'll be notified once it's
+              approved, rejected, or sent back for more information.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-5 mt-2">
@@ -511,8 +521,8 @@ function SubmitOrgRequestModal({
                 onChange={(e) => setOrgEmail(e.target.value)}
               />
               <p className="text-xs text-muted-foreground">
-                If provided, you'll verify a code sent here before the
-                request can be submitted.
+                If provided, you'll verify a code sent here before the request
+                can be submitted.
               </p>
             </div>
             <div className="space-y-1.5">
@@ -3575,7 +3585,16 @@ export function ManageOrganizationsView() {
   const [registerOpen, setRegisterOpen] = useState(false);
 
   const isUnified = session?.type === "UNIFIED";
-  const isGov = session?.type === "GOV";
+  // EDIT (Phase 5 — platform maturity, subphase 5.4): removed `isGov` and
+  // its two call sites below (the early useEffect return and the whole
+  // "Not available" early-return render) — GOV was the only session type
+  // this page ever refused to render for, and GOV no longer exists as a
+  // possible SessionType (narrowed in subphase 1.5). Same pattern as
+  // manage-events-view.tsx's own GOV-gate removal in subphase 1.9; this
+  // file just wasn't in that subphase's file list, so its copy of the
+  // same dead branch survived until now. UNIFIED and ORG (this app's only
+  // real session types — SITEADMIN lives on the separate admin app) both
+  // reach the full page below unconditionally, same as they always could.
   const isOrg = session?.type === "ORG";
 
   const fetchOrgs = async () => {
@@ -3602,33 +3621,8 @@ export function ManageOrganizationsView() {
   };
 
   useEffect(() => {
-    if (isGov) {
-      setLoading(false);
-      return;
-    }
     fetchOrgs();
   }, []);
-
-  if (isGov) {
-    return (
-      <div className="max-w-5xl mx-auto">
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold tracking-tight mb-1">
-            Organizations
-          </h1>
-        </div>
-        <Card>
-          <CardContent className="py-10 text-center space-y-2">
-            <p className="font-semibold">Not available</p>
-            <p className="text-sm text-muted-foreground">
-              Organization management requires a Unified or Organization
-              session.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
 
   return (
     <div className="max-w-5xl mx-auto">
