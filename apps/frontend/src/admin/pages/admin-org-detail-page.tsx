@@ -311,7 +311,23 @@ export function AdminOrgDetailPage() {
                 <CardTitle>Admin history</CardTitle>
                 <CardDescription>
                   Every suspend/reinstate/archive action on this
-                  organization, most recent first.
+                  organization, most recent first.{" "}
+                  {/* EDIT (Phase 5 — subphase 5.1): deep link into the new
+                      audit-log viewer, pre-scoped to this org. This card
+                      shows admin *intent* only; the viewer pairs it with
+                      the underlying row changes, including ones no admin
+                      caused. Comment-only scope note: this file wasn't in
+                      5.1's listed file set, but the viewer is unreachable
+                      from the place an admin would look for it without
+                      this one link. */}
+                  <Link
+                    to={`/audit?target_type=ORGANIZATION&target_id=${encodeURIComponent(
+                      detail.orgid,
+                    )}`}
+                    className="underline underline-offset-2"
+                  >
+                    View full change history
+                  </Link>
                 </CardDescription>
               </CardHeader>
               <CardContent>

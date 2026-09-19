@@ -22,10 +22,30 @@ import { cn } from "../../app/components/ui/utils";
 //
 // EDIT (Phase 3 — admin portal core, subphase 3.6): added the
 // "Organizations" nav item for this subphase's new directory/detail pages.
-const NAV_ITEMS = [
+const NAV_ITEMS: Array<{
+  path: string;
+  label: string;
+  superAdminOnly?: boolean;
+}> = [
   { path: "/dashboard", label: "Dashboard" },
   { path: "/requests", label: "Org Requests" },
   { path: "/organizations", label: "Organizations" },
+  // EDIT (Phase 5 — platform maturity, subphase 5.1): the audit-log viewer,
+  // added here exactly as this file's 3.5-era comment above anticipated
+  // ("if 5.x grows the nav further, this is the file to extend").
+  { path: "/audit", label: "Audit Log" },
+  // EDIT (Phase 5 — platform maturity, subphase 5.2): the analytics
+  // dashboard. Five top-level sections now — still a plain top nav, but
+  // this is roughly where the 3.5-era comment above expected a heavier
+  // layout shell might start to be worth it.
+  { path: "/analytics", label: "Analytics" },
+  // EDIT (Phase 5 — platform maturity, subphase 5.3): admin account
+  // management. `superAdminOnly: true` — filtered out of the rendered nav
+  // below for an ordinary (non-super) admin session, since every route
+  // behind this link 403s for them anyway (AdminAccountsController is
+  // @RequireSuperAdmin()-gated end to end, unlike every other admin
+  // surface listed here) — no point showing a link that always errors.
+  { path: "/admins", label: "Admin Accounts", superAdminOnly: true },
 ];
 
 export function AdminHeader() {
@@ -40,7 +60,9 @@ export function AdminHeader() {
           <span className="font-medium">VoteCore Admin</span>
         </Link>
         <nav className="flex items-center gap-1">
-          {NAV_ITEMS.map((item) => {
+          {NAV_ITEMS.filter(
+            (item) => !item.superAdminOnly || admin?.is_super_admin,
+          ).map((item) => {
             const isActive =
               item.path === "/dashboard"
                 ? location.pathname === "/dashboard"
