@@ -254,9 +254,15 @@ export class OrgRequestsService {
     // SUBMIT_COOLDOWN_MS's own comment for why this exists on top of
     // unique_open_org_request.
     const mostRecent = await this.findMostRecentRequest(pid);
+    // FIX: `created_at` is typed nullable because the current Prisma
+    // client predates the dbschema.sql/schema.prisma fix adding NOT NULL
+    // to org_requests.created_at — it's always set by the column's own
+    // DEFAULT at insert time and nothing ever writes it as NULL. The `!`
+    // stays correct (and becomes a no-op) once the client is regenerated
+    // from the fixed schema.
     if (
       mostRecent &&
-      mostRecent.created_at > new Date(Date.now() - SUBMIT_COOLDOWN_MS)
+      mostRecent.created_at! > new Date(Date.now() - SUBMIT_COOLDOWN_MS)
     ) {
       throw new HttpException(
         `Please wait before submitting another organization request. ` +
@@ -308,8 +314,10 @@ export class OrgRequestsService {
     // justification text.
     const nameMatch = await this.findClosestOrgNameMatch(orgName);
     const orgEmailIsFreeDomain = this.isFreeEmailDomain(orgEmail);
+    // FIX: same nullable-Prisma-client-vs-fixed-schema gap as
+    // findMostRecentRequest()'s created_at above — see that comment.
     const accountAgeDays = Math.floor(
-      (Date.now() - requester.created_at.getTime()) / (1000 * 60 * 60 * 24),
+      (Date.now() - requester.created_at!.getTime()) / (1000 * 60 * 60 * 24),
     );
     const memberCountRiskFlag =
       dto.expected_member_count != null &&
@@ -1037,8 +1045,10 @@ export class OrgRequestsService {
     // edited content, even though it's the same row.
     const nameMatch = await this.findClosestOrgNameMatch(orgName);
     const orgEmailIsFreeDomain = this.isFreeEmailDomain(orgEmail);
+    // FIX: same nullable-Prisma-client-vs-fixed-schema gap noted in
+    // submit() above.
     const accountAgeDays = Math.floor(
-      (Date.now() - requester.created_at.getTime()) / (1000 * 60 * 60 * 24),
+      (Date.now() - requester.created_at!.getTime()) / (1000 * 60 * 60 * 24),
     );
     const memberCountRiskFlag =
       dto.expected_member_count != null &&

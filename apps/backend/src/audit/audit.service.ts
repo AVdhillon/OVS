@@ -123,7 +123,7 @@ const REDACTED_KEYS = new Set([
 
 const REDACTED_PLACEHOLDER = '[redacted]';
 
-interface AuditRowDiff {
+export interface AuditRowDiff {
   log_id: number;
   table_name: string;
   operation: string;
