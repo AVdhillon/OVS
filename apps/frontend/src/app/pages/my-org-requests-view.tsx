@@ -123,6 +123,9 @@ function ResubmitOrgRequestDialog({
   const [sendingOtp, setSendingOtp] = useState(false);
   const [otpOpen, setOtpOpen] = useState(false);
   const [otpSentAt, setOtpSentAt] = useState<number | null>(null);
+  // FIX: org email a verification code is currently pending for — see
+  // handleSendOtp below.
+  const [otpContact, setOtpContact] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   // Reset/prefill whenever a different request is opened for editing.
@@ -138,6 +141,7 @@ function ResubmitOrgRequestDialog({
     setJustification(request.justification ?? "");
     setOtpOpen(false);
     setOtpSentAt(null);
+    setOtpContact(null);
   }, [request]);
 
   const open = !!request;
@@ -150,19 +154,29 @@ function ResubmitOrgRequestDialog({
 
   const handleClose = () => {
     setOtpOpen(false);
+    setOtpContact(null);
     onClose();
   };
 
   const handleSubmit = async (orgEmailOtp?: string) => {
     if (!request) return;
-    if (!orgName.trim()) return toast.error("Organization name is required");
+    // FIX: `return toast.error(...)` leaks toast.error's own return value
+    // (string | number, a toast id) into handleSubmit's inferred return
+    // type — Promise<string | number> instead of Promise<void>, which
+    // OTPVerificationModal's onVerify prop (below) requires. Split each
+    // into its own toast.error(...) call followed by a bare `return;` so
+    // the function stays Promise<void> (mirrors manage-organizations-view's
+    // SubmitOrgRequestModal.handleSubmit — see that function's own comment).
+    if (!orgName.trim()) {
+      toast.error("Organization name is required");
+      return;
+    }
     let memberCount: number | undefined;
     if (expectedMemberCount.trim()) {
       memberCount = Number(expectedMemberCount.trim());
       if (!Number.isInteger(memberCount) || memberCount < 1) {
-        return toast.error(
-          "Expected member count must be a positive whole number",
-        );
+        toast.error("Expected member count must be a positive whole number");
+        return;
       }
     }
     setSubmitting(true);
@@ -187,11 +201,26 @@ function ResubmitOrgRequestDialog({
 
   const handleSendOtp = async () => {
     if (!orgName.trim()) return toast.error("Organization name is required");
-    if (!isEmailValid)
-      return toast.error("Enter a valid organization email");
+    if (!isEmailValid) return toast.error("Enter a valid organization email");
+
+    const email = orgEmail.trim();
+
+    // FIX: a code is already pending for this same email — reopen the OTP
+    // dialog instead of requesting a new one. Without this, accidentally
+    // clicking outside the OTP dialog (which closes it, and also re-opens
+    // this form dialog via `open && !otpOpen`) and then clicking "Send
+    // Verification Code" again immediately re-hits the backend's 30s resend
+    // cooldown, which throws before the OTP dialog is ever reopened — the
+    // button just shows a "please wait" error with no way back into it.
+    if (otpContact === email) {
+      setOtpOpen(true);
+      return;
+    }
+
     setSendingOtp(true);
     try {
-      await api.sendOrgDomainOtp(orgEmail.trim());
+      await api.sendOrgDomainOtp(email);
+      setOtpContact(email);
       setOtpSentAt(Date.now());
       setOtpOpen(true);
     } catch (e: any) {
@@ -220,9 +249,9 @@ function ResubmitOrgRequestDialog({
           <DialogHeader>
             <DialogTitle>Edit &amp; Resubmit Request</DialogTitle>
             <DialogDescription>
-              {request.reference_code} — make the changes the admin asked
-              for, then resubmit. This edits your existing request; it won't
-              create a new one.
+              {request.reference_code} — make the changes the admin asked for,
+              then resubmit. This edits your existing request; it won't create a
+              new one.
             </DialogDescription>
           </DialogHeader>
           {request.review_note && (
@@ -388,9 +417,7 @@ function RequestCard({
           )}
           {request.expected_member_count != null && (
             <div>
-              <span className="block text-foreground/70">
-                Expected Members
-              </span>
+              <span className="block text-foreground/70">Expected Members</span>
               {request.expected_member_count}
             </div>
           )}
@@ -468,9 +495,7 @@ export function MyOrgRequestsView() {
     <div className="max-w-3xl mx-auto space-y-8">
       {/* Page header */}
       <div>
-        <h1 className="text-2xl font-bold tracking-tight mb-1">
-          My Requests
-        </h1>
+        <h1 className="text-2xl font-bold tracking-tight mb-1">My Requests</h1>
         <p className="text-sm text-muted-foreground">
           Organization requests you've submitted and their review status
         </p>
@@ -483,8 +508,8 @@ export function MyOrgRequestsView() {
             <Shield className="h-8 w-8 mx-auto text-muted-foreground" />
             <p className="font-semibold">My Requests unavailable</p>
             <p className="text-sm text-muted-foreground">
-              Requesting an organization requires a Unified account session.
-              Log in with your personal mobile or email to track requests.
+              Requesting an organization requires a Unified account session. Log
+              in with your personal mobile or email to track requests.
             </p>
           </CardContent>
         </Card>

@@ -34,16 +34,35 @@ export function AdminLoginPage() {
   const [loading, setLoading] = useState(false);
   const [showOTPModal, setShowOTPModal] = useState(false);
   const [otpSentAt, setOtpSentAt] = useState<number | null>(null);
+  // FIX: admin ID an OTP is currently pending for. Lets handleSendOtp tell
+  // "user accidentally closed the dialog and is reclicking the same button"
+  // apart from "user actually wants a fresh OTP" (see handleSendOtp below).
+  const [otpContact, setOtpContact] = useState<string | null>(null);
 
   const handleSendOtp = async () => {
-    if (!adminId.trim()) {
+    const identifier = adminId.trim();
+    if (!identifier) {
       setError("Enter your admin ID");
       return;
     }
     setError(null);
+
+    // FIX: an OTP is already pending for this admin ID — just reopen the
+    // dialog instead of requesting a new one. Without this, clicking
+    // outside the OTP dialog (which closes it, e.g. from the dev-mode OTP
+    // toast) and then clicking "Send OTP" again immediately re-hits the
+    // backend's 30s resend cooldown, which throws before the dialog is
+    // ever reopened — the button just shows a "please wait" error with no
+    // way back into the OTP entry dialog.
+    if (otpContact === identifier) {
+      setShowOTPModal(true);
+      return;
+    }
+
     setLoading(true);
     try {
-      await adminApi.sendAdminLoginOtp(adminId.trim());
+      await adminApi.sendAdminLoginOtp(identifier);
+      setOtpContact(identifier);
       setOtpSentAt(Date.now());
       setShowOTPModal(true);
     } catch (e: any) {
@@ -88,11 +107,7 @@ export function AdminLoginPage() {
             />
           </div>
           {error && <p className="text-sm text-destructive">{error}</p>}
-          <Button
-            className="w-full"
-            onClick={handleSendOtp}
-            disabled={loading}
-          >
+          <Button className="w-full" onClick={handleSendOtp} disabled={loading}>
             {loading ? "Sending..." : "Send OTP"}
           </Button>
         </CardContent>
@@ -100,7 +115,12 @@ export function AdminLoginPage() {
 
       <OTPVerificationModal
         open={showOTPModal}
-        onClose={() => setShowOTPModal(false)}
+        onClose={
+          () =>
+            setShowOTPModal(
+              false,
+            ) /* keeps otpContact — reopening resumes, doesn't resend */
+        }
         onVerify={handleVerify}
         onResend={handleResend}
         contact={adminId}

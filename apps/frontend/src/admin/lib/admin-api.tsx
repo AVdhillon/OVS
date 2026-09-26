@@ -75,7 +75,7 @@ async function request<T>(
     if (opts.silent401) {
       throw new Error("Unauthorized");
     }
-    window.location.href = "/";
+    window.location.href = "/admin";
     return new Promise(() => {});
   }
 
@@ -137,7 +137,10 @@ export interface AdminProfile {
 // BIGSERIAL/BIGINT in the schema.
 
 export type OrgRequestStatus =
-  "PENDING" | "NEEDS_INFO" | "APPROVED" | "REJECTED";
+  | "PENDING"
+  | "NEEDS_INFO"
+  | "APPROVED"
+  | "REJECTED";
 
 /** One row of GET /admin/org-requests — OrgRequestsService.list()'s select shape. */
 export interface OrgRequestListItem {
@@ -333,7 +336,11 @@ export interface OrgChangesResponse {
 // service's header on what it may and may not aggregate).
 
 export type AnalyticsMetric =
-  "organizations" | "org_requests" | "events" | "ballots" | "accounts";
+  | "organizations"
+  | "org_requests"
+  | "events"
+  | "ballots"
+  | "accounts";
 
 export type AnalyticsInterval = "day" | "week" | "month";
 

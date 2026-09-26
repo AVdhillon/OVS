@@ -392,6 +392,9 @@ function SubmitOrgRequestModal({
   const [sendingOtp, setSendingOtp] = useState(false);
   const [otpOpen, setOtpOpen] = useState(false);
   const [otpSentAt, setOtpSentAt] = useState<number | null>(null);
+  // FIX: org email a verification code is currently pending for — see
+  // handleSendOtp below.
+  const [otpContact, setOtpContact] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const isEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(orgEmail.trim());
@@ -403,6 +406,7 @@ function SubmitOrgRequestModal({
     setJustification("");
     setOtpOpen(false);
     setOtpSentAt(null);
+    setOtpContact(null);
   };
 
   const handleClose = () => {
@@ -462,9 +466,25 @@ function SubmitOrgRequestModal({
   const handleSendOtp = async () => {
     if (!orgName.trim()) return toast.error("Organization name is required");
     if (!isEmailValid) return toast.error("Enter a valid organization email");
+
+    const email = orgEmail.trim();
+
+    // FIX: a code is already pending for this same email — reopen the OTP
+    // dialog instead of requesting a new one. Without this, accidentally
+    // clicking outside the OTP dialog (which closes it, and also re-opens
+    // this form dialog via `open && !otpOpen`) and then clicking "Send
+    // Verification Code" again immediately re-hits the backend's 30s resend
+    // cooldown, which throws before the OTP dialog is ever reopened — the
+    // button just shows a "please wait" error with no way back into it.
+    if (otpContact === email) {
+      setOtpOpen(true);
+      return;
+    }
+
     setSendingOtp(true);
     try {
-      await api.sendOrgDomainOtp(orgEmail.trim());
+      await api.sendOrgDomainOtp(email);
+      setOtpContact(email);
       setOtpSentAt(Date.now());
       setOtpOpen(true);
     } catch (e: any) {
