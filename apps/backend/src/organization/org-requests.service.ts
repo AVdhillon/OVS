@@ -10,9 +10,16 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SubmitOrgRequestDto } from './dto/submit-org-request.dto';
 import { SendOrgDomainOtpDto } from './dto/send-org-domain-otp.dto';
-import { ReviewOrgRequestDto } from './dto/review-org-request.dto';
+import {
+  ReviewOrgRequestDto,
+  ApproveOrgRequestDto,
+} from './dto/review-org-request.dto';
+// EDIT (Phase 6 — subphase 6.3): finalizeSetup() below is the new caller —
+// approve() (6.2) stopped calling either of these; see that method's own
+// header comment for why the org-creation responsibility moved here.
 import { runWithUniqueOrgId } from './orgid.utilities';
 import { createOrganizationCore } from './org-creation.utilities';
+import { FinalizeOrgRequestDto } from './dto/finalize-org-request.dto';
 import { OtpService } from '../otp/otp.service';
 // EDIT (Phase 4 — cutover, subphase 4.5): the four org-request lifecycle
 // notifications — see org-request-email.service.ts's own header comment
@@ -47,22 +54,32 @@ import { OrgRequestEmailService } from './org-request-email.service';
 /** Statuses in which a request is still awaiting a decision. */
 export const OPEN_ORG_REQUEST_STATUSES = ['PENDING', 'NEEDS_INFO'] as const;
 
-/** Mirrors org_requests.chk_org_request_status in the master schema. */
+/**
+ * Mirrors org_requests.chk_org_request_status in the master schema.
+ *
+ * EDIT (Phase 6 — post-approval org finalization, subphase 6.1/6.2): added
+ * 'APPROVED_PENDING_SETUP' — reachable from approve() (6.2) once it stops
+ * creating the organization itself; 'APPROVED' is now only reachable via
+ * finalizeSetup() (6.3).
+ */
 export type OrgRequestStatus =
   | 'PENDING'
   | 'NEEDS_INFO'
+  | 'APPROVED_PENDING_SETUP'
   | 'APPROVED'
   | 'REJECTED';
 
 /**
  * Every status org_requests.status can hold — OPEN_ORG_REQUEST_STATUSES plus
- * the two terminal ones. Used by list() (subphase 3.1) to validate a
- * caller-supplied ?status= filter against the full set, not just the open
- * ones — an admin browsing history needs to filter to APPROVED/REJECTED too.
+ * the three terminal-or-pending-setup ones. Used by list() (subphase 3.1) to
+ * validate a caller-supplied ?status= filter against the full set, not just
+ * the open ones — an admin browsing history needs to filter to
+ * APPROVED_PENDING_SETUP/APPROVED/REJECTED too.
  */
 export const ALL_ORG_REQUEST_STATUSES = [
   'PENDING',
   'NEEDS_INFO',
+  'APPROVED_PENDING_SETUP',
   'APPROVED',
   'REJECTED',
 ] as const;
@@ -91,22 +108,22 @@ export const ALL_ORG_REQUEST_STATUSES = [
 // why that's a separate service, and each call site below for exactly
 // when in the method it fires and why.
 
-// ─── Owner uid generation (subphase 2.4) ──────────────────────────────────────
-// registerOrg() lets its caller choose their own uid (RegisterOrgDto.caller_uid)
-// because they're registering for themselves, live, in the same request. An
-// org_requests submission has no equivalent field — 2.3 deliberately left it
-// out (see submit-org-request.dto.ts: "there's nothing to be a member of" at
-// submission time) — so approve() has to assign one on the requester's behalf.
-//
-// No collision-retry loop is needed here, unlike orgid generation: uid is
-// only unique *within an org* (org_members' PK is (orgid, uid)), and the org
-// this uid is being inserted into does not exist until this same transaction
-// creates it. There is structurally no prior org_members row for this orgid
-// to collide with.
-function generateInitialOwnerUid(): string {
-  const suffix = String(Math.floor(1000 + Math.random() * 9000));
-  return `OWNER${suffix}`;
-}
+// ─── Owner uid (subphase 2.4, removed in 6.3) ─────────────────────────────────
+// This file used to generate a random OWNERxxxx uid on the requester's
+// behalf (generateInitialOwnerUid()) when approve() itself created the
+// organization. As of 6.2, approve() no longer creates any org_members row
+// at all, and as of 6.3, finalizeSetup() — the method that now does —
+// takes a requester-chosen `owner_uid` (FinalizeOrgRequestDto) instead of
+// a random one: the requester is present, authenticated, and finishing
+// setup themselves, so there's no reason to assign them an ID they didn't
+// pick, the way there was when an admin's click was what created the org.
+// No collision-retry loop is needed for it, unlike orgid generation: uid is
+// only unique *within an org* (org_members' PK is (orgid, uid)), and the
+// org a chosen uid is being inserted into does not exist until the same
+// transaction creates it — see FinalizeOrgRequestDto.owner_uid's own
+// comment. generateInitialOwnerUid() itself is deleted rather than left
+// unreferenced, per its own former comment flagging exactly this removal
+// once 6.3 landed.
 
 // ─── Verification signal constants (subphase 4.2) ─────────────────────────────
 // All three thresholds below are heuristics for what's worth showing a
@@ -407,32 +424,42 @@ export class OrgRequestsService {
   }
 
   // ─── Approve a pending request ───────────────────────────────────────────────
-  // EDIT (Phase 2 — subphase 2.4): creates the `organization` row (reusing
-  // 2.2's runWithUniqueOrgId() + 2.4's own extraction, createOrganizationCore()
-  // from org-creation.utilities.ts — the same steps registerOrg() runs),
-  // marks the request APPROVED, and writes the admin_audit_log line, all in
-  // one transaction: if org creation fails, the request is NOT left claimed
-  // with nothing behind it.
-  async approve(requestId: bigint, adminId: string) {
+  // EDIT (Phase 2 — subphase 2.4): originally created the `organization` row
+  // itself (runWithUniqueOrgId() + createOrganizationCore()), marked the
+  // request APPROVED, and wrote the admin_audit_log line, all in one
+  // transaction.
+  //
+  // EDIT (Phase 6 — post-approval org finalization, subphase 6.2): stops
+  // doing any of that. An admin approving a request is no longer the same
+  // moment an organization comes into existence — see this plan's own "Why
+  // this is a phase, not a patch" header for the reasoning. approve() now
+  // only records the admin's sign-off and the member cap they're setting
+  // (admin_set_member_limit), and moves the request to the new
+  // 'APPROVED_PENDING_SETUP' status. Creating the organization itself is
+  // finalizeSetup() (6.3)'s job — a requester-triggered action, not an
+  // admin one — which is why generateInitialOwnerUid(), runWithUniqueOrgId(),
+  // and createOrganizationCore() no longer appear below (they move to
+  // finalizeSetup() in 6.3 instead).
+  async approve(
+    requestId: bigint,
+    adminId: string,
+    dto: ApproveOrgRequestDto,
+  ) {
     // Defense in depth, not a fix to the guard: SiteAdminGuard (1.3)
     // confirms the caller's *session* is valid and SITEADMIN, but its
     // strategy only checks site_admins.is_active at login time (see
     // site-admin-jwt.strategy.ts) — a token issued before an admin was
     // deactivated stays usable for as long as the session itself is active.
-    // Approving a request creates a real organization; re-checking here
-    // costs one query and closes that window for this specific adverse
-    // action, without trying to fix the guard itself (out of this
-    // subphase's scope).
+    // Approving a request commits the platform to a member cap for an org
+    // that will eventually exist; re-checking here costs one query and
+    // closes that window for this specific adverse action, without trying
+    // to fix the guard itself (out of this subphase's scope).
     await this.requireActiveSiteAdmin(adminId);
 
-    // Pre-fetch purely for a fast, friendly error and to seed the orgid
-    // generator's prefix (orgid.utilities.ts needs a name before the
-    // transaction opens). This does NOT close the race against a second
-    // admin approving/rejecting the same request concurrently — the
-    // SELECT ... FOR UPDATE inside the transaction below does that. Same
-    // two-layer shape as submit()'s duplicate check and orgid.utilities.ts's
-    // own pre-check: fast unlocked read for the common case, authoritative
-    // locked read for the race.
+    // Pre-fetch purely for a fast, friendly error. This does NOT close the
+    // race against a second admin approving/rejecting the same request
+    // concurrently — the SELECT ... FOR UPDATE inside the transaction below
+    // does that. Same two-layer shape as reject()/requestInfo().
     const request = await this.prisma.org_requests.findUnique({
       where: { request_id: requestId },
     });
@@ -446,50 +473,220 @@ export class OrgRequestsService {
       );
     }
 
-    // The requester must still have a contact on file to become the org's
-    // first member — same requirement submit() enforced when the request
-    // was created, re-checked here because approval can happen long after
-    // submission. Mirrors IdentityService.requireUnifiedAccount().
-    await this.requireUnifiedAccount(request.pid);
+    // The requester must still have a contact on file — same requirement
+    // submit() enforced when the request was created, re-checked here
+    // because approval can happen long after submission. They'll need this
+    // contact again at finalizeSetup() (6.3) time and for the email sent
+    // below. Mirrors IdentityService.requireUnifiedAccount().
+    const requester = await this.requireUnifiedAccount(request.pid);
+
+    // dto.member_limit's own positivity is enforced by ApproveOrgRequestDto's
+    // @Min(1) — no redundant check needed here the way orgName.length /
+    // resolveReviewNotes() guard against class-validator gaps elsewhere in
+    // this file (@IsInt()/@Min(1) has no equivalent "technically valid but
+    // blank" gap the way an @IsNotEmpty() string does).
+    const memberLimit = dto.member_limit;
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      // Same lock-then-write shape as reject()/requestInfo(), and the same
+      // reasoning approve() itself used to rely on before 6.2: SELECT ...
+      // FOR UPDATE locks the request row first, so a concurrent reviewer on
+      // the same request_id blocks until this transaction commits or rolls
+      // back, then re-reads a status that's no longer open. There's no
+      // organization row involved in this transaction any more, so none of
+      // the claim-then-create-vs-create-then-claim reasoning the old
+      // approve() needed (see git history) applies here.
+      const locked = await tx.$queryRaw<
+        Array<{
+          request_id: bigint;
+          status: string;
+          reference_code: string;
+          org_name: string;
+        }>
+      >`
+        SELECT request_id, status, reference_code, org_name
+        FROM org_requests
+        WHERE request_id = ${requestId}
+        FOR UPDATE
+      `;
+      const claimed = locked[0];
+      // Only reachable if the row was deleted between the pre-fetch above
+      // and here — org_requests has no delete path anywhere in the
+      // codebase (same unexercised-guard note as reject()).
+      if (!claimed) {
+        throw new NotFoundException(`Org request ${requestId} not found`);
+      }
+      if (!this.isOpenStatus(claimed.status)) {
+        throw new ConflictException(
+          `Request ${claimed.reference_code} was already reviewed by someone else.`,
+        );
+      }
+
+      const updated = await tx.org_requests.update({
+        where: { request_id: requestId },
+        data: {
+          status: 'APPROVED_PENDING_SETUP',
+          admin_set_member_limit: memberLimit,
+          reviewed_by_admin_id: adminId,
+          reviewed_at: new Date(),
+          // approved_orgid/setup_completed_at stay NULL —
+          // chk_org_request_review_consistency requires exactly that for
+          // APPROVED_PENDING_SETUP; finalizeSetup() (6.3) sets both later.
+        },
+        select: {
+          request_id: true,
+          reference_code: true,
+          org_name: true,
+          status: true,
+        },
+      });
+
+      await tx.admin_audit_log.create({
+        data: {
+          admin_id: adminId,
+          action: 'ORG_REQUEST_APPROVED',
+          target_type: 'ORG_REQUEST',
+          target_id: String(requestId),
+          // orgid/owner_uid no longer exist at this point in the flow (see
+          // this method's own header comment) — metadata now carries the
+          // decision that WAS made here instead: the member cap.
+          metadata: {
+            member_limit: memberLimit,
+            org_name: updated.org_name,
+          },
+        },
+      });
+
+      return updated;
+    });
+
+    // EDIT (Phase 6 — subphase 6.2): sendApproved() (orgid-bearing) moves to
+    // finalizeSetup() (6.3) — this is the new "approved, action needed"
+    // notification instead, sent once the transaction above has committed,
+    // same "don't email for a decision that got rolled back" reasoning the
+    // old approve() used for sendApproved().
+    await this.emailService.sendApprovedPendingSetup(
+      requester.email,
+      result.reference_code,
+      result.org_name,
+    );
+
+    return {
+      request_id: requestId,
+      status: result.status,
+      reference_code: result.reference_code,
+      org_name: result.org_name,
+      admin_set_member_limit: memberLimit,
+      message:
+        `Request ${result.reference_code} approved. "${result.org_name}"'s member limit ` +
+        `has been set to ${memberLimit}. The requester must now complete setup before ` +
+        `the organization is created.`,
+    };
+  }
+
+  // ─── Finalize setup: the requester actually creates the organization ────────
+  // EDIT (Phase 6 — post-approval org finalization, subphase 6.3): the other
+  // half of the split approve() (6.2) started. An admin's approve() only
+  // gets a request to 'APPROVED_PENDING_SETUP' — this is what the
+  // requester calls afterward to actually bring the organization into
+  // existence, choosing the orgid, confirming the org's contact email, and
+  // supplying their own uid. Reuses runWithUniqueOrgId()/
+  // createOrganizationCore() exactly as registerOrg() does — see this
+  // file's own header comment on the plan for why those were left imported,
+  // unused, through 6.2.
+  async finalizeSetup(
+    requestId: bigint,
+    pid: bigint,
+    dto: FinalizeOrgRequestDto,
+  ) {
+    // Authorization: this is the requester's own action, not an admin one —
+    // no SiteAdminGuard on the route, just the same authenticated-unified-
+    // account check submit()/resubmit() already use. Also doubles as the
+    // source of the owner's contact (identifier) below: requireUnifiedAccount()
+    // already guarantees at least one of email/mobile is set.
+    const requester = await this.requireUnifiedAccount(pid);
+
+    // Fast, unlocked pre-check — same two-layer shape as resubmit()/
+    // approve(): a request_id that exists but belongs to a different pid is
+    // reported identically to one that doesn't exist at all, so this can't
+    // be used to probe for other accounts' requests. The lock inside the
+    // transaction below is what actually closes the race against a second
+    // finalize call.
+    const request = await this.prisma.org_requests.findUnique({
+      where: { request_id: requestId },
+    });
+    if (!request || request.pid !== pid) {
+      throw new NotFoundException(`Org request ${requestId} not found`);
+    }
+    if (request.status !== 'APPROVED_PENDING_SETUP') {
+      throw new ConflictException(
+        `Request ${request.reference_code} is ${request.status}, not ` +
+          `APPROVED_PENDING_SETUP — there is nothing to finalize.`,
+      );
+    }
+
+    // ── Org email: confirm, or re-verify if changed ────────────────────────
+    // Required in this DTO even though org_requests.org_email may already
+    // be OTP-verified from submission (4.3) — real-world time may have
+    // passed since then. Only re-run the domain-ownership OTP flow when the
+    // value actually changed; an unchanged, already-verified email doesn't
+    // need proving twice.
+    const newOrgEmail = dto.org_email.trim().toLowerCase();
+    const previousOrgEmail = request.org_email?.trim().toLowerCase() ?? null;
+    if (newOrgEmail !== previousOrgEmail) {
+      if (!dto.org_email_otp) {
+        throw new BadRequestException(
+          'org_email has changed since submission. Send a new verification code ' +
+            'to it via POST /org/request/send-domain-otp, then include it as ' +
+            'org_email_otp.',
+        );
+      }
+      await this.otpService.verifyOtp(
+        newOrgEmail,
+        dto.org_email_otp,
+        'ORG_DOMAIN_OWNERSHIP',
+      );
+    }
+
+    const ownerUid = dto.owner_uid.trim().toUpperCase();
+
+    // requireUnifiedAccount() guarantees at least one of these is set — this
+    // is unreachable defense-in-depth, not a real branch, kept for the same
+    // reason approve()'s own "unreachable" guards are (see e.g. its
+    // !claimed check above).
+    const identifier = requester.email ?? requester.mobile;
+    if (!identifier) {
+      throw new ForbiddenException(
+        'An email or mobile contact is required to complete setup.',
+      );
+    }
+
+    const preferredOrgId =
+      dto.orgid_choice.mode === 'preferred'
+        ? dto.orgid_choice.orgid
+        : undefined;
 
     const { orgid, result } = await runWithUniqueOrgId(
       this.prisma,
-      { orgName: request.org_name },
+      { orgName: request.org_name, preferredOrgId },
       async (tx, orgid) => {
-        // FOUND WHILE VALIDATING (not in the original plan text): the
-        // obvious "claim atomically, then act on the claimed row" shape —
-        // the same one cast_ballot() uses for event_participants.has_voted
-        // — does NOT work here, and a live-Postgres run against this
-        // schema is what caught it. org_requests.approved_orgid has an FK
-        // to organization(orgid), so a claim that sets approved_orgid
-        // BEFORE the organization row exists fails immediately with a
-        // foreign-key violation. The org has to exist first.
-        //
-        // That rules out claim-then-create, but it doesn't force
-        // create-then-claim either (which would mean sometimes creating an
-        // organization for a request that turns out to already be closed,
-        // relying on the transaction rollback to clean it up on every lost
-        // race — correct, since everything here is one transaction, but
-        // wasteful, and a stale-content risk if the request's own row had
-        // changed underneath us). Instead: SELECT ... FOR UPDATE locks the
-        // request row FIRST, before any INSERT. A concurrent approve() (or
-        // 2.5's future reject()) on the same request_id blocks on this
-        // query until this transaction commits or rolls back, then re-reads
-        // a status that's no longer open and fails its own check below —
-        // so only one transaction ever gets far enough to create the org,
-        // and the row it's built from is guaranteed current for the
-        // lifetime of this transaction, not a pre-lock snapshot.
+        // Same lock-then-write shape approve() used before 6.2, and the
+        // same race it's guarding against: a second finalize call (or the
+        // request somehow re-entering review) firing between the pre-fetch
+        // above and here must not double-create an organization for this
+        // request. Re-reads status under the lock rather than trusting the
+        // pre-fetch.
         const locked = await tx.$queryRaw<
           Array<{
             request_id: bigint;
             pid: bigint;
-            org_name: string;
-            org_email: string | null;
             status: string;
             reference_code: string;
+            org_name: string;
+            admin_set_member_limit: number | null;
           }>
         >`
-          SELECT request_id, pid, org_name, org_email, status, reference_code
+          SELECT request_id, pid, status, reference_code, org_name, admin_set_member_limit
           FROM org_requests
           WHERE request_id = ${requestId}
           FOR UPDATE
@@ -497,101 +694,80 @@ export class OrgRequestsService {
         const claimed = locked[0];
         // Only reachable if the row was deleted between the pre-fetch above
         // and here — org_requests has no delete path anywhere in the
-        // codebase, so this is unexercised in practice, kept as a guard
-        // against a future one being added without updating this method.
-        if (!claimed) {
+        // codebase (same unexercised-guard note as approve()/reject()).
+        if (!claimed || claimed.pid !== pid) {
           throw new NotFoundException(`Org request ${requestId} not found`);
         }
-        if (!this.isOpenStatus(claimed.status)) {
+        if (claimed.status !== 'APPROVED_PENDING_SETUP') {
           throw new ConflictException(
-            `Request ${claimed.reference_code} was already reviewed by someone else.`,
+            `Request ${claimed.reference_code} is ${claimed.status}, not ` +
+              `APPROVED_PENDING_SETUP — setup has already been completed, ` +
+              `or the request is no longer open.`,
+          );
+        }
+        // Unreachable given chk_org_request_review_consistency (a request
+        // can't sit in APPROVED_PENDING_SETUP without admin_set_member_limit
+        // set) — defense-in-depth, not a real branch.
+        if (claimed.admin_set_member_limit == null) {
+          throw new ConflictException(
+            `Request ${claimed.reference_code} has no member limit set.`,
           );
         }
 
-        const requester = await tx.uaccount.findUniqueOrThrow({
-          where: { pid: claimed.pid },
-        });
-        // requireUnifiedAccount() above guarantees at least one of these —
-        // re-checked against the SAME (now-locked) pid, not a stale copy.
-        const ownerIdentifier = requester.email ?? requester.mobile!;
-        const ownerUid = generateInitialOwnerUid();
-
-        const created = await createOrganizationCore(
+        const creation = await createOrganizationCore(
           tx,
           orgid,
           claimed.org_name,
           {
-            orgEmail: claimed.org_email,
-            owner: {
-              pid: claimed.pid,
-              uid: ownerUid,
-              identifier: ownerIdentifier,
-            },
-            // No participants: 2.3 deliberately doesn't collect a roster at
-            // submission time (see submit-org-request.dto.ts) — importing
-            // one is post-approval setup, same as for any other brand-new
-            // org.
+            orgEmail: newOrgEmail,
+            owner: { pid, uid: ownerUid, identifier },
+            // Carried straight from the admin's approve()-time decision —
+            // see OrgCreationParams.memberLimit's own comment for why this
+            // is set at INSERT time rather than a follow-up UPDATE.
+            memberLimit: claimed.admin_set_member_limit,
           },
         );
 
-        // Finalize the request. No WHERE-status guard needed here the way
-        // the (abandoned) claim-first version needed one — the FOR UPDATE
-        // lock above already serialized this against every other writer for
-        // the whole transaction, and this UPDATE runs against the very row
-        // it locked.
-        await tx.org_requests.update({
+        const updatedRequest = await tx.org_requests.update({
           where: { request_id: requestId },
           data: {
             status: 'APPROVED',
             approved_orgid: orgid,
-            reviewed_by_admin_id: adminId,
-            reviewed_at: new Date(),
+            setup_completed_at: new Date(),
+            // Persist the (possibly re-confirmed/changed) email — this is
+            // the value that's actually verified and going onto the org
+            // itself, so the request row should agree with it going
+            // forward rather than keep showing whatever was there at
+            // submission time.
+            org_email: newOrgEmail,
           },
+          select: { reference_code: true, org_name: true },
         });
 
-        await tx.admin_audit_log.create({
-          data: {
-            admin_id: adminId,
-            action: 'ORG_REQUEST_APPROVED',
-            target_type: 'ORG_REQUEST',
-            target_id: String(requestId),
-            // BigInts don't serialize into JSONB on their own — Prisma
-            // throws rather than silently stringifying them.
-            metadata: {
-              orgid,
-              org_name: claimed.org_name,
-              owner_uid: ownerUid,
-              owner_pid: claimed.pid.toString(),
-            },
-          },
-        });
-
-        return { ...created, ownerUid, requesterEmail: requester.email };
+        return { creation, updatedRequest };
       },
     );
 
-    // EDIT (Phase 4 — cutover, subphase 4.5): sent after runWithUniqueOrgId()
-    // resolves, i.e. only once the transaction has actually committed — an
-    // "approved" email for an org that turned out not to exist (transaction
-    // rolled back) would be worse than not sending one at all. requesterEmail
-    // came off the same locked uaccount read the transaction itself used
-    // (see the closure above), not a second query.
+    // EDIT (Phase 6 — subphase 6.3): sendApproved() (orgid-bearing) moves
+    // here from approve() (6.2) — there's now an orgid and an owner
+    // membership to actually report. Sent after the transaction commits,
+    // same "don't email for something that got rolled back" reasoning
+    // every other notification in this file follows.
     await this.emailService.sendApproved(
-      result.requesterEmail,
-      request.reference_code,
-      result.org.org_name,
+      requester.email,
+      result.updatedRequest.reference_code,
+      result.updatedRequest.org_name,
       orgid,
     );
 
     return {
       request_id: requestId,
+      status: 'APPROVED' as const,
+      reference_code: result.updatedRequest.reference_code,
+      org_name: result.updatedRequest.org_name,
       orgid,
-      org_name: result.org.org_name,
-      root_scope_id: result.rootScope.scope_id,
-      owner_uid: result.ownerUid,
-      message:
-        `Request approved. Organization "${result.org.org_name}" created with ID ${orgid}. ` +
-        `The requester has been assigned uid ${result.ownerUid} as the organization's first organizer.`,
+      root_scope_id: result.creation.rootScope.scope_id,
+      message: `Organization "${result.updatedRequest.org_name}" has been created with ID ${orgid}.`,
     };
   }
 
@@ -819,6 +995,170 @@ export class OrgRequestsService {
     };
   }
 
+  // ─── Revoke a stale approval (subphase 6.6) ────────────────────────────────
+  // EDIT (Phase 6 — post-approval org setup, subphase 6.6): the admin side
+  // of the "requester never finishes setup" gap 6.1's schema comment and
+  // idx_org_requests_pending_setup both anticipated. Per the plan's own
+  // "Open decisions" answer: a manual revoke action, no automated
+  // expiry/reversal — this is that manual action, not a cron job.
+  //
+  // Only reachable from APPROVED_PENDING_SETUP (not the OPEN_ORG_REQUEST_
+  // STATUSES reject()/requestInfo()/approve() gate on) — a request that's
+  // still PENDING/NEEDS_INFO was never approved in the first place (reject()
+  // is the right call there), and APPROVED/REJECTED are already terminal.
+  // Lands on REJECTED, same terminal status reject() itself uses: the
+  // organization never came to exist, so there is nothing to "un-approve"
+  // beyond the request row itself, and REJECTED is what frees the org name
+  // back up for a future submission (unique_open_org_request's WHERE clause
+  // does not include REJECTED — see 2.1). admin_set_member_limit is left as
+  // it was set at approval time rather than cleared: it's a historical
+  // record of what was decided, not a live value anything still reads once
+  // the row is REJECTED, and chk_org_request_review_consistency's REJECTED
+  // branch has no opinion on it either way.
+  async revokeApproval(
+    requestId: bigint,
+    adminId: string,
+    dto: ReviewOrgRequestDto,
+  ) {
+    await this.requireActiveSiteAdmin(adminId);
+
+    const request = await this.prisma.org_requests.findUnique({
+      where: { request_id: requestId },
+    });
+    if (!request) {
+      throw new NotFoundException(`Org request ${requestId} not found`);
+    }
+    if (request.status !== 'APPROVED_PENDING_SETUP') {
+      throw new ConflictException(
+        `Request ${request.reference_code} is ${request.status}, not ` +
+          `APPROVED_PENDING_SETUP — only a pending-setup approval can be revoked.`,
+      );
+    }
+
+    const { reviewNote, internalReason } = this.resolveReviewNotes(dto);
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      // Same lock-then-recheck shape as approve()/reject()/requestInfo():
+      // guards against a race with the requester's own finalizeSetup()
+      // call landing concurrently (or a second admin's revoke/reject on
+      // the same row) — whichever transaction locks the row first wins,
+      // and the loser sees a status that's no longer APPROVED_PENDING_SETUP.
+      const locked = await tx.$queryRaw<
+        Array<{
+          request_id: bigint;
+          status: string;
+          reference_code: string;
+          org_name: string;
+        }>
+      >`
+        SELECT request_id, status, reference_code, org_name
+        FROM org_requests
+        WHERE request_id = ${requestId}
+        FOR UPDATE
+      `;
+      const claimed = locked[0];
+      if (!claimed) {
+        throw new NotFoundException(`Org request ${requestId} not found`);
+      }
+      if (claimed.status !== 'APPROVED_PENDING_SETUP') {
+        throw new ConflictException(
+          `Request ${claimed.reference_code} is no longer awaiting setup ` +
+            `(now ${claimed.status}) — it may have just been finalized or ` +
+            `already revoked.`,
+        );
+      }
+
+      const updated = await tx.org_requests.update({
+        where: { request_id: requestId },
+        data: {
+          status: 'REJECTED',
+          reviewed_by_admin_id: adminId,
+          reviewed_at: new Date(),
+          review_note: reviewNote,
+          // approved_orgid/setup_completed_at were already NULL (guaranteed
+          // by chk_org_request_review_consistency's APPROVED_PENDING_SETUP
+          // branch) and stay that way — REJECTED requires exactly that.
+        },
+        select: {
+          request_id: true,
+          reference_code: true,
+          org_name: true,
+          status: true,
+        },
+      });
+
+      await tx.admin_audit_log.create({
+        data: {
+          admin_id: adminId,
+          action: 'ORG_REQUEST_APPROVAL_REVOKED',
+          target_type: 'ORG_REQUEST',
+          target_id: String(requestId),
+          reason: internalReason,
+          metadata: {
+            reference_code: updated.reference_code,
+            org_name: updated.org_name,
+            previous_status: 'APPROVED_PENDING_SETUP',
+          },
+        },
+      });
+
+      return updated;
+    });
+
+    // Same "read pid off the unlocked pre-check, it's immutable" reasoning
+    // as reject()/requestInfo()'s own copy of this.
+    const requester = await this.prisma.uaccount.findUnique({
+      where: { pid: request.pid },
+      select: { email: true },
+    });
+    await this.emailService.sendApprovalRevoked(
+      requester?.email ?? null,
+      result.reference_code,
+      result.org_name,
+      reviewNote,
+    );
+
+    return {
+      ...result,
+      message: `Approval for ${result.reference_code} has been revoked.`,
+    };
+  }
+
+  // ─── Stuck-request admin view (subphase 6.6) ───────────────────────────────
+  /**
+   * Requests sitting in APPROVED_PENDING_SETUP for longer than `minHours`,
+   * oldest-approved-first — queries idx_org_requests_pending_setup (6.1)
+   * directly, per that index's own comment ("don't add a second index for
+   * the same purpose"). Purely visibility, same as the plan's own framing:
+   * nothing here reverses or expires a request automatically, it just
+   * surfaces candidates for an admin to look at and, if they choose,
+   * revoke via revokeApproval() above.
+   */
+  async listStuckPendingSetup(minHours = 24) {
+    const hours = minHours > 0 ? minHours : 0;
+    const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000);
+
+    const requests = await this.prisma.org_requests.findMany({
+      where: {
+        status: 'APPROVED_PENDING_SETUP',
+        reviewed_at: { lte: cutoff },
+      },
+      orderBy: { reviewed_at: 'asc' },
+      select: {
+        request_id: true,
+        reference_code: true,
+        org_name: true,
+        org_email: true,
+        admin_set_member_limit: true,
+        reviewed_at: true,
+        reviewed_by_admin_id: true,
+        pid: true,
+      },
+    });
+
+    return { requests, min_hours: hours, count: requests.length };
+  }
+
   // ─── Admin review queue + detail (subphase 3.1) ──────────────────────────────
   // EDIT (Phase 3 — subphase 3.1): read-only. Phase 2 never needed these —
   // submit()/approve()/reject()/requestInfo() are all write paths — but the
@@ -963,6 +1303,15 @@ export class OrgRequestsService {
         review_note: true,
         reviewed_at: true,
         approved_orgid: true,
+        // EDIT (Phase 6 — post-approval org finalization, subphase 6.5):
+        // the finalize-setup wizard's review step shows this read-only
+        // (per the plan: "not editable here — see Phase 7 for how it
+        // changes later") — it's the one field an APPROVED_PENDING_SETUP
+        // row needs that wasn't already selected here. Still excluded:
+        // the 4.2 verification-signal columns (reviewer-only, per this
+        // method's own comment above) and setup_completed_at (not shown
+        // anywhere in the UI yet — nothing in 6.5 asks for it).
+        admin_set_member_limit: true,
         created_at: true,
         updated_at: true,
       },

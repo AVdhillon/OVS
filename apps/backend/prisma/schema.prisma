@@ -7,116 +7,21 @@ datasource db {
   provider = "postgresql"
 }
 
-model uaccount {
-  pid             BigInt            @id @default(autoincrement())
-  first_name      String            @db.VarChar(50)
-  middle_name     String?           @db.VarChar(50)
-  last_name       String            @db.VarChar(50)
-  mobile          String?           @unique @db.VarChar(10)
-  email           String?           @unique @db.VarChar(100)
-  country         String?           @db.VarChar(32)
-  state           String?           @db.VarChar(32)
-  created_at      DateTime          @default(now()) @db.Timestamp(6)
-  identity_wallet identity_wallet[]
-  org_members     org_members[]
-  org_requests    org_requests[]
-  user_sessions   user_sessions[]
-}
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model admin_audit_log {
+  admin_log_id BigInt      @id @default(autoincrement())
+  admin_id     String      @db.VarChar(20)
+  action       String      @db.VarChar(50)
+  target_type  String      @db.VarChar(20)
+  target_id    String      @db.VarChar(50)
+  reason       String?
+  metadata     Json?
+  created_at   DateTime?   @default(now()) @db.Timestamp(6)
+  site_admins  site_admins @relation(fields: [admin_id], references: [admin_id], onDelete: NoAction, onUpdate: NoAction)
 
-model organization {
-  orgid        String        @id @db.VarChar(20)
-  org_name     String        @db.VarChar(100)
-  org_email    String?       @unique @db.VarChar(100)
-  status       String        @default("ACTIVE") @db.VarChar(20)
-  is_active    Boolean?      @default(dbgenerated("((status)::text = 'ACTIVE'::text)"))
-  is_deleted   Boolean?      @default(false)
-  created_at   DateTime?     @default(now()) @db.Timestamp(6)
-  events       events[]
-  org_members  org_members[]
-  org_requests org_requests?
-  org_scope    org_scope[]
-
-  @@index([status], map: "idx_organization_status")
-  @@index([org_name(ops: raw("gin_trgm_ops"))], map: "idx_organization_org_name_trgm", type: Gin)
-}
-
-model org_members {
-  orgid              String               @db.VarChar(20)
-  uid                String               @db.VarChar(20)
-  pid                BigInt?
-  mobile             String?              @db.VarChar(10)
-  email              String?              @db.VarChar(100)
-  is_deleted         Boolean?             @default(false)
-  event_participants event_participants[]
-  member_roles       member_roles[]
-  organization       organization         @relation(fields: [orgid], references: [orgid], onDelete: NoAction, onUpdate: NoAction)
-  uaccount           uaccount?            @relation(fields: [pid], references: [pid], onUpdate: NoAction)
-
-  @@id([orgid, uid])
-  @@unique([orgid, email], map: "unique_org_email")
-  @@unique([orgid, mobile], map: "unique_org_mobile")
-  @@index([orgid], map: "idx_org_members_orgid")
-  @@index([pid], map: "idx_org_members_pid")
-  @@index([orgid], map: "idx_org_members_active", where: raw("(is_deleted = false)"))
-}
-
-model member_roles {
-  orgid        String      @db.VarChar(20)
-  uid          String      @db.VarChar(20)
-  is_voter     Boolean?    @default(true)
-  is_organizer Boolean?    @default(false)
-  scope_id     Int
-  org_members  org_members @relation(fields: [orgid, uid], references: [orgid, uid], onDelete: Cascade, onUpdate: NoAction)
-  org_scope    org_scope   @relation(fields: [scope_id], references: [scope_id], onDelete: NoAction, onUpdate: NoAction)
-
-  @@id([orgid, uid, scope_id])
-  @@index([orgid, scope_id], map: "idx_member_roles_scope")
-  @@index([uid], map: "idx_member_roles_uid")
-  @@index([orgid, uid, is_voter, scope_id], map: "idx_member_roles_voter")
-}
-
-model events {
-  event_id           Int                  @id @default(autoincrement())
-  orgid              String?              @db.VarChar(20)
-  created_by_uid     String?              @db.VarChar(20)
-  scope_id           Int?
-  title              String               @db.VarChar(200)
-  description        String?
-  start_time         DateTime             @db.Timestamp(6)
-  end_time           DateTime             @db.Timestamp(6)
-  show_live_results  Boolean?             @default(false)
-  visibility_upward  Boolean?             @default(false)
-  scope_only         Boolean?             @default(false)
-  status             String?              @default("ACTIVE") @db.VarChar(20)
-  is_deleted         Boolean?             @default(false)
-  created_at         DateTime?            @default(now()) @db.Timestamp(6)
-  candidates         candidates[]
-  event_participants event_participants[]
-  organization       organization?        @relation(fields: [orgid], references: [orgid], onDelete: NoAction, onUpdate: NoAction)
-  org_scope          org_scope?           @relation(fields: [scope_id], references: [scope_id], onDelete: NoAction, onUpdate: NoAction)
-  vote_ballots       vote_ballots[]
-  vote_results       vote_results[]
-
-  @@index([orgid], map: "idx_events_orgid")
-  @@index([scope_id], map: "idx_events_scope")
-}
-
-model vote_ballots {
-  ballot_id          Int        @id @default(autoincrement())
-  event_id           Int
-  candidate_id       Int
-  voter_hash         String
-  voted_at           DateTime?  @default(now()) @db.Timestamp(6)
-  ip_address         String?    @db.Inet
-  device_fingerprint String?
-  candidates         candidates @relation(fields: [candidate_id], references: [candidate_id], onUpdate: NoAction)
-  events             events     @relation(fields: [event_id], references: [event_id], onDelete: NoAction, onUpdate: NoAction)
-
-  @@index([candidate_id], map: "idx_vote_ballots_candidate")
-  @@index([device_fingerprint], map: "idx_vote_ballots_device")
-  @@index([event_id], map: "idx_vote_ballots_event")
-  @@index([ip_address], map: "idx_vote_ballots_ip")
-  @@index([voted_at], map: "idx_vote_ballots_voted_at")
+  @@index([admin_id, created_at(sort: Desc)], map: "idx_admin_audit_admin")
+  @@index([created_at(sort: Desc)], map: "idx_admin_audit_created")
+  @@index([target_type, target_id, created_at(sort: Desc)], map: "idx_admin_audit_target")
 }
 
 /// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
@@ -129,8 +34,8 @@ model audit_logs {
   changed_by   String?   @db.VarChar(50)
   changed_at   DateTime? @default(now()) @db.Timestamp(6)
 
-  @@index([table_name], map: "idx_audit_table")
   @@index([changed_at(sort: Desc)], map: "idx_audit_changed_at")
+  @@index([table_name], map: "idx_audit_table")
 }
 
 model candidates {
@@ -155,6 +60,33 @@ model event_participants {
 
   @@id([event_id, orgid, uid])
   @@index([event_id], map: "idx_event_participants")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model events {
+  event_id           Int                  @id @default(autoincrement())
+  orgid              String?              @db.VarChar(20)
+  created_by_uid     String?              @db.VarChar(20)
+  scope_id           Int?
+  title              String               @db.VarChar(200)
+  description        String?
+  start_time         DateTime             @db.Timestamp(6)
+  end_time           DateTime             @db.Timestamp(6)
+  show_live_results  Boolean?             @default(false)
+  visibility_upward  Boolean?             @default(false)
+  scope_only         Boolean?             @default(false)
+  status             String?              @default("ACTIVE") @db.VarChar(20)
+  is_deleted         Boolean?             @default(false)
+  created_at         DateTime?            @default(now()) @db.Timestamp(6)
+  candidates         candidates[]
+  event_participants event_participants[]
+  organization       organization?        @relation(fields: [orgid], references: [orgid], onDelete: NoAction, onUpdate: NoAction)
+  org_scope          org_scope?           @relation(fields: [scope_id], references: [scope_id], onDelete: NoAction, onUpdate: NoAction)
+  vote_ballots       vote_ballots[]
+  vote_results       vote_results[]
+
+  @@index([orgid], map: "idx_events_orgid")
+  @@index([scope_id], map: "idx_events_scope")
 }
 
 model fraud_logs {
@@ -182,91 +114,64 @@ model identity_wallet {
   @@index([pid], map: "idx_identity_wallet_pid")
 }
 
-model org_scope {
-  scope_id                                             Int             @id @default(autoincrement())
-  orgid                                                String          @db.VarChar(20)
-  scope_name                                           String          @db.VarChar(100)
-  parent_scope_id                                      Int?
-  events                                               events[]
-  member_roles                                         member_roles[]
-  organization                                         organization    @relation(fields: [orgid], references: [orgid], onDelete: NoAction, onUpdate: NoAction)
-  org_scope                                            org_scope?      @relation("org_scopeToorg_scope", fields: [parent_scope_id], references: [scope_id], onDelete: NoAction, onUpdate: NoAction)
-  other_org_scope                                      org_scope[]     @relation("org_scopeToorg_scope")
-  scope_closure_scope_closure_ancestor_idToorg_scope   scope_closure[] @relation("scope_closure_ancestor_idToorg_scope")
-  scope_closure_scope_closure_descendant_idToorg_scope scope_closure[] @relation("scope_closure_descendant_idToorg_scope")
+model member_roles {
+  orgid        String      @db.VarChar(20)
+  uid          String      @db.VarChar(20)
+  is_voter     Boolean?    @default(true)
+  is_organizer Boolean?    @default(false)
+  scope_id     Int
+  org_members  org_members @relation(fields: [orgid, uid], references: [orgid, uid], onDelete: Cascade, onUpdate: NoAction)
+  org_scope    org_scope   @relation(fields: [scope_id], references: [scope_id], onDelete: NoAction, onUpdate: NoAction)
 
-  @@unique([orgid, parent_scope_id, scope_name], map: "unique_scope_name")
-  @@index([parent_scope_id], map: "idx_scope_parent")
+  @@id([orgid, uid, scope_id])
+  @@index([orgid, scope_id], map: "idx_member_roles_scope")
+  @@index([uid], map: "idx_member_roles_uid")
+  @@index([orgid, uid, is_voter, scope_id], map: "idx_member_roles_voter")
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
-model otp_verification {
-  otp_id      Int       @id @default(autoincrement())
-  identifier  String    @db.VarChar(100)
-  otp_code    String
-  attempts    Int?      @default(0)
-  purpose     String    @default("LOGIN") @db.VarChar(30)
-  created_at  DateTime? @default(now()) @db.Timestamp(6)
-  expires_at  DateTime  @db.Timestamp(6)
-  is_verified Boolean?  @default(false)
+model org_member_limit_requests {
+  request_id           BigInt       @id @default(autoincrement())
+  orgid                String       @db.VarChar(20)
+  requested_by_uid     String       @db.VarChar(20)
+  current_limit        Int
+  requested_limit      Int
+  justification        String?
+  status               String       @default("PENDING") @db.VarChar(20)
+  reviewed_by_admin_id String?      @db.VarChar(20)
+  reviewed_at          DateTime?    @db.Timestamp(6)
+  review_note          String?
+  open_request_marker  String?      @unique(map: "unique_open_limit_request") @default(dbgenerated("\nCASE\n    WHEN ((status)::text = ANY ((ARRAY['PENDING'::character varying, 'NEEDS_INFO'::character varying])::text[])) THEN orgid\n    ELSE NULL::character varying\nEND")) @db.VarChar(20)
+  created_at           DateTime     @default(now()) @db.Timestamp(6)
+  updated_at           DateTime?    @default(now()) @db.Timestamp(6)
+  organization         organization @relation(fields: [orgid], references: [orgid], onDelete: NoAction, onUpdate: NoAction)
+  org_members          org_members  @relation(fields: [orgid, requested_by_uid], references: [orgid, uid], onDelete: NoAction, onUpdate: NoAction)
+  site_admins          site_admins? @relation(fields: [reviewed_by_admin_id], references: [admin_id], onDelete: NoAction, onUpdate: NoAction)
 
-  @@unique([identifier, purpose], map: "unique_active_otp", where: raw("(is_verified = false)"))
-}
-
-model user_sessions {
-  session_id    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  token         String?
-  pid           BigInt?
-  identity_type String?   @db.VarChar(10)
-  identity_id   String?   @db.VarChar(20)
-  uid           String?   @db.VarChar(20)
-  created_at    DateTime? @default(now()) @db.Timestamp(6)
-  expires_at    DateTime  @db.Timestamp(6)
-  is_active     Boolean?  @default(true)
-  ip_address    String?   @db.Inet
-  user_agent    String?
-  uaccount      uaccount? @relation(fields: [pid], references: [pid], onDelete: NoAction, onUpdate: NoAction)
-
-  @@index([pid, identity_type, is_active], map: "idx_active_sessions")
-}
-
-model vote_results {
-  event_id     Int
-  candidate_id Int
-  vote_count   Int?       @default(0)
-  candidates   candidates @relation(fields: [candidate_id], references: [candidate_id], onDelete: NoAction, onUpdate: NoAction)
-  events       events     @relation(fields: [event_id], references: [event_id], onDelete: NoAction, onUpdate: NoAction)
-
-  @@id([event_id, candidate_id])
-}
-
-model scope_closure {
-  ancestor_id                                      Int
-  descendant_id                                    Int
-  depth                                            Int       @default(0)
-  org_scope_scope_closure_ancestor_idToorg_scope   org_scope @relation("scope_closure_ancestor_idToorg_scope", fields: [ancestor_id], references: [scope_id], onDelete: Cascade, onUpdate: NoAction)
-  org_scope_scope_closure_descendant_idToorg_scope org_scope @relation("scope_closure_descendant_idToorg_scope", fields: [descendant_id], references: [scope_id], onDelete: Cascade, onUpdate: NoAction)
-
-  @@id([ancestor_id, descendant_id])
-  @@index([ancestor_id], map: "idx_closure_ancestor")
-  @@index([descendant_id], map: "idx_closure_descendant")
+  @@index([orgid, created_at(sort: Desc)], map: "idx_limit_requests_orgid")
+  @@index([status, created_at], map: "idx_limit_requests_status")
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
-model admin_audit_log {
-  admin_log_id BigInt      @id @default(autoincrement())
-  admin_id     String      @db.VarChar(20)
-  action       String      @db.VarChar(50)
-  target_type  String      @db.VarChar(20)
-  target_id    String      @db.VarChar(50)
-  reason       String?
-  metadata     Json?
-  created_at   DateTime?   @default(now()) @db.Timestamp(6)
-  site_admins  site_admins @relation(fields: [admin_id], references: [admin_id], onDelete: NoAction, onUpdate: NoAction)
+model org_members {
+  orgid                     String                      @db.VarChar(20)
+  uid                       String                      @db.VarChar(20)
+  pid                       BigInt?
+  mobile                    String?                     @db.VarChar(10)
+  email                     String?                     @db.VarChar(100)
+  is_deleted                Boolean?                    @default(false)
+  event_participants        event_participants[]
+  member_roles              member_roles[]
+  org_member_limit_requests org_member_limit_requests[]
+  organization              organization                @relation(fields: [orgid], references: [orgid], onDelete: NoAction, onUpdate: NoAction)
+  uaccount                  uaccount?                   @relation(fields: [pid], references: [pid], onUpdate: NoAction)
 
-  @@index([admin_id, created_at(sort: Desc)], map: "idx_admin_audit_admin")
-  @@index([created_at(sort: Desc)], map: "idx_admin_audit_created")
-  @@index([target_type, target_id, created_at(sort: Desc)], map: "idx_admin_audit_target")
+  @@id([orgid, uid])
+  @@unique([orgid, email], map: "unique_org_email")
+  @@unique([orgid, mobile], map: "unique_org_mobile")
+  @@index([orgid], map: "idx_org_members_active", where: raw("(is_deleted = false)"))
+  @@index([orgid], map: "idx_org_members_orgid")
+  @@index([pid], map: "idx_org_members_pid")
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -285,32 +190,162 @@ model org_requests {
   requester_account_age_days Int?
   member_count_risk_flag     Boolean       @default(false)
   org_email_verified         Boolean       @default(false)
-  status                     String        @default("PENDING") @db.VarChar(20)
+  status                     String        @default("PENDING") @db.VarChar(30)
   reviewed_by_admin_id       String?       @db.VarChar(20)
   reviewed_at                DateTime?     @db.Timestamp(6)
   review_note                String?
   approved_orgid             String?       @unique @db.VarChar(20)
+  admin_set_member_limit     Int?
+  setup_completed_at         DateTime?     @db.Timestamp(6)
   created_at                 DateTime      @default(now()) @db.Timestamp(6)
   updated_at                 DateTime?     @default(now()) @db.Timestamp(6)
   organization               organization? @relation(fields: [approved_orgid], references: [orgid], onDelete: NoAction, onUpdate: NoAction)
   uaccount                   uaccount      @relation(fields: [pid], references: [pid], onUpdate: NoAction)
   site_admins                site_admins?  @relation(fields: [reviewed_by_admin_id], references: [admin_id], onDelete: NoAction, onUpdate: NoAction)
 
+  @@index([status, reviewed_at], map: "idx_org_requests_pending_setup", where: raw("((status)::text = 'APPROVED_PENDING_SETUP'::text)"))
   @@index([pid, created_at(sort: Desc)], map: "idx_org_requests_pid")
   @@index([status, created_at], map: "idx_org_requests_status")
 }
 
+model org_scope {
+  scope_id                                             Int             @id @default(autoincrement())
+  orgid                                                String          @db.VarChar(20)
+  scope_name                                           String          @db.VarChar(100)
+  parent_scope_id                                      Int?
+  events                                               events[]
+  member_roles                                         member_roles[]
+  organization                                         organization    @relation(fields: [orgid], references: [orgid], onDelete: NoAction, onUpdate: NoAction)
+  org_scope                                            org_scope?      @relation("org_scopeToorg_scope", fields: [parent_scope_id], references: [scope_id], onDelete: NoAction, onUpdate: NoAction)
+  other_org_scope                                      org_scope[]     @relation("org_scopeToorg_scope")
+  scope_closure_scope_closure_ancestor_idToorg_scope   scope_closure[] @relation("scope_closure_ancestor_idToorg_scope")
+  scope_closure_scope_closure_descendant_idToorg_scope scope_closure[] @relation("scope_closure_descendant_idToorg_scope")
+
+  @@unique([orgid, parent_scope_id, scope_name], map: "unique_scope_name")
+  @@index([parent_scope_id], map: "idx_scope_parent")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model organization {
+  orgid                     String                      @id @db.VarChar(20)
+  org_name                  String                      @db.VarChar(100)
+  org_email                 String?                     @unique @db.VarChar(100)
+  status                    String                      @default("ACTIVE") @db.VarChar(20)
+  is_active                 Boolean?                    @default(dbgenerated("((status)::text = 'ACTIVE'::text)"))
+  is_deleted                Boolean?                    @default(false)
+  member_limit              Int
+  created_at                DateTime?                   @default(now()) @db.Timestamp(6)
+  events                    events[]
+  org_member_limit_requests org_member_limit_requests[]
+  org_members               org_members[]
+  org_requests              org_requests?
+  org_scope                 org_scope[]
+
+  @@index([org_name(ops: raw("gin_trgm_ops"))], map: "idx_organization_org_name_trgm", type: Gin)
+  @@index([status], map: "idx_organization_status")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model otp_verification {
+  otp_id      Int       @id @default(autoincrement())
+  identifier  String    @db.VarChar(100)
+  otp_code    String
+  attempts    Int?      @default(0)
+  purpose     String    @default("LOGIN") @db.VarChar(30)
+  created_at  DateTime? @default(now()) @db.Timestamp(6)
+  expires_at  DateTime  @db.Timestamp(6)
+  is_verified Boolean?  @default(false)
+
+  @@unique([identifier, purpose], map: "unique_active_otp", where: raw("(is_verified = false)"))
+}
+
+model scope_closure {
+  ancestor_id                                      Int
+  descendant_id                                    Int
+  depth                                            Int       @default(0)
+  org_scope_scope_closure_ancestor_idToorg_scope   org_scope @relation("scope_closure_ancestor_idToorg_scope", fields: [ancestor_id], references: [scope_id], onDelete: Cascade, onUpdate: NoAction)
+  org_scope_scope_closure_descendant_idToorg_scope org_scope @relation("scope_closure_descendant_idToorg_scope", fields: [descendant_id], references: [scope_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([ancestor_id, descendant_id])
+  @@index([ancestor_id], map: "idx_closure_ancestor")
+  @@index([descendant_id], map: "idx_closure_descendant")
+}
+
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model site_admins {
-  admin_id        String            @id @db.VarChar(20)
-  name            String            @db.VarChar(100)
-  email           String            @unique @db.VarChar(100)
-  mobile          String?           @unique @db.VarChar(10)
-  is_super_admin  Boolean?          @default(false)
-  is_active       Boolean?          @default(true)
-  created_at      DateTime?         @default(now()) @db.Timestamp(6)
-  admin_audit_log admin_audit_log[]
-  org_requests    org_requests[]
+  admin_id                  String                      @id @db.VarChar(20)
+  name                      String                      @db.VarChar(100)
+  email                     String                      @unique @db.VarChar(100)
+  mobile                    String?                     @unique @db.VarChar(10)
+  is_super_admin            Boolean?                    @default(false)
+  is_active                 Boolean?                    @default(true)
+  created_at                DateTime?                   @default(now()) @db.Timestamp(6)
+  admin_audit_log           admin_audit_log[]
+  org_member_limit_requests org_member_limit_requests[]
+  org_requests              org_requests[]
 
   @@index([admin_id], map: "idx_site_admins_active", where: raw("(is_active = true)"))
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model uaccount {
+  pid             BigInt            @id @default(autoincrement())
+  first_name      String            @db.VarChar(50)
+  middle_name     String?           @db.VarChar(50)
+  last_name       String            @db.VarChar(50)
+  mobile          String?           @unique @db.VarChar(10)
+  email           String?           @unique @db.VarChar(100)
+  country         String?           @db.VarChar(32)
+  state           String?           @db.VarChar(32)
+  created_at      DateTime          @default(now()) @db.Timestamp(6)
+  identity_wallet identity_wallet[]
+  org_members     org_members[]
+  org_requests    org_requests[]
+  user_sessions   user_sessions[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model user_sessions {
+  session_id    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  token         String?
+  pid           BigInt?
+  identity_type String?   @db.VarChar(10)
+  identity_id   String?   @db.VarChar(20)
+  uid           String?   @db.VarChar(20)
+  created_at    DateTime? @default(now()) @db.Timestamp(6)
+  expires_at    DateTime  @db.Timestamp(6)
+  is_active     Boolean?  @default(true)
+  ip_address    String?   @db.Inet
+  user_agent    String?
+  uaccount      uaccount? @relation(fields: [pid], references: [pid], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([pid, identity_type, is_active], map: "idx_active_sessions")
+}
+
+model vote_ballots {
+  ballot_id          Int        @id @default(autoincrement())
+  event_id           Int
+  candidate_id       Int
+  voter_hash         String
+  voted_at           DateTime?  @default(now()) @db.Timestamp(6)
+  ip_address         String?    @db.Inet
+  device_fingerprint String?
+  candidates         candidates @relation(fields: [candidate_id], references: [candidate_id], onUpdate: NoAction)
+  events             events     @relation(fields: [event_id], references: [event_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([candidate_id], map: "idx_vote_ballots_candidate")
+  @@index([device_fingerprint], map: "idx_vote_ballots_device")
+  @@index([event_id], map: "idx_vote_ballots_event")
+  @@index([ip_address], map: "idx_vote_ballots_ip")
+  @@index([voted_at], map: "idx_vote_ballots_voted_at")
+}
+
+model vote_results {
+  event_id     Int
+  candidate_id Int
+  vote_count   Int?       @default(0)
+  candidates   candidates @relation(fields: [candidate_id], references: [candidate_id], onDelete: NoAction, onUpdate: NoAction)
+  events       events     @relation(fields: [event_id], references: [event_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([event_id, candidate_id])
 }

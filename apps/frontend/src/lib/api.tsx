@@ -71,6 +71,12 @@ export interface OrgRequestSubmitResponse {
 // own comment) but not narrower than OrgRequestSubmitResponse: unlike a fresh
 // submission's response, a listed request may be REJECTED/NEEDS_INFO, so this
 // carries review_note/reviewed_at/approved_orgid too.
+//
+// EDIT (Phase 6 — post-approval org finalization, subphase 6.5): status
+// widened to include 'APPROVED_PENDING_SETUP' (6.1's schema change) and
+// admin_set_member_limit added — listMine() (org-requests.service.ts) now
+// selects it too, needed for the finalize-setup wizard's read-only review
+// step. null for every status this side of an admin's approve() call.
 export interface OrgRequestMine {
   request_id: string;
   reference_code: string;
@@ -78,10 +84,93 @@ export interface OrgRequestMine {
   org_email: string | null;
   expected_member_count: number | null;
   justification: string | null;
-  status: "PENDING" | "NEEDS_INFO" | "APPROVED" | "REJECTED";
+  status:
+    | "PENDING"
+    | "NEEDS_INFO"
+    | "APPROVED_PENDING_SETUP"
+    | "APPROVED"
+    | "REJECTED";
   review_note: string | null;
   reviewed_at: string | null;
   approved_orgid: string | null;
+  admin_set_member_limit: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// EDIT (Phase 6 — post-approval org finalization, subphase 6.5): input for
+// POST /org/request/:requestId/finalize — mirrors FinalizeOrgRequestDto
+// (finalize-org-request.dto.ts) field-for-field.
+export interface FinalizeOrgRequestBody {
+  orgid_choice: { mode: "preferred"; orgid: string } | { mode: "generate" };
+  org_email: string;
+  org_email_otp?: string;
+  owner_uid: string;
+}
+
+// Response shape of OrgRequestsService.finalizeSetup() — same
+// { orgid, root_scope_id, ... } shape the old registerOrg() endpoint used
+// to return (see that method's own comment), now on the finalize route.
+export interface FinalizeOrgRequestResponse {
+  request_id: string;
+  status: "APPROVED";
+  reference_code: string;
+  org_name: string;
+  orgid: string;
+  root_scope_id: number;
+  message: string;
+}
+
+export interface OrgIdAvailabilityResponse {
+  orgid: string;
+  available: boolean;
+}
+
+// ── Member limit increase requests (Phase 7 — Member Limit Increase
+// Requests, subphase 7.4) ───────────────────────────────────────────────────
+// Types mirror OrgLimitRequestsService's (7.2/7.3) plain-object return
+// shapes. Deliberately their own interfaces rather than reusing
+// OrgRequestSubmitResponse/OrgRequestMine — org_member_limit_requests has no
+// reference_code/expected_member_count/approved_orgid, and carries
+// current_limit/requested_limit, which org_requests has no equivalent of.
+
+export type MemberLimitRequestStatus =
+  | "PENDING"
+  | "NEEDS_INFO"
+  | "APPROVED"
+  | "REJECTED";
+
+/** POST /org/:orgid/member-limit-requests — OrgLimitRequestsService.submit()'s shape. */
+export interface MemberLimitRequestSubmitResponse {
+  request_id: string;
+  orgid: string;
+  requested_by_uid: string;
+  current_limit: number;
+  requested_limit: number;
+  justification: string | null;
+  status: MemberLimitRequestStatus;
+  created_at: string;
+  message: string;
+}
+
+/**
+ * GET /org/:orgid/member-limit-requests — one row of this org's own history,
+ * newest first. OrgLimitRequestsService.listForOrg() returns the full row
+ * (unlike list()'s narrower admin-queue projection), so this carries
+ * review_note/reviewed_at too — an organizer whose request came back
+ * NEEDS_INFO needs to see what the admin actually wrote.
+ */
+export interface MemberLimitRequestRow {
+  request_id: string;
+  orgid: string;
+  requested_by_uid: string;
+  current_limit: number;
+  requested_limit: number;
+  justification: string | null;
+  status: MemberLimitRequestStatus;
+  reviewed_by_admin_id: string | null;
+  reviewed_at: string | null;
+  review_note: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -508,6 +597,49 @@ export const api = {
         method: "POST",
         body: JSON.stringify(body),
       },
+    ),
+
+  // EDIT (Phase 6 — post-approval org finalization, subphase 6.5): the
+  // finalize-setup wizard's two calls — a live, read-only "is this orgid
+  // free" check as the requester types their own choice (org.controller.ts's
+  // GET /org/orgid-available, itself a thin wrapper — see that route's own
+  // comment), and the actual finalize submission
+  // (OrgRequestsService.finalizeSetup(), 6.3). Both against the singular
+  // '/org/request/...' path convention — see 6.3's own note on why that's
+  // deliberate, not a typo, despite the plan's prose writing it plural.
+  checkOrgIdAvailable: (orgid: string) =>
+    request<OrgIdAvailabilityResponse>(
+      `/org/orgid-available?orgid=${encodeURIComponent(orgid)}`,
+    ),
+
+  finalizeOrgRequest: (requestId: string, body: FinalizeOrgRequestBody) =>
+    request<FinalizeOrgRequestResponse>(
+      `/org/request/${requestId}/finalize`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    ),
+
+  // EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.4): the org
+  // admin dashboard's "Request increase" action and its own request
+  // history. Both organizer-only server-side (org.controller.ts's
+  // @RequireOrganizer('orgid')) — `uid` is passed as a query param, same
+  // convention as getMembers()/addMembers() below, for RolesGuard to resolve
+  // and verify rather than trust blindly.
+  submitLimitRequest: (
+    orgid: string,
+    uid: string,
+    body: { requested_limit: number; justification?: string },
+  ) =>
+    request<MemberLimitRequestSubmitResponse>(
+      `/org/${orgid}/member-limit-requests?uid=${encodeURIComponent(uid)}`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+
+  listLimitRequestsForOrg: (orgid: string, uid: string) =>
+    request<MemberLimitRequestRow[]>(
+      `/org/${orgid}/member-limit-requests?uid=${encodeURIComponent(uid)}`,
     ),
 
   // ── Org Members ────────────────────────────────────────────────────────────

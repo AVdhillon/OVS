@@ -3,6 +3,11 @@ import { AdminLoginPage } from "./pages/admin-login-page";
 import { AdminDashboardPage } from "./pages/admin-dashboard-page";
 import { AdminRequestQueuePage } from "./pages/admin-request-queue-page";
 import { AdminRequestDetailPage } from "./pages/admin-request-detail-page";
+// EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.4): the
+// member-limit-request review screen — a separate component/route from
+// AdminRequestDetailPage, per that page's own header comment.
+import { AdminMemberLimitDetailPage } from "./pages/admin-member-limit-detail-page";
+import { AdminStuckRequestsPage } from "./pages/admin-stuck-requests-page";
 import { AdminOrgDirectoryPage } from "./pages/admin-org-directory-page";
 import { AdminOrgDetailPage } from "./pages/admin-org-detail-page";
 import { AdminAuditLogPage } from "./pages/admin-audit-log-page";
@@ -59,8 +64,30 @@ export const adminRouter = createBrowserRouter(
       element: <ProtectedRoute />,
       children: [
         { index: true, element: <AdminRequestQueuePage /> },
+        // EDIT (Phase 6 — post-approval org setup, subphase 6.6): the
+        // stuck-in-setup admin view. A static segment, so React Router's
+        // own route ranking (static beats dynamic regardless of
+        // declaration order) keeps it from ever being swallowed by
+        // ":requestId" below — unlike the backend's Express-style ordering
+        // concern on the equivalent GET route in
+        // org-requests-admin.controller.ts, this isn't order-dependent,
+        // but it's still listed first for readability.
+        { path: "stuck", element: <AdminStuckRequestsPage /> },
         { path: ":requestId", element: <AdminRequestDetailPage /> },
       ],
+    },
+    // EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.4): its own
+    // top-level path, not nested under /requests/:requestId — the unified
+    // queue (AdminRequestQueuePage) already tells the two request kinds
+    // apart by request_type before it ever navigates, and a shared
+    // "/requests/:requestId" segment would need extra logic downstream just
+    // to redisambiguate what a plain ":requestId" route can't on its own
+    // (both tables' request_id sequences overlap, so a bare id doesn't say
+    // which table it's from).
+    {
+      path: "/member-limit-requests",
+      element: <ProtectedRoute />,
+      children: [{ path: ":requestId", element: <AdminMemberLimitDetailPage /> }],
     },
     // EDIT (Phase 3 — admin portal core, subphase 3.6): org-directory +
     // org-detail pages, same ProtectedRoute gating as /requests above.

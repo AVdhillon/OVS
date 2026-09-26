@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { api } from "../../lib/api";
 import type { MemberRole, OrgMemberWithRoles } from "../../lib/api";
+// EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.4): MemberLimitTab's own history type.
+import type { MemberLimitRequestRow } from "../../lib/api";
 import { useAppContext } from "../context/app-context";
 import type { OrgSummary, ScopeNode } from "../context/app-context";
 import { toast } from "sonner";
@@ -63,6 +65,9 @@ import {
 } from "../components/ui/popover";
 import { Textarea } from "../components/ui/textarea";
 import { Checkbox } from "../components/ui/checkbox";
+// EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.4): the
+// member-limit tab's usage bar.
+import { Progress } from "../components/ui/progress";
 import {
   Search,
   X,
@@ -2921,6 +2926,231 @@ function AddMembersDialog({
 }
 
 // ─── Manage Org Panel ─────────────────────────────────────────────────────────
+// ─── Member limit tab (Phase 7 — Member Limit Increase Requests, subphase
+// 7.4) ───────────────────────────────────────────────────────────────────────
+// EDIT (subphase 7.4): new. Backs ManageOrgPanel's "Member limit" tab —
+// "current limit + usage (member_count/member_limit), a 'Request increase'
+// action that opens 7.1's form, and status of any open request", per the
+// plan's own 7.4 text. Its own component rather than inlined into
+// ManageOrgPanel: the members/scope tabs above already make that function
+// long, and this tab's state (history list, submit-dialog form fields) has
+// nothing in common with either of theirs.
+function MemberLimitTab({ org }: { org: OrgSummary }) {
+  const [history, setHistory] = useState<MemberLimitRequestRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [requestedLimit, setRequestedLimit] = useState("");
+  const [justification, setJustification] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const fetchHistory = useCallback(async () => {
+    setLoading(true);
+    try {
+      setHistory(await api.listLimitRequestsForOrg(org.orgid, org.uid));
+    } catch (e: any) {
+      toast.error(e.message ?? "Failed to load member limit requests");
+    } finally {
+      setLoading(false);
+    }
+  }, [org.orgid, org.uid]);
+
+  useEffect(() => {
+    fetchHistory();
+  }, [fetchHistory]);
+
+  // listForOrg() returns newest-first (idx_limit_requests_orgid's own
+  // ordering, see that method's comment) — the open one, if any, is
+  // whichever PENDING/NEEDS_INFO row comes first, not necessarily
+  // history[0] (a REJECTED/APPROVED row submitted moments later, in theory,
+  // though unique_open_limit_request means there's at most one open row to
+  // find regardless of position).
+  const openRequest = history.find(
+    (r) => r.status === "PENDING" || r.status === "NEEDS_INFO",
+  );
+
+  const usagePct = org.member_limit > 0
+    ? Math.min(100, Math.round((org.member_count / org.member_limit) * 100))
+    : 0;
+
+  const openDialog = () => {
+    setRequestedLimit(String(org.member_limit + 1));
+    setJustification("");
+    setFormError(null);
+    setDialogOpen(true);
+  };
+
+  const closeDialog = () => {
+    if (submitting) return;
+    setDialogOpen(false);
+  };
+
+  const handleSubmit = async () => {
+    const limit = Number(requestedLimit);
+    if (!Number.isInteger(limit) || limit <= org.member_limit) {
+      setFormError(
+        `Enter a whole number greater than the current limit (${org.member_limit}).`,
+      );
+      return;
+    }
+    setSubmitting(true);
+    setFormError(null);
+    try {
+      const res = await api.submitLimitRequest(org.orgid, org.uid, {
+        requested_limit: limit,
+        justification: justification.trim() || undefined,
+      });
+      toast.success(res.message);
+      setDialogOpen(false);
+      await fetchHistory();
+    } catch (e: any) {
+      setFormError(e?.message ?? "Failed to submit request");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
+          <div>
+            <CardTitle className="text-base">Member limit</CardTitle>
+            <CardDescription>
+              {org.member_count} of {org.member_limit} members
+            </CardDescription>
+          </div>
+          {/* One open request per org at a time (unique_open_limit_request,
+              7.1) — disabling this while one is open avoids a guaranteed
+              409 round trip, same "friendly guard in front of a DB-level
+              backstop" reasoning the backend itself uses. */}
+          <Button size="sm" onClick={openDialog} disabled={!!openRequest}>
+            <Plus className="mr-1.5 size-4" />
+            Request increase
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Progress value={usagePct} />
+
+          {openRequest && (
+            <div className="rounded-md border bg-muted/40 p-3 text-sm">
+              <p className="font-medium">
+                Open request: {openRequest.current_limit} →{" "}
+                {openRequest.requested_limit}
+              </p>
+              <p className="mt-0.5 text-muted-foreground">
+                Status:{" "}
+                {openRequest.status === "NEEDS_INFO"
+                  ? "Needs more information"
+                  : "Pending review"}
+              </p>
+              {openRequest.status === "NEEDS_INFO" &&
+                openRequest.review_note && (
+                  <p className="mt-1 text-muted-foreground">
+                    "{openRequest.review_note}"
+                  </p>
+                )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Request history</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              Loading...
+            </p>
+          ) : history.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              No member limit requests yet.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {history.map((r, i) => (
+                <div key={r.request_id}>
+                  {i > 0 && <Separator className="mb-3" />}
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="font-medium">
+                      {r.current_limit} → {r.requested_limit}
+                    </span>
+                    <Badge variant="outline">
+                      {r.status === "NEEDS_INFO" ? "Needs info" : r.status.charAt(0) + r.status.slice(1).toLowerCase()}
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {new Date(r.created_at).toLocaleDateString()}
+                  </p>
+                  {r.review_note && (
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      "{r.review_note}"
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog open={dialogOpen} onOpenChange={(open) => !open && closeDialog()}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Request a member limit increase</DialogTitle>
+            <DialogDescription>
+              A site admin will review this request. You'll be notified once
+              it's decided.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="requested-limit">New member limit</Label>
+              <Input
+                id="requested-limit"
+                type="number"
+                min={org.member_limit + 1}
+                step={1}
+                value={requestedLimit}
+                onChange={(e) => setRequestedLimit(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Current limit is {org.member_limit}.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="justification">
+                Justification{" "}
+                <span className="text-muted-foreground">(optional)</span>
+              </Label>
+              <Textarea
+                id="justification"
+                value={justification}
+                onChange={(e) => setJustification(e.target.value)}
+                placeholder="e.g. We're onboarding two new departments next quarter."
+                rows={3}
+              />
+            </div>
+            {formError && (
+              <p className="text-sm text-destructive">{formError}</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={closeDialog} disabled={submitting}>
+              Cancel
+            </Button>
+            <Button onClick={handleSubmit} disabled={submitting}>
+              {submitting ? "Submitting..." : "Submit request"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
 function ManageOrgPanel({ org }: { org: OrgSummary }) {
   const [activeTab, setActiveTab] = useState("members");
   const [members, setMembers] = useState<OrgMember[]>([]);
@@ -3171,6 +3401,10 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
         <TabsList>
           <TabsTrigger value="members">Members</TabsTrigger>
           <TabsTrigger value="scope">Scope Tree</TabsTrigger>
+          {/* EDIT (Phase 7 — subphase 7.4): current limit + usage, "Request
+              increase", and status of any open request — see
+              MemberLimitTab's own header comment. */}
+          <TabsTrigger value="limits">Member Limit</TabsTrigger>
         </TabsList>
 
         {/* ── MEMBERS TAB ── */}
@@ -3590,6 +3824,11 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
               </Card>
             </div>
           )}
+        </TabsContent>
+
+        {/* ── MEMBER LIMIT TAB (Phase 7 — subphase 7.4) ── */}
+        <TabsContent value="limits" className="mt-4">
+          <MemberLimitTab org={org} />
         </TabsContent>
       </Tabs>
     </div>

@@ -1,4 +1,11 @@
-import { IsString, IsNotEmpty, IsOptional, Length } from 'class-validator';
+import {
+  IsString,
+  IsNotEmpty,
+  IsOptional,
+  IsInt,
+  Min,
+  Length,
+} from 'class-validator';
 
 // ─── Review Org Request DTO ────────────────────────────────────────────────
 // EDIT (Phase 2 — org request staging, subphase 2.5): input for
@@ -37,4 +44,34 @@ export class ReviewOrgRequestDto {
   @IsString()
   @Length(3, 2000)
   internal_note?: string;
+}
+
+// ─── Approve Org Request DTO ───────────────────────────────────────────────
+// EDIT (Phase 6 — post-approval org finalization, subphase 6.2): input for
+// OrgRequestsService.approve(), which previously took no body at all (see
+// org-requests-admin.controller.ts's now-stale comment on that route). With
+// 6.1's schema change, approve() no longer creates the organization itself
+// — it only moves the request to APPROVED_PENDING_SETUP and records the
+// member cap the requester's eventual org will be created with
+// (org_requests.admin_set_member_limit, carried onto organization.member_limit
+// by finalizeSetup() in 6.3). That cap has to come from somewhere, and
+// nothing about it was implied by the requester's own submission
+// (expected_member_count is informational only — see submit()) — so it's a
+// required field here, not derived.
+//
+// Deliberately its own class rather than a field bolted onto
+// ReviewOrgRequestDto: approve() has no requester-facing/internal-note split
+// (see that class's own header comment for why reject()/requestInfo() do),
+// and a shared class would make `reason` look optional-in-spirit for
+// approve() when it's simply not part of that decision at all.
+//
+// OPEN DECISION (flagged in the plan, not resolved here): whether an admin
+// may set member_limit below the requester's own expected_member_count, or
+// whether that should be blocked/require a note. Not enforced below —
+// deliberately left as a plain positive-integer check pending that product
+// decision.
+export class ApproveOrgRequestDto {
+  @IsInt()
+  @Min(1)
+  member_limit: number;
 }

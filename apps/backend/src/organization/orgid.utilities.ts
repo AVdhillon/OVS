@@ -91,8 +91,7 @@ export function generateOrgId(
 // organization.orgid specifically (as opposed to org_email or any other
 // unique field that create() could also collide on), so the TOCTOU retry
 // below only fires for the collision it's actually meant to handle.
-export function isOrgIdUniqueConflict(err: unknown): boolean {
-  if (!(err instanceof Prisma.PrismaClientKnownRequestError)) return false;
+export function isOrgIdUniqueConflict(err: unknown): boolean {  if (!(err instanceof Prisma.PrismaClientKnownRequestError)) return false;
   if (err.code !== 'P2002') return false;
   const target = err.meta?.target;
   const targetStr = Array.isArray(target)
@@ -146,6 +145,35 @@ export async function resolveInitialOrgId(
   }
 
   return { orgid, isGenerated: true };
+}
+
+/**
+ * Read-only "is this orgid free" check — no allocation, no retry loop,
+ * just the existence lookup. Deliberately separate from
+ * resolveInitialOrgId() above: that function is the pre-check *inside* an
+ * actual creation attempt (registerOrg()/finalizeSetup()), reused here only
+ * for the query it already runs.
+ *
+ * EDIT (Phase 6 — post-approval org finalization, subphase 6.5): extracted
+ * so GET /org/orgid-available (org.controller.ts) can offer a live-typing
+ * availability check in the finalize-setup wizard without going through
+ * resolveInitialOrgId()'s "trim/uppercase a preferred_orgid, or generate one
+ * from an org name" branching, which doesn't fit this endpoint's shape (this
+ * always checks one caller-supplied, already-validated orgid — no
+ * generation branch, no orgName). Same caveat as resolveInitialOrgId()'s own
+ * comment: this only reduces collision probability for the caller's next
+ * real attempt, it doesn't reserve the ID — runWithUniqueOrgId() at actual
+ * creation time is still what closes the race.
+ */
+export async function isOrgIdAvailable(
+  prisma: PrismaService,
+  orgid: string,
+): Promise<boolean> {
+  const exists = await prisma.organization.findUnique({
+    where: { orgid },
+    select: { orgid: true },
+  });
+  return !exists;
 }
 
 /**

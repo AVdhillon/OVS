@@ -50,6 +50,35 @@ import { OrgRequestsAdminController } from './org-requests-admin.controller';
 // carries the suspend/reinstate/archive routes, not just the directory
 // endpoint this subphase's own plan entry names.
 import { OrgAdminController } from './org-admin.controller';
+// EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.1b): third
+// admin controller in this module, same "no separate AdminModule"
+// reasoning as OrgRequestsAdminController/OrgAdminController above.
+// AdminReviewQueueService is registered as its own provider (not folded
+// into OrgRequestsService) — see that file's own header comment for why.
+import { AdminReviewQueueController } from './admin-review-queue.controller';
+import { AdminReviewQueueService } from './admin-review-queue.service';
+// EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.2, wired up in
+// 7.3): its own provider, not folded into OrgRequestsService — see that
+// file's own header comment for why the two request kinds stay separate all
+// the way down. As of 7.3, both OrgController (requester-facing submit/
+// listForOrg routes) and the new MemberLimitRequestsAdminController below
+// inject this same instance. Depends on OrgService
+// (assertOrganizerAccess() for submit()'s organizer pre-check), already a
+// provider in this module.
+import { OrgLimitRequestsService } from './org-limit-requests.service';
+// EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.5): the
+// submitted/approved/rejected/needs-info notifications for this table's
+// lifecycle. Its own provider, not folded into OrgLimitRequestsService's own
+// file — same OrgRequestsService/OrgRequestEmailService split this module
+// already registers above, applied to the sibling request kind. Its only
+// consumer is OrgLimitRequestsService, already a provider in this module.
+import { OrgLimitRequestEmailService } from './org-limit-request-email.service';
+// EDIT (Phase 7 — subphase 7.3): admin-facing counterpart to
+// OrgRequestsAdminController, registered the same "no separate AdminModule"
+// way as the other two admin controllers in this module. See that file's
+// own header comment for why it's a new controller rather than new routes
+// on OrgRequestsAdminController.
+import { MemberLimitRequestsAdminController } from './member-limit-requests-admin.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 // EDIT (Phase 4 — cutover, subphase 4.3): OrgRequestsService now injects
 // OtpService directly (sendDomainOtp() / submit()'s domain-ownership check)
@@ -67,14 +96,24 @@ import { OtpModule } from '../otp/otp.module';
     OrgRequestEmailService,
     OrgLifecycleService,
     OrgDirectoryService,
+    AdminReviewQueueService,
+    OrgLimitRequestsService,
+    OrgLimitRequestEmailService,
   ],
-  controllers: [OrgController, OrgRequestsAdminController, OrgAdminController],
+  controllers: [
+    OrgController,
+    OrgRequestsAdminController,
+    OrgAdminController,
+    AdminReviewQueueController,
+    MemberLimitRequestsAdminController,
+  ],
   exports: [
     OrgService,
     ScopeService,
     OrgRequestsService,
     OrgLifecycleService,
     OrgDirectoryService,
+    OrgLimitRequestsService,
   ],
 })
 export class OrgModule {}

@@ -18,13 +18,21 @@ import {
   TableCell,
 } from "../../app/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "../../app/components/ui/tabs";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../app/components/ui/select";
 import { AdminHeader } from "../components/admin-header";
 import {
   adminApi,
-  type OrgRequestListItem,
-  type OrgRequestStatus,
+  type AdminReviewQueueRow,
+  type AdminReviewQueueRequestType,
 } from "../lib/admin-api";
-import { ChevronLeft, ChevronRight, Inbox } from "lucide-react";
+import { ChevronLeft, ChevronRight, Inbox, Clock } from "lucide-react";
+import { Link } from "react-router";
 
 // EDIT (Phase 3 — admin portal core, subphase 3.5): new. Reads
 // GET /admin/org-requests (3.1) — a review queue, not a public list, so it
@@ -33,27 +41,87 @@ import { ChevronLeft, ChevronRight, Inbox } from "lucide-react";
 // tab passes no `status` param at all for exactly that reason (see
 // STATUS_TABS below), so the frontend's idea of "open" can never drift
 // from the backend's.
+//
+// EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.4): rewritten
+// to read GET /admin/review-queue (7.1b) instead of GET /admin/org-requests
+// alone, per the plan's own 7.4 text — both request kinds now show up here
+// with a `request_type` badge, and clicking a row routes to whichever
+// detail screen matches its type. The two review screens themselves stay
+// separate components (AdminRequestDetailPage for ORG_CREATION,
+// AdminMemberLimitDetailPage for MEMBER_LIMIT_INCREASE) — only this list is
+// merged, exactly as 7.1b's own plan text specifies.
+//
+// Trade-off worth flagging: admin_review_queue (7.1b, dbschema.sql) is
+// deliberately narrow — only the columns both source tables share (id,
+// request_type, status, created_at, reviewed_by_admin_id, reviewed_at). That
+// means this table can no longer show org_name/reference_code/
+// expected_member_count the way the pre-7.4 org-requests-only version of
+// this page did; those live on the detail screen a row's click-through
+// lands on, not the list. Not a regression introduced here — it's the
+// direct consequence of 7.1b's own "read-only union of shared columns only"
+// design, chosen specifically so the two source tables didn't have to grow
+// always-half-null columns to satisfy this list (see admin_review_queue's
+// own comment in dbschema.sql).
 const PAGE_SIZE = 25;
 
-const STATUS_TABS: Array<{
-  key: string;
-  label: string;
-  status?: OrgRequestStatus[];
-}> = [
+// EDIT (Phase 6 — post-approval org setup, subphase 6.6): added a
+// "Pending setup" tab for APPROVED_PENDING_SETUP — the queue's own default
+// "Open" tab deliberately mirrors the backend's open-only default
+// (PENDING + NEEDS_INFO) rather than redefining "open" to include it (see
+// this file's own comment on that), so it needs its own tab instead of
+// folding into "Open". "All" grew to match.
+//
+// APPROVED_PENDING_SETUP is an org_requests-only status (org_member_limit_
+// requests' chk_limit_request_status never includes it) — selecting the
+// "Pending setup" tab together with the type filter set to "Member limit
+// increase" is a legitimate, just-always-empty combination; the backend
+// doesn't need to know that's meaningless, it simply returns zero rows.
+const STATUS_TABS: Array<{ key: string; label: string; status?: string[] }> = [
   { key: "open", label: "Open" }, // no status param — backend's own open-only default
+  {
+    key: "pending-setup",
+    label: "Pending setup",
+    status: ["APPROVED_PENDING_SETUP"],
+  },
   { key: "approved", label: "Approved", status: ["APPROVED"] },
   { key: "rejected", label: "Rejected", status: ["REJECTED"] },
   {
     key: "all",
     label: "All",
-    status: ["PENDING", "NEEDS_INFO", "APPROVED", "REJECTED"],
+    status: [
+      "PENDING",
+      "NEEDS_INFO",
+      "APPROVED_PENDING_SETUP",
+      "APPROVED",
+      "REJECTED",
+    ],
   },
 ];
 
-const STATUS_BADGE: Record<
-  OrgRequestStatus,
+const TYPE_FILTERS: Array<{
+  value: "ALL" | AdminReviewQueueRequestType;
+  label: string;
+}> = [
+  { value: "ALL", label: "All types" },
+  { value: "ORG_CREATION", label: "Org creation" },
+  { value: "MEMBER_LIMIT_INCREASE", label: "Member limit increase" },
+];
+
+const REQUEST_TYPE_BADGE: Record<
+  AdminReviewQueueRequestType,
   { label: string; className: string }
 > = {
+  ORG_CREATION: {
+    label: "Org creation",
+    className: "bg-violet-50 text-violet-700 border-violet-200",
+  },
+  MEMBER_LIMIT_INCREASE: {
+    label: "Member limit",
+    className: "bg-cyan-50 text-cyan-700 border-cyan-200",
+  },
+};
+
+const STATUS_BADGE: Record<string, { label: string; className: string }> = {
   PENDING: {
     label: "Pending",
     className: "bg-amber-50 text-amber-700 border-amber-200",
@@ -61,6 +129,10 @@ const STATUS_BADGE: Record<
   NEEDS_INFO: {
     label: "Needs info",
     className: "bg-blue-50 text-blue-700 border-blue-200",
+  },
+  APPROVED_PENDING_SETUP: {
+    label: "Approved — awaiting setup",
+    className: "bg-sky-50 text-sky-700 border-sky-200",
   },
   APPROVED: {
     label: "Approved",
@@ -83,8 +155,13 @@ function formatDate(iso: string) {
 export function AdminRequestQueuePage() {
   const navigate = useNavigate();
   const [tab, setTab] = useState("open");
+  const [typeFilter, setTypeFilter] = useState<
+    "ALL" | AdminReviewQueueRequestType
+  >("ALL");
   const [page, setPage] = useState(1);
-  const [requests, setRequests] = useState<OrgRequestListItem[] | null>(null);
+  const [requests, setRequests] = useState<AdminReviewQueueRow[] | null>(
+    null,
+  );
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -95,15 +172,16 @@ export function AdminRequestQueuePage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await adminApi.listOrgRequests({
+      const res = await adminApi.listReviewQueue({
         status: activeTab.status,
+        requestType: typeFilter === "ALL" ? undefined : [typeFilter],
         page,
         pageSize: PAGE_SIZE,
       });
       setRequests(res.requests);
       setTotal(res.total);
     } catch (e: any) {
-      setError(e?.message ?? "Failed to load org requests");
+      setError(e?.message ?? "Failed to load requests");
       setRequests([]);
     } finally {
       setLoading(false);
@@ -111,7 +189,7 @@ export function AdminRequestQueuePage() {
     // activeTab is derived from `tab`, which IS in the dep array — including
     // the derived object itself would just re-run this on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, page]);
+  }, [tab, typeFilter, page]);
 
   useEffect(() => {
     load();
@@ -122,28 +200,73 @@ export function AdminRequestQueuePage() {
     setPage(1); // switching tabs resets pagination — page 3 of "Open" isn't page 3 of "All"
   };
 
+  const handleTypeChange = (next: "ALL" | AdminReviewQueueRequestType) => {
+    setTypeFilter(next);
+    setPage(1);
+  };
+
+  const handleRowClick = (row: AdminReviewQueueRow) => {
+    // request_type is what tells us which detail screen owns this id — the
+    // two review screens stay separate components (7.1b/7.4's own plan
+    // text), this is only the routing decision between them.
+    if (row.request_type === "MEMBER_LIMIT_INCREASE") {
+      navigate(`/member-limit-requests/${row.id}`);
+    } else {
+      navigate(`/requests/${row.id}`);
+    }
+  };
+
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
     <div className="min-h-screen bg-muted/30">
       <AdminHeader />
       <div className="mx-auto max-w-5xl space-y-4 p-6">
-        <div>
-          <h1 className="text-xl font-semibold">Org requests</h1>
-          <p className="text-sm text-muted-foreground">
-            Review and decide on incoming organization requests.
-          </p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-xl font-semibold">Requests</h1>
+            <p className="text-sm text-muted-foreground">
+              Review and decide on incoming organization and member-limit
+              requests.
+            </p>
+          </div>
+          {/* EDIT (Phase 6 — subphase 6.6): the stuck-request admin view is
+              its own page (age-threshold filter, not just a status filter —
+              see AdminStuckRequestsPage), so it's a link out rather than a
+              sixth tab here. Org-creation only — member-limit requests have
+              no "pending setup" state to get stuck in. */}
+          <Button variant="outline" size="sm" asChild>
+            <Link to="/requests/stuck">
+              <Clock className="mr-1.5 size-4" />
+              Stuck in setup
+            </Link>
+          </Button>
         </div>
 
-        <Tabs value={tab} onValueChange={handleTabChange}>
-          <TabsList>
-            {STATUS_TABS.map((t) => (
-              <TabsTrigger key={t.key} value={t.key}>
-                {t.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <Tabs value={tab} onValueChange={handleTabChange}>
+            <TabsList>
+              {STATUS_TABS.map((t) => (
+                <TabsTrigger key={t.key} value={t.key}>
+                  {t.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+
+          <Select value={typeFilter} onValueChange={(v) => handleTypeChange(v as any)}>
+            <SelectTrigger className="w-[200px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {TYPE_FILTERS.map((f) => (
+                <SelectItem key={f.value} value={f.value}>
+                  {f.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
 
         <Card>
           <CardHeader>
@@ -180,37 +303,49 @@ export function AdminRequestQueuePage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Reference</TableHead>
-                      <TableHead>Organization</TableHead>
-                      <TableHead>Members</TableHead>
+                      <TableHead>ID</TableHead>
+                      <TableHead>Type</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Submitted</TableHead>
+                      <TableHead>Reviewed</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {requests.map((r) => (
                       <TableRow
-                        key={r.request_id}
+                        key={`${r.request_type}-${r.id}`}
                         className="cursor-pointer"
-                        onClick={() => navigate(`/requests/${r.request_id}`)}
+                        onClick={() => handleRowClick(r)}
                       >
                         <TableCell className="font-mono text-xs">
-                          {r.reference_code}
+                          {r.id}
                         </TableCell>
-                        <TableCell className="font-medium">
-                          {r.org_name}
-                        </TableCell>
-                        <TableCell>{r.expected_member_count ?? "—"}</TableCell>
                         <TableCell>
                           <Badge
                             variant="outline"
-                            className={STATUS_BADGE[r.status].className}
+                            className={
+                              REQUEST_TYPE_BADGE[r.request_type].className
+                            }
                           >
-                            {STATUS_BADGE[r.status].label}
+                            {REQUEST_TYPE_BADGE[r.request_type].label}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            variant="outline"
+                            className={
+                              STATUS_BADGE[r.status]?.className ??
+                              "bg-muted text-muted-foreground"
+                            }
+                          >
+                            {STATUS_BADGE[r.status]?.label ?? r.status}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-muted-foreground">
                           {formatDate(r.created_at)}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {r.reviewed_at ? formatDate(r.reviewed_at) : "—"}
                         </TableCell>
                       </TableRow>
                     ))}

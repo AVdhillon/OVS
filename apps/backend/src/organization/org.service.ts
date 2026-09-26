@@ -11,7 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 // OrgRequestsService.approve() can create organizations the same way.
 // The `Prisma` namespace import that used to sit here went with them —
 // isOrgIdUniqueConflict() was its only consumer in this file.
-import { runWithUniqueOrgId } from './orgid.utilities';
+import { runWithUniqueOrgId, ORG_ID_FORMAT, isOrgIdAvailable } from './orgid.utilities';
 // EDIT (Phase 2 — subphase 2.4): the six-step org-creation transaction body
 // itself now lives in org-creation.utilities.ts too, alongside orgid
 // allocation, so OrgRequestsService.approve() can run the same steps for a
@@ -147,9 +147,25 @@ export class OrgService {
     };
   }
 
+  // ─── Org ID availability ────────────────────────────────────────────────────
+  // EDIT (Phase 6 — post-approval org finalization, subphase 6.5): backs
+  // GET /org/orgid-available (org.controller.ts) — the finalize-setup
+  // wizard's live-typing check (6.3's finalizeSetup() still does the real,
+  // race-safe allocation via runWithUniqueOrgId at actual submission time;
+  // this is only ever the cheap, non-reserving pre-check for UI feedback).
+  async checkOrgIdAvailable(rawOrgid: string) {
+    const orgid = (rawOrgid ?? '').trim().toUpperCase();
+    if (!ORG_ID_FORMAT.test(orgid)) {
+      throw new BadRequestException(
+        'orgid must be in format ABC1234 (3 letters, 4 digits)',
+      );
+    }
+    const available = await isOrgIdAvailable(this.prisma, orgid);
+    return { orgid, available };
+  }
+
   // ─── Get orgs where user is organizer ──────────────────────────────────────
-  async getMyOrgs(pid: bigint) {
-    const links = await this.prisma.org_members.findMany({
+  async getMyOrgs(pid: bigint) {    const links = await this.prisma.org_members.findMany({
       where: { pid },
       select: { orgid: true, uid: true },
     });
@@ -184,10 +200,36 @@ export class OrgService {
         org_email: true,
         is_active: true,
         created_at: true,
+        // EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.4):
+        // added so the organizer's own dashboard can show "current limit +
+        // usage" (post-approval-org-setup-plan.md, 7.4) without a second
+        // round trip. No app-facing endpoint exposed member_limit before
+        // this — org-directory.service.ts's equivalent (member_count too)
+        // is the *site admin*'s org-detail view, a separate controller this
+        // app has no access to.
+        member_limit: true,
       },
     });
 
-    return orgs.map((o) => ({ ...o, uid: orgIdToUid[o.orgid] }));
+    // Active member_count per org, same `is_deleted = FALSE` definition
+    // org-directory.service.ts's getCounts() already uses for the site-admin
+    // org-detail view — kept consistent rather than inventing a second
+    // definition of "how many members does this org have" for the same
+    // underlying column.
+    const memberCounts = await this.prisma.org_members.groupBy({
+      by: ['orgid'],
+      where: { orgid: { in: orgs.map((o) => o.orgid) }, is_deleted: false },
+      _count: { _all: true },
+    });
+    const memberCountByOrgid = Object.fromEntries(
+      memberCounts.map((c) => [c.orgid, c._count._all]),
+    );
+
+    return orgs.map((o) => ({
+      ...o,
+      uid: orgIdToUid[o.orgid],
+      member_count: memberCountByOrgid[o.orgid] ?? 0,
+    }));
   }
 
   // ─── Get members (scope-filtered for organizer) ─────────────────────────────
@@ -288,6 +330,27 @@ export class OrgService {
       );
     }
 
+    // EDIT (Phase 6 — subphase 6.4): friendly guard in front of the DB-level
+    // backstop (trg_check_member_limit, dbschema.sql). Without this, a
+    // roster import that runs past the cap partway through would surface the
+    // trigger's raw Postgres exception text as this row's `error` field
+    // instead of a clean message — same "friendly guard in front of a
+    // DB-level backstop" shape the plan asks for, tracked here as a running
+    // in-memory counter rather than a fresh COUNT(*) query per row. This is
+    // deliberately advisory, not authoritative: it's read outside any
+    // transaction, so a concurrent request against the same org can still
+    // race past it — the trigger is what actually holds the line.
+    const org = await this.prisma.organization.findUnique({
+      where: { orgid },
+      select: { member_limit: true },
+    });
+    if (!org) {
+      throw new NotFoundException(`Organization ${orgid} not found`);
+    }
+    let activeMemberCount = await this.prisma.org_members.count({
+      where: { orgid, is_deleted: false },
+    });
+
     let participants: ParticipantRowDto[] = dto.participants ?? [];
     if (dto.participants_csv) {
       participants = [
@@ -322,6 +385,18 @@ export class OrgService {
 
         if (existing) {
           if (existing.is_deleted) {
+            // Reactivating counts as growing the org the same as a brand new
+            // member would (see trg_check_member_limit's own comment on why
+            // it treats UPDATE-to-active the same as INSERT).
+            if (activeMemberCount + 1 > org.member_limit) {
+              results.push({
+                uid: p.uid,
+                status: 'error',
+                error: `Organization has reached its member limit of ${org.member_limit}`,
+              });
+              continue;
+            }
+
             // Reactivate: restore org_members and upsert a role at the target scope
             await this.prisma.org_members.update({
               where: { orgid_uid: { orgid, uid: p.uid } },
@@ -351,6 +426,7 @@ export class OrgService {
               update: { is_voter: isVoter, is_organizer: isOrganizer },
             });
 
+            activeMemberCount++;
             results.push({ uid: p.uid, status: 'reactivated' });
           } else {
             // Member already active — upsert the role at the target scope
@@ -377,6 +453,15 @@ export class OrgService {
         }
 
         // New member — create org_members + a role row at target scope
+        if (activeMemberCount + 1 > org.member_limit) {
+          results.push({
+            uid: p.uid,
+            status: 'error',
+            error: `Organization has reached its member limit of ${org.member_limit}`,
+          });
+          continue;
+        }
+
         await this.prisma.org_members.create({
           data: { orgid, uid: p.uid, mobile, email },
         });
@@ -390,6 +475,7 @@ export class OrgService {
           },
         });
 
+        activeMemberCount++;
         results.push({ uid: p.uid, status: 'added' });
       } catch (err: any) {
         results.push({ uid: p.uid, status: 'error', error: err.message });

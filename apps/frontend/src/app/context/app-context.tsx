@@ -65,6 +65,13 @@ export interface OrgSummary {
   is_active: boolean;
   created_at: string;
   uid: string; // caller's uid in this org
+  // EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.4): added so
+  // the org admin dashboard can show "current limit + usage" without a
+  // second round trip — see OrgService.getMyOrgs()'s own comment (7.4) for
+  // why these weren't already here (no app-facing endpoint exposed
+  // member_limit before this subphase).
+  member_limit: number;
+  member_count: number;
 }
 
 export interface ScopeNode {

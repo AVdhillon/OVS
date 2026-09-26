@@ -42,6 +42,7 @@ import {
   DialogFooter,
 } from "../components/ui/dialog";
 import { OTPVerificationModal } from "../components/otp-verification-modal";
+import { OrgSetupWizardDialog } from "../components/org-setup-wizard";
 import {
   ClipboardList,
   Clock,
@@ -51,6 +52,7 @@ import {
   Loader2,
   Pencil,
   Shield,
+  Settings2,
 } from "lucide-react";
 
 // ─── Status badge ───────────────────────────────────────────────────────────
@@ -68,6 +70,14 @@ const STATUS_META: Record<
     label: "Needs Info",
     icon: AlertCircle,
     className: "bg-amber-50 text-amber-700 border-amber-200",
+  },
+  // EDIT (Phase 6 — post-approval org finalization, subphase 6.5): new
+  // status (6.1) between an admin's approve() and the requester's own
+  // finalizeSetup() (6.3) — approved, but the org doesn't exist yet.
+  APPROVED_PENDING_SETUP: {
+    label: "Action Needed: Set Up",
+    icon: Settings2,
+    className: "bg-violet-50 text-violet-700 border-violet-200",
   },
   APPROVED: {
     label: "Approved",
@@ -378,9 +388,11 @@ function ResubmitOrgRequestDialog({
 function RequestCard({
   request,
   onEdit,
+  onSetup,
 }: {
   request: OrgRequestMine;
   onEdit: (r: OrgRequestMine) => void;
+  onSetup: (r: OrgRequestMine) => void;
 }) {
   return (
     <Card>
@@ -437,6 +449,32 @@ function RequestCard({
           </div>
         )}
 
+        {request.status === "APPROVED_PENDING_SETUP" && (
+          <div className="rounded-md border border-violet-200 bg-violet-50 px-3 py-2.5 text-sm text-violet-900 space-y-2">
+            <p>
+              Your request was approved
+              {request.admin_set_member_limit != null && (
+                <>
+                  {" "}
+                  with a member limit of{" "}
+                  <span className="font-semibold">
+                    {request.admin_set_member_limit}
+                  </span>
+                </>
+              )}
+              . Finish setting it up to bring your organization online.
+            </p>
+            <Button
+              size="sm"
+              className="gap-1.5"
+              onClick={() => onSetup(request)}
+            >
+              <Settings2 className="h-3.5 w-3.5" />
+              Set Up Your Organization
+            </Button>
+          </div>
+        )}
+
         {request.status === "APPROVED" && request.approved_orgid && (
           <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-900">
             Your organization is live — Org ID{" "}
@@ -472,6 +510,7 @@ export function MyOrgRequestsView() {
   const [requests, setRequests] = useState<OrgRequestMine[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<OrgRequestMine | null>(null);
+  const [settingUp, setSettingUp] = useState<OrgRequestMine | null>(null);
 
   const fetchRequests = () => {
     if (!isUnified) {
@@ -563,6 +602,7 @@ export function MyOrgRequestsView() {
                   key={r.request_id}
                   request={r}
                   onEdit={setEditing}
+                  onSetup={setSettingUp}
                 />
               ))}
             </div>
@@ -571,6 +611,12 @@ export function MyOrgRequestsView() {
           <ResubmitOrgRequestDialog
             request={editing}
             onClose={() => setEditing(null)}
+            onSuccess={fetchRequests}
+          />
+
+          <OrgSetupWizardDialog
+            request={settingUp}
+            onClose={() => setSettingUp(null)}
             onSuccess={fetchRequests}
           />
         </>

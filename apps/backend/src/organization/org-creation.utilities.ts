@@ -28,10 +28,10 @@ import type { ParticipantRowDto } from './dto/register-org.dto';
 /**
  * The account being bound as this organization's first member + organizer
  * at ROOT scope. For registerOrg() this is the caller (their own choice of
- * uid, or the uid carried on an ORG session's JWT). For approve() this is
- * the request's original submitter — see generateInitialOwnerUid() in
- * org-requests.service.ts for why *that* caller has no uid of their own to
- * supply.
+ * uid, or the uid carried on an ORG session's JWT). For finalizeSetup()
+ * (org-requests.service.ts, Phase 6 subphase 6.3) this is the request's
+ * original submitter, supplying their own chosen uid at finalization time
+ * (FinalizeOrgRequestDto.owner_uid) — see that DTO field's own comment.
  */
 export interface OrgOwner {
   pid: bigint;
@@ -45,7 +45,39 @@ export interface OrgCreationParams {
   owner: OrgOwner;
   /** Additional members to seed alongside the owner. Empty for approve() — see 2.3's note that roster import is post-approval setup. */
   participants?: ParticipantRowDto[];
+  /**
+   * EDIT (Phase 6 — post-approval org finalization, subphase 6.3):
+   * organization.member_limit (6.1) is NOT NULL with no DEFAULT, so every
+   * org creation must supply one. finalizeSetup()
+   * (org-requests.service.ts) always passes the locked request's
+   * `admin_set_member_limit` here — non-null by the time a request reaches
+   * APPROVED_PENDING_SETUP (chk_org_request_review_consistency enforces
+   * that at the DB level), so that call site never relies on the default
+   * below.
+   *
+   * Left optional here, rather than required, only because registerOrg()'s
+   * self-serve path (org.service.ts) has no admin-set cap to carry over —
+   * see SELF_SERVE_DEFAULT_MEMBER_LIMIT's own comment for why that's a
+   * flagged placeholder, not a resolved product decision.
+   */
+  memberLimit?: number;
 }
+
+/**
+ * FLAGGED DECISION — not resolved by the Phase 6 plan (its 6.3 section
+ * cross-references this exact gap: "comes from
+ * org_requests.admin_set_member_limit for request-created orgs — see 6.3
+ * on what registerOrg()'s self-serve path gets"). organization.member_limit
+ * became NOT NULL with no DEFAULT in 6.1, so registerOrg()'s self-serve
+ * creation path — which has no admin to set a cap — needs *some* value or
+ * every self-serve registration starts failing the column's NOT NULL
+ * constraint. A generous, arbitrary platform default is used here so
+ * self-serve registration keeps working; product should confirm whether
+ * self-serve orgs should be capped at all, and if so at what number
+ * (possibly requester-chosen, mirroring expected_member_count on the
+ * request path) — not implied by anything in the plan.
+ */
+export const SELF_SERVE_DEFAULT_MEMBER_LIMIT = 500;
 
 export interface OrgCreationResult {
   org: { org_name: string };
@@ -65,7 +97,15 @@ export async function createOrganizationCore(
   orgName: string,
   params: OrgCreationParams,
 ): Promise<OrgCreationResult> {
-  const { owner, orgEmail = null, participants = [] } = params;
+  const {
+    owner,
+    orgEmail = null,
+    participants = [],
+    // EDIT (Phase 6 — subphase 6.3): see OrgCreationParams.memberLimit's own
+    // comment and SELF_SERVE_DEFAULT_MEMBER_LIMIT's for why a default is
+    // needed at all.
+    memberLimit = SELF_SERVE_DEFAULT_MEMBER_LIMIT,
+  } = params;
 
   await tx.$executeRaw`
     SELECT set_config('app.current_uid', ${owner.uid}, true)
@@ -88,6 +128,11 @@ export async function createOrganizationCore(
       org_name: orgName,
       org_email: orgEmail,
       status: 'ACTIVE',
+      // EDIT (Phase 6 — subphase 6.1/6.3): member_limit is NOT NULL as of
+      // 6.1 — set here, at INSERT time, rather than as a follow-up UPDATE
+      // in finalizeSetup() (the plan's own preferred shape: "cleaner than a
+      // follow-up UPDATE").
+      member_limit: memberLimit,
     },
   });
 

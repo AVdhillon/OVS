@@ -12,6 +12,12 @@ import { Button } from "../../app/components/ui/button";
 import { Separator } from "../../app/components/ui/separator";
 import { Label } from "../../app/components/ui/label";
 import { Textarea } from "../../app/components/ui/textarea";
+import { Input } from "../../app/components/ui/input";
+import {
+  Alert,
+  AlertTitle,
+  AlertDescription,
+} from "../../app/components/ui/alert";
 import {
   Dialog,
   DialogContent,
@@ -27,19 +33,27 @@ import {
   type OrgRequestStatus,
 } from "../lib/admin-api";
 import { toast } from "sonner";
-import { ArrowLeft, Check, X, HelpCircle } from "lucide-react";
+import { ArrowLeft, Check, X, HelpCircle, Undo2 } from "lucide-react";
 
 // EDIT (Phase 3 — admin portal core, subphase 3.5): new. Reads
 // GET /admin/org-requests/:requestId (3.1) and wires all three review
 // outcomes to POST /admin/org-requests/:requestId/{approve,reject,
 // request-info} (also 3.1, calling 2.4/2.5's service methods).
 //
-// approve() takes no body (see the controller/ReviewOrgRequestDto notes —
-// the request row itself is the justification for an approval), so its
-// dialog is a plain confirm; reject()/requestInfo() share one dialog shape
+// EDIT (Phase 6 — post-approval org setup, subphase 6.6): approve() now
+// takes a required `member_limit` (6.2) and only moves the request to
+// APPROVED_PENDING_SETUP rather than creating the organization — its
+// dialog gained a member-limit field, pre-filled from
+// expected_member_count, in place of the old plain confirm. A fourth
+// dialog, revoke-approval, was added for the new terminal action on an
+// APPROVED_PENDING_SETUP request that never got finalized. reject()/
+// requestInfo() are unchanged: they still share one dialog shape
 // collecting `reason` (requester-facing) and an optional `internal_note`
 // (audit-log-only, falls back to `reason` server-side) — mirrors
 // ReviewOrgRequestDto's own comment on why those two fields are separate.
+// revoke-approval reuses that exact same dialog shape (same DTO
+// server-side), since revoking an approval is just as adverse an action as
+// a reject.
 
 const STATUS_BADGE: Record<
   OrgRequestStatus,
@@ -52,6 +66,10 @@ const STATUS_BADGE: Record<
   NEEDS_INFO: {
     label: "Needs info",
     className: "bg-blue-50 text-blue-700 border-blue-200",
+  },
+  APPROVED_PENDING_SETUP: {
+    label: "Approved — awaiting setup",
+    className: "bg-sky-50 text-sky-700 border-sky-200",
   },
   APPROVED: {
     label: "Approved",
@@ -67,6 +85,7 @@ const ACTION_LABEL: Record<string, string> = {
   ORG_REQUEST_APPROVED: "Approved",
   ORG_REQUEST_REJECTED: "Rejected",
   ORG_REQUEST_INFO_REQUESTED: "Requested more information",
+  ORG_REQUEST_APPROVAL_REVOKED: "Approval revoked",
 };
 
 function formatDateTime(iso: string | null) {
@@ -87,7 +106,7 @@ function getRequesterName(requester: OrgRequestDetail["requester"]) {
     .join(" ");
 }
 
-type DialogMode = "approve" | "reject" | "request-info" | null;
+type DialogMode = "approve" | "reject" | "request-info" | "revoke" | null;
 
 export function AdminRequestDetailPage() {
   const { requestId } = useParams<{ requestId: string }>();
@@ -100,6 +119,11 @@ export function AdminRequestDetailPage() {
   const [dialogMode, setDialogMode] = useState<DialogMode>(null);
   const [reason, setReason] = useState("");
   const [internalNote, setInternalNote] = useState("");
+  // EDIT (Phase 6 — subphase 6.6): approve()'s new required field. Seeded
+  // from expected_member_count when the approve dialog opens (see
+  // openApproveDialog() below) — "pre-filled ... as a starting suggestion,
+  // editable by the admin", per the plan.
+  const [memberLimit, setMemberLimit] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -122,26 +146,70 @@ export function AdminRequestDetailPage() {
   }, [load]);
 
   const isOpen = detail?.status === "PENDING" || detail?.status === "NEEDS_INFO";
+  const isPendingSetup = detail?.status === "APPROVED_PENDING_SETUP";
+  // The "Review outcome" card below covers terminal review_note/reviewer
+  // context — APPROVED_PENDING_SETUP gets its own Alert instead (above),
+  // so it's excluded here rather than showing two overlapping summaries.
+  const isTerminal = detail?.status === "APPROVED" || detail?.status === "REJECTED";
 
   const closeDialog = () => {
     if (submitting) return;
     setDialogMode(null);
     setReason("");
     setInternalNote("");
+    setMemberLimit("");
     setFormError(null);
+  };
+
+  const openApproveDialog = () => {
+    // Starting suggestion only — editable, per the plan's own wording.
+    setMemberLimit(
+      detail?.expected_member_count ? String(detail.expected_member_count) : "",
+    );
+    setDialogMode("approve");
   };
 
   const handleApprove = async () => {
     if (!requestId) return;
+    const limit = Number(memberLimit);
+    if (!Number.isInteger(limit) || limit < 1) {
+      setFormError("Enter a member limit of at least 1.");
+      return;
+    }
     setSubmitting(true);
     setFormError(null);
     try {
-      const res = await adminApi.approveOrgRequest(requestId);
+      const res = await adminApi.approveOrgRequest(requestId, {
+        member_limit: limit,
+      });
       toast.success(res.message);
       closeDialog();
       await load();
     } catch (e: any) {
       setFormError(e?.message ?? "Failed to approve request");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleRevokeApproval = async () => {
+    if (!requestId) return;
+    if (reason.trim().length < 3) {
+      setFormError("Enter a reason (at least 3 characters).");
+      return;
+    }
+    setSubmitting(true);
+    setFormError(null);
+    try {
+      const res = await adminApi.revokeOrgRequestApproval(requestId, {
+        reason: reason.trim(),
+        internal_note: internalNote.trim() || undefined,
+      });
+      toast.success(res.message);
+      closeDialog();
+      await load();
+    } catch (e: any) {
+      setFormError(e?.message ?? "Failed to revoke approval");
     } finally {
       setSubmitting(false);
     }
@@ -251,14 +319,38 @@ export function AdminRequestDetailPage() {
                     <X className="mr-1.5 size-4" />
                     Reject
                   </Button>
-                  <Button onClick={() => setDialogMode("approve")}>
+                  <Button onClick={openApproveDialog}>
                     <Check className="mr-1.5 size-4" />
                     Approve
                   </Button>
                 </div>
               )}
+              {isPendingSetup && (
+                <div className="flex shrink-0 gap-2">
+                  <Button
+                    variant="outline"
+                    className="border-destructive/40 text-destructive hover:bg-destructive/10"
+                    onClick={() => setDialogMode("revoke")}
+                  >
+                    <Undo2 className="mr-1.5 size-4" />
+                    Revoke approval
+                  </Button>
+                </div>
+              )}
             </div>
 
+            {isPendingSetup && (
+              <Alert>
+                <AlertTitle>Awaiting requester setup</AlertTitle>
+                <AlertDescription>
+                  Approved with a member limit of{" "}
+                  <strong>{detail.admin_set_member_limit ?? "—"}</strong> on{" "}
+                  {formatDateTime(detail.reviewed_at)}. The requester still
+                  needs to complete setup before the organization is
+                  created — nothing has been created yet.
+                </AlertDescription>
+              </Alert>
+            )}
             <Card>
               <CardHeader>
                 <CardTitle>Request details</CardTitle>
@@ -311,7 +403,7 @@ export function AdminRequestDetailPage() {
               </CardContent>
             </Card>
 
-            {!isOpen && (
+            {isTerminal && (
               <Card>
                 <CardHeader>
                   <CardTitle>Review outcome</CardTitle>
@@ -374,28 +466,114 @@ export function AdminRequestDetailPage() {
         )}
       </div>
 
-      {/* ── Approve confirm ─────────────────────────────────────────────── */}
+      {/* ── Approve (member limit) ──────────────────────────────────────── */}
+      {/* EDIT (Phase 6 — subphase 6.6): no longer a plain confirm — approve()
+          (6.2) only moves the request to APPROVED_PENDING_SETUP and needs a
+          member limit to do it; the requester still has to complete setup
+          (6.5) before the organization actually exists. */}
       <Dialog
         open={dialogMode === "approve"}
         onOpenChange={(open) => !open && closeDialog()}
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Approve this request?</DialogTitle>
+            <DialogTitle>Approve this request</DialogTitle>
             <DialogDescription>
-              This creates the organization immediately and assigns the
-              requester as its first organizer. This cannot be undone.
+              Sets the organization's member limit and lets the requester
+              finish setup. The organization is not created yet — that
+              happens once the requester completes setup on their end.
             </DialogDescription>
           </DialogHeader>
-          {formError && (
-            <p className="text-sm text-destructive">{formError}</p>
-          )}
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="member-limit">Member limit</Label>
+              <Input
+                id="member-limit"
+                type="number"
+                min={1}
+                step={1}
+                value={memberLimit}
+                onChange={(e) => setMemberLimit(e.target.value)}
+                placeholder="e.g. 50"
+              />
+              <p className="text-xs text-muted-foreground">
+                {detail?.expected_member_count
+                  ? `Requester estimated ${detail.expected_member_count}. You can set a different limit.`
+                  : "No estimate was given — set a limit for this organization."}
+              </p>
+            </div>
+            {formError && (
+              <p className="text-sm text-destructive">{formError}</p>
+            )}
+          </div>
           <DialogFooter>
             <Button variant="outline" onClick={closeDialog} disabled={submitting}>
               Cancel
             </Button>
             <Button onClick={handleApprove} disabled={submitting}>
               {submitting ? "Approving..." : "Approve"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Revoke approval (6.6) ───────────────────────────────────────── */}
+      {/* Only reachable from APPROVED_PENDING_SETUP (isPendingSetup gates the
+          button that opens this) — mirrors revokeApproval()'s own
+          server-side status check. Shares the reject/needs-info dialog's
+          reason + internal-note shape since it's an equally adverse,
+          equally justification-worthy action. */}
+      <Dialog
+        open={dialogMode === "revoke"}
+        onOpenChange={(open) => !open && closeDialog()}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Revoke this approval?</DialogTitle>
+            <DialogDescription>
+              The request moves to Rejected and the organization name frees
+              up again. Use this when a requester never finishes setup
+              after being approved. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="revoke-reason">Reason</Label>
+              <Textarea
+                id="revoke-reason"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="e.g. Approved 30+ days ago; setup was never completed."
+                rows={3}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="revoke-internal-note">
+                Internal note{" "}
+                <span className="text-muted-foreground">(optional)</span>
+              </Label>
+              <Textarea
+                id="revoke-internal-note"
+                value={internalNote}
+                onChange={(e) => setInternalNote(e.target.value)}
+                placeholder="Not shown to the requester. Defaults to the reason above if left blank."
+                rows={2}
+              />
+            </div>
+            {formError && (
+              <p className="text-sm text-destructive">{formError}</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={closeDialog} disabled={submitting}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleRevokeApproval}
+              disabled={submitting}
+            >
+              {submitting ? "Revoking..." : "Revoke approval"}
             </Button>
           </DialogFooter>
         </DialogContent>

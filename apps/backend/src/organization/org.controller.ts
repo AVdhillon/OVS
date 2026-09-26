@@ -22,6 +22,9 @@ import { SubmitOrgRequestDto } from './dto/submit-org-request.dto';
 // EDIT (Phase 4 — cutover, subphase 4.3): input for the new
 // send-domain-otp route below.
 import { SendOrgDomainOtpDto } from './dto/send-org-domain-otp.dto';
+// EDIT (Phase 6 — post-approval org finalization, subphase 6.3): input for
+// the new finalize route below.
+import { FinalizeOrgRequestDto } from './dto/finalize-org-request.dto';
 import { OrgRequestsService } from './org-requests.service';
 import { AddMembersDto } from './dto/add-members.dto';
 import { UpdateMemberDto } from './dto/update-member.dto';
@@ -32,6 +35,15 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequireOrganizer } from '../common/decorators/require-organizer.decorator';
 import type { JwtUser } from '../common/decorators/current-user.decorator';
 import { AddMemberRoleDto, MoveMemberRoleDto } from './dto/member-role.dto';
+// EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.3): the
+// requester-facing (organizer's-own-org) side of OrgLimitRequestsService —
+// submit a request and view this org's own history. The admin-facing side
+// (approve/reject/needs-info/queue) lives on its own controller,
+// member-limit-requests-admin.controller.ts, same "separate controller per
+// audience" split org-requests-admin.controller.ts's own header comment
+// already establishes for org_requests.
+import { OrgLimitRequestsService } from './org-limit-requests.service';
+import { SubmitLimitRequestDto } from './dto/submit-limit-request.dto';
 
 // EDIT (Phase 4 — cutover, subphase 4.3): same shape/reasoning as
 // auth.controller.ts's own OTP_SEND_THROTTLE — a fresh OTP-sending route
@@ -53,6 +65,11 @@ export class OrgController {
     // reasoning org.module.ts's own comments already give — no module
     // change needed for this specific wiring.
     private orgRequestsService: OrgRequestsService,
+    // EDIT (Phase 7 — subphase 7.3): OrgLimitRequestsService is already a
+    // provider in this module (registered 7.2, exported 7.3 — see
+    // org.module.ts's own comment), same "inject the existing instance"
+    // wiring as orgRequestsService above.
+    private orgLimitRequestsService: OrgLimitRequestsService,
   ) {}
 
   // ─── Organization ───────────────────────────────────────────────────────────
@@ -139,12 +156,107 @@ export class OrgController {
   }
 
   /**
+   * POST /org/request/:requestId/finalize
+   * EDIT (Phase 6 — post-approval org finalization, subphase 6.3): the
+   * requester-triggered completion of an APPROVED_PENDING_SETUP request —
+   * see OrgRequestsService.finalizeSetup() for the full flow. This is what
+   * actually creates the `organization` row now (approve(), 2.4/6.2, no
+   * longer does). Same singular 'request/' path convention as every other
+   * requester-facing org-request route on this controller (resubmit above,
+   * 'request/mine', etc.) — the plan's own text wrote this route as plural
+   * '/org/requests/:id/finalize', but that reads as a typo against its own
+   * established convention elsewhere on this exact controller, so kept
+   * singular for consistency. No RolesGuard: ownership of the request
+   * itself is enforced inside finalizeSetup() (a request_id belonging to
+   * another pid is reported as not found, same as resubmit()), not here.
+   */
+  @Post('request/:requestId/finalize')
+  finalizeOrgRequest(
+    @CurrentUser() user: JwtUser,
+    @Param('requestId') requestId: string,
+    @Body() dto: FinalizeOrgRequestDto,
+  ) {
+    const pid = BigInt(user.pid!);
+    return this.orgRequestsService.finalizeSetup(
+      this.parseRequestId(requestId),
+      pid,
+      dto,
+    );
+  }
+
+  /**
    * GET /org/mine
    * Returns all orgs where the caller has an organizer role.
    */
   @Get('mine')
   getMyOrgs(@CurrentUser() user: JwtUser) {
     return this.orgService.getMyOrgs(BigInt(user.pid!));
+  }
+
+  /**
+   * GET /org/orgid-available?orgid=XYZ1234
+   * EDIT (Phase 6 — post-approval org finalization, subphase 6.5): thin,
+   * read-only wrapper around orgid.utilities.ts's isOrgIdAvailable() (new
+   * this subphase) — lets the finalize-setup wizard's "choose my own ID"
+   * step check as the requester types, without running the full
+   * allocate-and-retry path finalizeSetup() itself uses. No RolesGuard:
+   * anyone authenticated can check whether an orgid string is taken, same
+   * as every other requester-facing route on this controller — nothing
+   * here is scoped to an org the caller belongs to (there isn't one yet).
+   */
+  @Get('orgid-available')
+  checkOrgIdAvailable(@Query('orgid') orgid: string) {
+    return this.orgService.checkOrgIdAvailable(orgid);
+  }
+
+  // ─── Member limit requests (Phase 7 — subphase 7.3) ───────────────────────
+
+  /**
+   * POST /org/:orgid/member-limit-requests
+   * EDIT (Phase 7 — subphase 7.3): submits a request to raise this org's
+   * member_limit — see OrgLimitRequestsService.submit() (7.2). Organizer-only,
+   * same @RequireOrganizer('orgid')/RolesGuard gating as every other
+   * ':orgid/...' route on this controller — trg_check_limit_request_organizer
+   * (7.1, dbschema.sql) backstops this at the DB level regardless, but the
+   * guard gives a clean 403 before the service is even called, same
+   * "friendly guard in front of a DB-level backstop" reasoning as those
+   * routes' own comments. `uid` comes from RolesGuard's resolved
+   * req.orgContext.uid, never trusted from the body — see
+   * SubmitLimitRequestDto's own header comment for why it isn't a field
+   * there.
+   */
+  @Post(':orgid/member-limit-requests')
+  @UseGuards(RolesGuard)
+  @RequireOrganizer('orgid')
+  submitLimitRequest(
+    @Param('orgid') orgid: string,
+    @Body() dto: SubmitLimitRequestDto,
+    @Req() req: any,
+  ) {
+    const callerUid = req.orgContext.uid;
+    return this.orgLimitRequestsService.submit(
+      orgid,
+      callerUid,
+      dto.requested_limit,
+      dto.justification,
+    );
+  }
+
+  /**
+   * GET /org/:orgid/member-limit-requests
+   * EDIT (Phase 7 — subphase 7.3): this org's own member-limit-request
+   * history, newest first — see OrgLimitRequestsService.listForOrg(). Gated
+   * the same organizer-only way as submitLimitRequest() above: the plan's
+   * own 7.3 text doesn't spell out a role for this specific read route, but
+   * 7.4 frames it as part of the *org admin* dashboard, not something every
+   * member sees, so it's organizer-only here rather than open to any member
+   * — flagging this as an assumption in case product wants it looser.
+   */
+  @Get(':orgid/member-limit-requests')
+  @UseGuards(RolesGuard)
+  @RequireOrganizer('orgid')
+  listLimitRequestsForOrg(@Param('orgid') orgid: string) {
+    return this.orgLimitRequestsService.listForOrg(orgid);
   }
 
   // ─── Members ────────────────────────────────────────────────────────────────

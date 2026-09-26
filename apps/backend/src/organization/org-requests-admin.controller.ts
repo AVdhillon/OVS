@@ -9,7 +9,10 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { OrgRequestsService } from './org-requests.service';
-import { ReviewOrgRequestDto } from './dto/review-org-request.dto';
+import {
+  ReviewOrgRequestDto,
+  ApproveOrgRequestDto,
+} from './dto/review-org-request.dto';
 import { SiteAdminGuard } from '../auth/guards/site-admin.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtUser } from '../common/decorators/current-user.decorator';
@@ -67,6 +70,26 @@ export class OrgRequestsAdminController {
   }
 
   /**
+   * GET /admin/org-requests/pending-setup/stuck
+   * EDIT (Phase 6 — post-approval org setup, subphase 6.6): the
+   * stuck-request admin view — requests sitting in APPROVED_PENDING_SETUP
+   * for longer than ?min_hours= (defaults to 24), oldest-approved-first.
+   * See OrgRequestsService.listStuckPendingSetup().
+   *
+   * Declared ABOVE the GET ':requestId' route below on purpose: Nest/
+   * Express matches routes in declaration order, and 'pending-setup' would
+   * otherwise be swallowed by ':requestId' as if it were a request id (it
+   * would then 400 out of parseRequestId's digits-only check instead of
+   * reaching this handler at all).
+   */
+  @Get('pending-setup/stuck')
+  listStuckPendingSetup(@Query('min_hours') minHours?: string) {
+    return this.orgRequestsService.listStuckPendingSetup(
+      this.parseMinHours(minHours),
+    );
+  }
+
+  /**
    * GET /admin/org-requests/:requestId
    * Request detail (3.5's detail page): the request, requester contact
    * info, reviewing admin, and the full admin_audit_log trail. See
@@ -79,20 +102,27 @@ export class OrgRequestsAdminController {
 
   /**
    * POST /admin/org-requests/:requestId/approve
-   * Creates the organization. See OrgRequestsService.approve() (2.4). No
-   * request body — approve() takes no reviewer-supplied text, unlike
-   * reject()/requestInfo() below (the request row itself is the
-   * justification, per admin_audit_log's own chk_admin_audit_reason_required
-   * — approve isn't in that CHECK's required-reason list).
+   * EDIT (Phase 6 — post-approval org finalization, subphase 6.2): no
+   * longer creates the organization — moves the request to
+   * APPROVED_PENDING_SETUP and records the admin-set member cap. See
+   * OrgRequestsService.approve() for why (2.4's doc comment above this one
+   * described the pre-6.2 behaviour). Body is now an ApproveOrgRequestDto
+   * (just `member_limit`) — this route did take no body before this
+   * subphase; there is still no free-text reason field here (the request
+   * row itself is the justification, per admin_audit_log's own
+   * chk_admin_audit_reason_required — approve isn't in that CHECK's
+   * required-reason list), only the new numeric field.
    */
   @Post(':requestId/approve')
   approve(
     @CurrentUser() admin: JwtUser,
     @Param('requestId') requestId: string,
+    @Body() dto: ApproveOrgRequestDto,
   ) {
     return this.orgRequestsService.approve(
       this.parseRequestId(requestId),
       admin.admin_id!,
+      dto,
     );
   }
 
@@ -135,6 +165,30 @@ export class OrgRequestsAdminController {
     );
   }
 
+  /**
+   * POST /admin/org-requests/:requestId/revoke-approval
+   * EDIT (Phase 6 — post-approval org setup, subphase 6.6): reverses an
+   * APPROVED_PENDING_SETUP request back to REJECTED when the requester
+   * never completes finalizeSetup(). Not reachable from any other status —
+   * see OrgRequestsService.revokeApproval(). Same ReviewOrgRequestDto body
+   * as reject()/requestInfo() (a required requester-facing `reason`, an
+   * optional internal-only `internal_note`) — revoking an approval is just
+   * as adverse an action as a reject, so it gets the same justification
+   * requirement rather than approve()'s no-body shape.
+   */
+  @Post(':requestId/revoke-approval')
+  revokeApproval(
+    @CurrentUser() admin: JwtUser,
+    @Param('requestId') requestId: string,
+    @Body() dto: ReviewOrgRequestDto,
+  ) {
+    return this.orgRequestsService.revokeApproval(
+      this.parseRequestId(requestId),
+      admin.admin_id!,
+      dto,
+    );
+  }
+
   // ─── Helpers ────────────────────────────────────────────────────────────────
 
   /**
@@ -152,5 +206,20 @@ export class OrgRequestsAdminController {
       throw new BadRequestException(`Invalid request id: ${requestId}`);
     }
     return BigInt(requestId);
+  }
+
+  /**
+   * Same "guard before it reaches a raw JS footgun" reasoning as
+   * parseRequestId() above — an un-parseable ?min_hours= would otherwise
+   * become NaN and silently fall through listStuckPendingSetup()'s own
+   * `minHours > 0 ? minHours : 0` default rather than a clear 400.
+   */
+  private parseMinHours(minHours?: string): number | undefined {
+    if (minHours === undefined) return undefined;
+    const n = Number(minHours);
+    if (!Number.isFinite(n) || n < 0) {
+      throw new BadRequestException(`Invalid min_hours: ${minHours}`);
+    }
+    return n;
   }
 }

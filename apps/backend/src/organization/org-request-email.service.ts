@@ -92,9 +92,14 @@ export class OrgRequestEmailService {
   }
 
   /**
-   * APPROVED — sent from approve(), after the organization row (and the
-   * requester's own OWNER membership in it) already exist. Includes the
-   * orgid since that's the first time it exists to tell them.
+   * APPROVED — sent from finalizeSetup() (6.3), after the organization row
+   * (and the requester's own OWNER membership in it) already exist.
+   * Includes the orgid since that's the first time it exists to tell them.
+   *
+   * EDIT (Phase 6 — subphase 6.2): no longer sent from approve() — see
+   * sendApprovedPendingSetup() below, which now fires at that point in the
+   * flow instead. This method's call site moves to 6.3, once there's an
+   * orgid to report.
    */
   async sendApproved(
     to: string | null,
@@ -111,6 +116,35 @@ export class OrgRequestEmailService {
         (${referenceCode}) has been approved.</p>
         <p>Your organization ID is <strong>${orgid}</strong>. You've been added as its
         first organizer — sign in to get started.</p>
+      `,
+    );
+  }
+
+  /**
+   * APPROVED_PENDING_SETUP — EDIT (Phase 6 — post-approval org
+   * finalization, subphase 6.2): sent from approve() now that a site admin
+   * signing off no longer means the organization exists yet — it just means
+   * the requester can now finish setup (6.3: choosing an orgid, confirming
+   * the org contact email, and supplying their own uid). Unlike
+   * sendApproved() there is no orgid or member role to report yet, so this
+   * is a call-to-action email rather than a "you're in" one — the
+   * substantive one lands once finalizeSetup() actually creates the org.
+   */
+  async sendApprovedPendingSetup(
+    to: string | null,
+    referenceCode: string,
+    orgName: string,
+  ): Promise<void> {
+    await this.dispatch(
+      to,
+      referenceCode,
+      `Request approved — action needed for ${orgName}`,
+      `
+        <p>Good news — your request for <strong>${escapeHtml(orgName)}</strong>
+        (${referenceCode}) has been approved.</p>
+        <p>One step remains before the organization is created: sign in and complete
+        setup — choose your organization ID, confirm your organization's contact
+        email, and pick your own member ID. Nothing is created until you do.</p>
       `,
     );
   }
@@ -139,6 +173,41 @@ export class OrgRequestEmailService {
                             background:#fef2f2;color:#334155;">
           ${escapeHtml(reviewNote)}
         </blockquote>
+      `,
+    );
+  }
+
+  /**
+   * APPROVED_PENDING_SETUP -> REJECTED — EDIT (Phase 6 — post-approval org
+   * setup, subphase 6.6): sent from revokeApproval(), the admin action for
+   * a request that was approved but never finalized (see
+   * OrgRequestsService.revokeApproval() and the "Open decisions" answer in
+   * the plan: a manual revoke action, no auto-expiry). Distinct wording
+   * from sendRejected() — this requester DID get approved and is losing an
+   * approval they already had, not being turned down on first review — but
+   * it lands in the same terminal REJECTED status, so the requester's next
+   * step (submit a fresh request) is identical.
+   */
+  async sendApprovalRevoked(
+    to: string | null,
+    referenceCode: string,
+    orgName: string,
+    reviewNote: string,
+  ): Promise<void> {
+    await this.dispatch(
+      to,
+      referenceCode,
+      `Approval revoked — ${referenceCode}`,
+      `
+        <p>Your request for <strong>${escapeHtml(orgName)}</strong>
+        (${referenceCode}) was previously approved, but that approval has
+        since been revoked because setup was never completed:</p>
+        <blockquote style="margin:16px 0;padding:12px 16px;border-left:3px solid #dc2626;
+                            background:#fef2f2;color:#334155;">
+          ${escapeHtml(reviewNote)}
+        </blockquote>
+        <p>You're welcome to submit a new request if you'd still like to create
+        this organization.</p>
       `,
     );
   }
