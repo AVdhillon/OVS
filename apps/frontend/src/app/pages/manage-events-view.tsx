@@ -1066,7 +1066,7 @@ function CreateEventForm({
                 <FolderTree className="h-3.5 w-3.5" />
                 Scope
                 <span className="text-muted-foreground font-normal text-xs">
-                  (defaults to org root)
+                  (defaults to your first scope)
                 </span>
               </Label>
               <ScopeSelector

@@ -425,9 +425,25 @@ export type AdminAction =
   | "ORG_REINSTATED"
   | "ORG_ARCHIVED"
   | "ADMIN_INVITED"
-  | "ADMIN_DEACTIVATED";
+  | "ADMIN_DEACTIVATED"
+  // EDIT: chk_admin_audit_action (dbschema.sql, Phase 7.1/7.2) already
+  // accepts these three — OrgLimitRequestsService's approve()/reject()/
+  // requestInfo() (7.2) have been writing them all along — but this type
+  // and the ACTION_LABEL/ACTION_CLASS maps below in
+  // admin-audit-log-page.tsx were never updated for Phase 7, so the audit
+  // feed fell back to raw enum text in a plain grey badge for these three.
+  | "MEMBER_LIMIT_INCREASE_APPROVED"
+  | "MEMBER_LIMIT_INCREASE_REJECTED"
+  | "MEMBER_LIMIT_INCREASE_INFO_REQUESTED";
 
-export type AdminTargetType = "ORG_REQUEST" | "ORGANIZATION" | "SITE_ADMIN";
+export type AdminTargetType =
+  | "ORG_REQUEST"
+  | "ORGANIZATION"
+  | "SITE_ADMIN"
+  // EDIT: chk_admin_audit_target_type (dbschema.sql, Phase 7.1) already
+  // accepts this — see the AdminAction edit above for the same "schema
+  // supported it, the frontend type just never caught up" gap.
+  | "MEMBER_LIMIT_REQUEST";
 
 export interface AuditFeedResponse {
   entries: AdminAuditLogEntry[];

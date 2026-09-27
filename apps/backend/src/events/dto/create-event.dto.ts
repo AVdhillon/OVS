@@ -34,9 +34,14 @@ export class CreateEventDto {
   @IsNotEmpty()
   uid: string;
 
-  /** Scope node within the org where this event is anchored */
+  /**
+   * Scope node within the org where this event is anchored.
+   * Optional — omit (or send null) to default to the org's ROOT scope;
+   * see EventsService.createEvent()'s resolution of the default.
+   */
+  @IsOptional()
   @IsInt()
-  scope_id: number;
+  scope_id?: number | null;
 
   @IsString()
   @IsNotEmpty()

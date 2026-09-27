@@ -225,6 +225,134 @@ export class OrgLimitRequestsService {
     }
   }
 
+  // ─── Edit and resubmit a NEEDS_INFO request ───────────────────────────────
+  // EDIT: the organizer-facing counterpart to requestInfo(). The table's own
+  // status comment (dbschema.sql, 7.1) already documents the intent —
+  // "NEEDS_INFO -- admin asked a question; organizer can edit and
+  // resubmit" — but 7.2/7.3 never actually shipped a write path for it,
+  // leaving the org with no way off a NEEDS_INFO row short of waiting for
+  // an admin to approve/reject it outright. Only NEEDS_INFO is editable:
+  // PENDING is already awaiting a first look (editing it would race an
+  // admin mid-review), APPROVED/REJECTED are terminal. On success the row
+  // goes back to PENDING — same shape as a fresh submit() — so it re-enters
+  // the queue exactly like any other pending request.
+  async resubmit(
+    orgid: string,
+    uid: string,
+    requestId: bigint,
+    requestedLimit: number,
+    justification?: string | null,
+  ) {
+    await this.orgService.assertOrganizerAccess(orgid, uid);
+
+    const org = await this.prisma.organization.findUnique({
+      where: { orgid },
+      select: { org_name: true, member_limit: true, is_deleted: true },
+    });
+    if (!org || org.is_deleted) {
+      throw new NotFoundException(`Organization ${orgid} not found`);
+    }
+
+    if (!Number.isInteger(requestedLimit)) {
+      throw new BadRequestException('requested_limit must be an integer.');
+    }
+    // Re-checked against the org's *current* member_limit, same as submit()
+    // — current_limit gets refreshed below too, so a resubmission reflects
+    // where the cap actually stands now, not what it was when the original
+    // request went in.
+    if (requestedLimit <= org.member_limit) {
+      throw new BadRequestException(
+        `requested_limit (${requestedLimit}) must be greater than ${org.org_name}'s ` +
+          `current member limit (${org.member_limit}).`,
+      );
+    }
+
+    const trimmedJustification = justification?.trim() || null;
+
+    // Same lock-then-write shape as approve()/reject()/requestInfo(): locks
+    // the row first so a concurrent admin decision on this exact request
+    // can't land in between the status check and the update below.
+    const result = await this.prisma.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<
+        Array<{
+          request_id: bigint;
+          orgid: string;
+          status: string;
+          requested_by_uid: string;
+        }>
+      >`
+        SELECT request_id, orgid, status, requested_by_uid
+        FROM org_member_limit_requests
+        WHERE request_id = ${requestId}
+        FOR UPDATE
+      `;
+      const claimed = locked[0];
+      if (!claimed || claimed.orgid !== orgid) {
+        throw new NotFoundException(`Member limit request ${requestId} not found`);
+      }
+      if (claimed.requested_by_uid !== uid) {
+        // Deliberately generic — assertOrganizerAccess() above already
+        // proved `uid` organizes this org, but this specific row was
+        // someone else's submission. Matches the "don't hand out row
+        // ownership details" tone the rest of this file uses.
+        throw new ForbiddenException(
+          'You may only edit a member limit request you submitted yourself.',
+        );
+      }
+      if (claimed.status !== 'NEEDS_INFO') {
+        throw new ConflictException(
+          `Member limit request ${requestId} is ${claimed.status} and can't be edited — ` +
+            `only a request that needs more information can be revised.`,
+        );
+      }
+
+      return tx.org_member_limit_requests.update({
+        where: { request_id: requestId },
+        data: {
+          status: 'PENDING',
+          current_limit: org.member_limit,
+          requested_limit: requestedLimit,
+          justification: trimmedJustification,
+          reviewed_by_admin_id: null,
+          reviewed_at: null,
+          review_note: null,
+        },
+        select: {
+          request_id: true,
+          orgid: true,
+          requested_by_uid: true,
+          current_limit: true,
+          requested_limit: true,
+          justification: true,
+          status: true,
+          created_at: true,
+        },
+      });
+    });
+
+    // Re-uses the "submitted" notification — from the admin queue's point
+    // of view a resubmission is indistinguishable from a fresh PENDING row
+    // landing in it.
+    const requester = await this.prisma.org_members.findUnique({
+      where: { orgid_uid: { orgid, uid } },
+      select: { email: true },
+    });
+    await this.emailService.sendSubmitted(
+      requester?.email ?? null,
+      result.request_id,
+      org.org_name,
+      result.current_limit,
+      result.requested_limit,
+    );
+
+    return {
+      ...result,
+      message:
+        `Member limit increase request updated and resubmitted for ${org.org_name} ` +
+        `(current limit ${result.current_limit}, requested ${result.requested_limit}).`,
+    };
+  }
+
   // ─── Approve a pending/needs-info request ────────────────────────────────
   // EDIT (Phase 7 — subphase 7.2): the one outcome with a real side effect —
   // organization.member_limit is raised to requested_limit in the same

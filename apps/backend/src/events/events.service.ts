@@ -254,14 +254,41 @@ export class EventsService {
     const organizerRoles = await this.prisma.member_roles.findMany({
       where: { orgid: dto.orgid, uid: dto.uid, is_organizer: true },
       select: { scope_id: true },
+      // FIX: this ordering is now load-bearing, not just tidiness — the
+      // default-scope resolution just below picks organizerRoles[0] as
+      // "the organizer's first scope" when the caller doesn't supply one,
+      // so this query needs a real, deterministic order rather than
+      // whatever Postgres happens to return. scope_id ascending is the
+      // best available proxy for "first" here: member_roles carries no
+      // created_at of its own to order by, and scope_id is a SERIAL, so
+      // the organizer's earliest-assigned scope is (with the rare
+      // exception of a scope created and assigned out of order) also
+      // their lowest-numbered one. For an organizer who holds ROOT, this
+      // also happens to resolve to ROOT, since ROOT is always the first
+      // scope row created for an org (create_root_scope() trigger fires
+      // the instant the org itself is created).
+      orderBy: { scope_id: 'asc' },
     });
     if (organizerRoles.length === 0)
       throw new ForbiddenException('You are not an organizer in this org');
 
-    await this.assertScopeInOrg(dto.orgid, dto.scope_id);
+    // Default to the first scope this organizer holds when the caller
+    // didn't pick one — mirrors the frontend's "Scope (defaults to org
+    // root)" copy, which previously wasn't backed by any actual default:
+    // an omitted/null scope_id used to reach the DB as NULL and fail
+    // CreateEventDto's (then-required) @IsInt() check. Deliberately the
+    // organizer's OWN first scope, not unconditionally the org's ROOT —
+    // an organizer who only holds a role at a sub-scope has no organizer
+    // role at ROOT, so defaulting everyone to ROOT would make
+    // assertScopeReachableForAny() reject their very next line every
+    // time they left scope unselected. organizerRoles is already
+    // confirmed non-empty by the check just above, so [0] is safe.
+    const resolvedScopeId = dto.scope_id ?? organizerRoles[0].scope_id;
+
+    await this.assertScopeInOrg(dto.orgid, resolvedScopeId);
     await this.assertScopeReachableForAny(
       organizerRoles.map((r) => r.scope_id),
-      dto.scope_id,
+      resolvedScopeId,
     );
 
     const start = new Date(dto.start_time);
@@ -274,7 +301,7 @@ export class EventsService {
       data: {
         orgid: dto.orgid,
         created_by_uid: dto.uid,
-        scope_id: dto.scope_id,
+        scope_id: resolvedScopeId,
         title: dto.title,
         description: dto.description ?? null,
         start_time: start,

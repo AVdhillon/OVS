@@ -7,7 +7,7 @@ export function serializeBigInt(obj: any) {
 }
 export function splitIdentifier(value: string) {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  const phoneRegex = /^[1-9]\d{9}$/; // exactly 10 digits, no leading zero — matches org_members.mobile CHECK constraint
+  const phoneRegex = /^[0-9]{10}$/; // exactly 10 digits — matches uaccount.mobile's CHECK constraint and every mobile validator in the app (register.dto.ts, update-user.dto.ts, invite-admin.dto.ts)
 
   if (emailRegex.test(value)) {
     return { email: value, mobile: null };

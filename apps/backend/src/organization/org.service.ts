@@ -232,9 +232,91 @@ export class OrgService {
     }));
   }
 
+  // ─── Get org for an ORG-session caller ───────────────────────────────────────
+  // BUGFIX: GET /org/mine (org.controller.ts::getMyOrgs) was calling
+  // getMyOrgs() above unconditionally, including for ORG sessions — passing
+  // BigInt(user.pid!). getMyOrgs()'s pid-based lookup exists for UNIFIED
+  // sessions, where a single unified account can be linked (via
+  // identity_wallet) to organizer roles across several different orgs. An
+  // ORG session doesn't need that: it already knows exactly which
+  // org_members row it is from its own JWT (orgid + uid), and
+  // org_members.pid is legitimately NULL for a member who was never linked
+  // to a unified account (chk_member_identity only requires pid OR mobile
+  // OR email) — which is exactly the case that made `BigInt(user.pid!)`
+  // throw "Cannot convert null to a BigInt" for that member.
+  //
+  // This mirrors getMyOrgs()'s return shape (including member_count) so the
+  // controller can hand back the same OrgSummary[] shape for either session
+  // type — the frontend (manage-organizations-view.tsx::fetchOrgs) already
+  // filters an ORG session's result down to session.orgid regardless, this
+  // just returns that one org (or []) directly instead of crashing before
+  // it gets the chance to filter.
+  async getMyOrgForOrgSession(orgid: string, uid: string) {
+    const role = await this.prisma.member_roles.findFirst({
+      where: { orgid, uid, is_organizer: true },
+    });
+    if (!role) return [];
+
+    const org = await this.prisma.organization.findFirst({
+      where: { orgid, is_deleted: false },
+      select: {
+        orgid: true,
+        org_name: true,
+        org_email: true,
+        is_active: true,
+        created_at: true,
+        member_limit: true,
+      },
+    });
+    if (!org) return [];
+
+    const member_count = await this.prisma.org_members.count({
+      where: { orgid, is_deleted: false },
+    });
+
+    return [{ ...org, uid, member_count }];
+  }
+
+  // ─── Get self info for an ORG-session caller (Account tab) ──────────────────
+  // EDIT (Account tab, ORG sessions): getMyOrgForOrgSession() above is
+  // organizer-gated (it exists to drive the "manage this org" surfaces),
+  // which leaves a *plain* ORG member — no organizer role anywhere — with
+  // no way to see even their own org's name/contact. manage-account-view.tsx
+  // used to render nothing at all for an ORG session because of this (the
+  // page was built entirely around the UNIFIED `user` object). This is the
+  // deliberately organizer-free counterpart: any active member of the org
+  // may read their own uid + their org's name/contact, nothing more.
+  async getOrgSelfInfo(orgid: string, uid: string) {
+    const member = await this.prisma.org_members.findFirst({
+      where: { orgid, uid, is_deleted: false },
+      select: { uid: true },
+    });
+    if (!member) {
+      throw new NotFoundException('Membership not found');
+    }
+
+    const org = await this.prisma.organization.findFirst({
+      where: { orgid, is_deleted: false },
+      select: { orgid: true, org_name: true, org_email: true },
+    });
+    if (!org) {
+      throw new NotFoundException('Organization not found');
+    }
+
+    return {
+      orgid: org.orgid,
+      org_name: org.org_name,
+      org_email: org.org_email,
+      uid: member.uid,
+    };
+  }
+
   // ─── Get members (scope-filtered for organizer) ─────────────────────────────
+  // BUGFIX: dropped the unused `pid: bigint` param — see org.controller.ts's
+  // getMembers() comment. It was never referenced in this method body (all
+  // scoping here runs off callerUid), so it was dead weight that just forced
+  // the controller to crash-cast a legitimately-nullable ORG-session pid.
   async getMembers(
-    pid: bigint,
     orgid: string,
     callerUid: string,
     filters?: { role?: string; scope_id?: number; search?: string },
@@ -306,8 +388,9 @@ export class OrgService {
   }
 
   // ─── Add members ────────────────────────────────────────────────────────────
+  // BUGFIX: dropped the unused `pid: bigint` param — see org.controller.ts's
+  // addMembers() comment.
   async addMembers(
-    pid: bigint,
     orgid: string,
     callerUid: string,
     dto: AddMembersDto,
@@ -487,8 +570,9 @@ export class OrgService {
 
   // ─── Update member role at a specific scope ──────────────────────────────────
   // scope_id in the DTO identifies which member_roles row to update.
+  // BUGFIX: dropped the unused `pid: bigint` param — see org.controller.ts's
+  // updateMember() comment.
   async updateMember(
-    pid: bigint,
     orgid: string,
     callerUid: string,
     targetUid: string,
@@ -542,8 +626,9 @@ export class OrgService {
   }
 
   // ─── Soft-delete member ─────────────────────────────────────────────────────
+  // BUGFIX: dropped the unused `pid: bigint` param — see org.controller.ts's
+  // removeMember() comment.
   async removeMember(
-    pid: bigint,
     orgid: string,
     callerUid: string,
     targetUid: string,
@@ -594,8 +679,9 @@ export class OrgService {
 
     return { message: `Member ${targetUid} removed from ${orgid}` };
   }
+  // BUGFIX: dropped the unused `pid: bigint` param — see org.controller.ts's
+  // addMemberRole() comment.
   async addMemberRole(
-    pid: bigint,
     orgid: string,
     callerUid: string,
     targetUid: string,
@@ -648,8 +734,9 @@ export class OrgService {
 
   // ─── Remove one scope assignment from a member ───────────────────────────────
   // If this is the member's last assignment, soft-deletes org_members too.
+  // BUGFIX: dropped the unused `pid: bigint` param — see org.controller.ts's
+  // removeMemberRole() comment.
   async removeMemberRole(
-    pid: bigint,
     orgid: string,
     callerUid: string,
     targetUid: string,
@@ -705,8 +792,9 @@ export class OrgService {
   }
 
   // ─── Atomically move one scope assignment to a different scope ───────────────
+  // BUGFIX: dropped the unused `pid: bigint` param — see org.controller.ts's
+  // moveMemberRole() comment.
   async moveMemberRole(
-    pid: bigint,
     orgid: string,
     callerUid: string,
     targetUid: string,

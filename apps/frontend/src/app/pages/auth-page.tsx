@@ -640,26 +640,6 @@ export function AuthPage() {
                   </div>
                 </div>
 
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-start gap-2">
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Info className="h-4 w-4 text-[#1e40af] mt-0.5 flex-shrink-0" />
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p className="max-w-xs">
-                          A unique Personal ID (PID) will be automatically
-                          generated for your account upon successful
-                          registration
-                        </p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                  <p className="text-sm text-blue-900">
-                    A unique PID will be generated for your account
-                  </p>
-                </div>
-
                 <div className="flex items-center gap-2">
                   <Button
                     className="flex-1"

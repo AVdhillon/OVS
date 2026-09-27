@@ -1,14 +1,17 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAppContext } from '../context/app-context';
+import type { Session } from '../context/app-context';
 import { api } from '../../lib/api';
+import type { OrgSelfInfo } from '../../lib/api';
 import { toast } from 'sonner';
 
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Separator } from '../components/ui/separator';
 import { Badge } from '../components/ui/badge';
+import { Skeleton } from '../components/ui/skeleton';
 import {
   Select,
   SelectContent,
@@ -50,10 +53,93 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+// ─── ORG session view ─────────────────────────────────────────────────────────
+// EDIT (Account tab, ORG sessions): an ORG session has no `user` — that's a
+// UNIFIED-only object (see app-context.tsx) — so this page used to fall
+// straight through to `if (!user) return null;` below and render nothing
+// at all for an ORG session. This is the org-scoped counterpart: read-only
+// (there's no self-service edit for an org member's own row, unlike the
+// UNIFIED form below), and deliberately limited to org-identifying info
+// only — uid, org id, org name, and the org's contact — nothing about
+// other members or the org's internal structure, which belong to Manage
+// Events / the (UNIFIED-only) Organizations tab instead.
+function OrgAccountView({ session }: { session: Session }) {
+  const [info, setInfo] = useState<OrgSelfInfo | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    api
+        .getOrgSelfInfo()
+        .then((data) => {
+          if (!cancelled) setInfo(data);
+        })
+        .catch((e: any) => {
+          if (!cancelled) toast.error(e.message ?? 'Failed to load account info');
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    return () => {
+      cancelled = true;
+    };
+  }, [session.orgid, session.uid]);
+
+  return (
+      <div className="max-w-2xl mx-auto">
+
+        {/* Page header */}
+        <div className="mb-6">
+          <h1 className="text-2xl font-bold tracking-tight mb-1">Account</h1>
+          <p className="text-sm text-muted-foreground">Your organization membership details</p>
+        </div>
+
+        <Card>
+          <CardHeader className="pb-4">
+            <CardTitle className="text-base">Organization Information</CardTitle>
+          </CardHeader>
+
+          <CardContent className="space-y-6">
+            {loading ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {[1, 2, 3, 4].map((i) => (
+                      <div key={i} className="space-y-1.5">
+                        <Skeleton className="h-3.5 w-20" />
+                        <Skeleton className="h-5 w-32" />
+                      </div>
+                  ))}
+                </div>
+            ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <SectionLabel>Organization Name</SectionLabel>
+                    <p className="text-sm font-medium">{info?.org_name ?? '—'}</p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <SectionLabel>Organization ID</SectionLabel>
+                    <p className="text-sm font-mono">{info?.orgid ?? session.orgid ?? '—'}</p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <SectionLabel>Your UID</SectionLabel>
+                    <p className="text-sm font-mono">{info?.uid ?? session.uid ?? '—'}</p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <SectionLabel>Contact</SectionLabel>
+                    <p className="text-sm">{info?.org_email ?? '—'}</p>
+                  </div>
+                </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+  );
+}
+
 // ─── Main View ────────────────────────────────────────────────────────────────
 
 export function ManageAccountView() {
-  const { user, setUser } = useAppContext();
+  const { user, setUser, session } = useAppContext();
 
   // ── Form state — all snake_case to match User interface ──────────────────
   const [firstName, setFirstName]   = useState('');
@@ -203,6 +289,12 @@ export function ManageAccountView() {
   };
 
   // ── Guard ─────────────────────────────────────────────────────────────────
+  // EDIT (Account tab, ORG sessions): branch to the org-scoped read-only
+  // view above before the UNIFIED-only `!user` bailout — an ORG session
+  // never has `user` populated (see app-context.tsx), so without this the
+  // page rendered nothing at all for that session type.
+  if (session?.type === 'ORG') return <OrgAccountView session={session} />;
+
   if (!user) return null;
 
   const countryKeys = Object.keys(countryStateMap);
@@ -229,12 +321,6 @@ export function ManageAccountView() {
             <div className="flex items-center justify-between gap-4">
               <div>
                 <CardTitle className="text-base">Personal Information</CardTitle>
-                <CardDescription className="mt-1">
-                  PID:{' '}
-                  <span className="font-mono text-foreground text-xs bg-muted px-1.5 py-0.5 rounded">
-                  {user.pid}
-                </span>
-                </CardDescription>
               </div>
               {isEditing && (
                   <Badge variant="secondary" className="text-xs flex-shrink-0">Editing</Badge>

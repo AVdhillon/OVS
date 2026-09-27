@@ -36,6 +36,11 @@ import {
   ChevronDown,
   ChevronUp,
   ScrollText,
+  Building2,
+  FileText,
+  Gauge,
+  UserCog,
+  ExternalLink,
   X,
 } from "lucide-react";
 
@@ -77,6 +82,11 @@ const ACTION_LABEL: Record<AdminAction, string> = {
   ORG_ARCHIVED: "Org archived",
   ADMIN_INVITED: "Admin invited",
   ADMIN_DEACTIVATED: "Admin deactivated",
+  // EDIT: labels for the three member-limit-request actions — same
+  // "verb-first, plain English" convention as the org-request trio above.
+  MEMBER_LIMIT_INCREASE_APPROVED: "Limit increase approved",
+  MEMBER_LIMIT_INCREASE_REJECTED: "Limit increase rejected",
+  MEMBER_LIMIT_INCREASE_INFO_REQUESTED: "Limit info requested",
 };
 
 // Adverse/irreversible actions read amber-to-red; the two restorative ones
@@ -91,6 +101,11 @@ const ACTION_CLASS: Record<AdminAction, string> = {
   ORG_ARCHIVED: "bg-red-50 text-red-700 border-red-200",
   ADMIN_INVITED: "bg-sky-50 text-sky-700 border-sky-200",
   ADMIN_DEACTIVATED: "bg-red-50 text-red-700 border-red-200",
+  // EDIT: same colour role as their org-request counterparts above —
+  // approved is green, rejected is red, needs-info is amber.
+  MEMBER_LIMIT_INCREASE_APPROVED: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  MEMBER_LIMIT_INCREASE_REJECTED: "bg-red-50 text-red-700 border-red-200",
+  MEMBER_LIMIT_INCREASE_INFO_REQUESTED: "bg-amber-50 text-amber-700 border-amber-200",
 };
 
 const OPERATION_CLASS: Record<string, string> = {
@@ -108,6 +123,51 @@ function actionClass(action: string) {
     ACTION_CLASS[action as AdminAction] ??
     "bg-slate-100 text-slate-600 border-slate-200"
   );
+}
+
+// EDIT: the Target column used to show target_type verbatim
+// ("ORGANIZATION", "MEMBER_LIMIT_REQUEST", ...) next to a bare id — readable
+// enough once you know the schema, but not something an auditor should have
+// to decode. This gives each type a plain-English label + icon, and, where
+// there's an actual admin page for that kind of thing, turns the cell into
+// a link straight to it — same "the audit feed is a jumping-off point, not
+// a dead end" reasoning as the org-panel deep link this page already does
+// for a scoped view (see the ?target_type=ORGANIZATION&target_id=... link
+// used elsewhere on this page).
+const TARGET_TYPE_LABEL: Record<AdminTargetType, string> = {
+  ORG_REQUEST: "Request",
+  ORGANIZATION: "Organization",
+  SITE_ADMIN: "Admin",
+  MEMBER_LIMIT_REQUEST: "Limit request",
+};
+
+const TARGET_TYPE_ICON: Record<AdminTargetType, typeof Building2> = {
+  ORG_REQUEST: FileText,
+  ORGANIZATION: Building2,
+  SITE_ADMIN: UserCog,
+  MEMBER_LIMIT_REQUEST: Gauge,
+};
+
+function targetTypeLabel(targetType: string) {
+  return TARGET_TYPE_LABEL[targetType as AdminTargetType] ?? targetType;
+}
+
+// Only two target types have a real detail page to send someone to today
+// (SITE_ADMIN has no per-admin route — /admins is a list, not a
+// list+detail pair, see routes.tsx). Returns null rather than a guess, so
+// callers can fall back to a plain (non-link) rendering for anything with
+// nowhere to go.
+function targetHref(targetType: string, targetId: string): string | null {
+  switch (targetType as AdminTargetType) {
+    case "ORG_REQUEST":
+      return `/requests/${targetId}`;
+    case "ORGANIZATION":
+      return `/organizations/${targetId}`;
+    case "MEMBER_LIMIT_REQUEST":
+      return `/member-limit-requests/${targetId}`;
+    default:
+      return null;
+  }
 }
 
 function formatDateTime(iso: string | null) {
@@ -243,8 +303,31 @@ function AuditFeedRow({ entry }: { entry: AdminAuditLogEntry }) {
         </TableCell>
         <TableCell className="font-mono text-xs">{entry.admin_id}</TableCell>
         <TableCell className="text-xs">
-          <span className="text-muted-foreground">{entry.target_type}</span>{" "}
-          <span className="font-mono">{entry.target_id}</span>
+          {(() => {
+            const Icon = TARGET_TYPE_ICON[entry.target_type as AdminTargetType];
+            const href = targetHref(entry.target_type, entry.target_id);
+            const content = (
+              <span className="inline-flex items-center gap-1.5">
+                {Icon && <Icon className="size-3.5 text-muted-foreground" />}
+                <span className="text-muted-foreground">
+                  {targetTypeLabel(entry.target_type)}
+                </span>
+                <span className="font-mono">{entry.target_id}</span>
+              </span>
+            );
+            return href ? (
+              <Link
+                to={href}
+                onClick={(e) => e.stopPropagation()}
+                className="inline-flex items-center gap-1 hover:underline"
+              >
+                {content}
+                <ExternalLink className="size-3 text-muted-foreground" />
+              </Link>
+            ) : (
+              content
+            );
+          })()}
         </TableCell>
         <TableCell className="max-w-xs truncate text-sm">
           {entry.reason ?? "—"}
@@ -470,6 +553,12 @@ export function AdminAuditLogPage() {
                       "ORG_REQUEST",
                       "ORGANIZATION",
                       "SITE_ADMIN",
+                      // EDIT: this filter's own button group predates Phase
+                      // 7 the same way ACTION_LABEL/ACTION_CLASS did above —
+                      // chk_admin_audit_target_type already accepts
+                      // MEMBER_LIMIT_REQUEST, this group just never grew a
+                      // button for it.
+                      "MEMBER_LIMIT_REQUEST",
                     ] as AdminTargetType[]
                   ).map((t) => (
                     <Button
@@ -489,7 +578,9 @@ export function AdminAuditLogPage() {
                         ? "Requests"
                         : t === "ORGANIZATION"
                           ? "Organizations"
-                          : "Admins"}
+                          : t === "SITE_ADMIN"
+                            ? "Admins"
+                            : "Limit requests"}
                     </Button>
                   ))}
                 </div>

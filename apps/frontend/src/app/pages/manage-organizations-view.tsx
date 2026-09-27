@@ -3,6 +3,11 @@ import { api } from "../../lib/api";
 import type { MemberRole, OrgMemberWithRoles } from "../../lib/api";
 // EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.4): MemberLimitTab's own history type.
 import type { MemberLimitRequestRow } from "../../lib/api";
+// EDIT: brings in the requester's own org-request history so the "Request
+// Org" flow can pre-check eligibility (cooldown, an already-open request
+// for the same name) instead of only finding out at submit time — see
+// SubmitOrgRequestModal's own comments below.
+import type { OrgRequestMine } from "../../lib/api";
 import { useAppContext } from "../context/app-context";
 import type { OrgSummary, ScopeNode } from "../context/app-context";
 import { toast } from "sonner";
@@ -381,15 +386,69 @@ function ScopeTreeNode({
 // or an orgid to pick, until a request is approved), so the "Initial
 // Participants" table/CSV UI and the orgid-suggestion helper are gone with
 // them, not just hidden.
+// EDIT: mirrors org-requests.service.ts's own constants (SUBMIT_COOLDOWN_MS,
+// MEMBER_COUNT_RISK_THRESHOLD, FREE_EMAIL_DOMAINS) so this form can warn the
+// requester about the same things the backend already silently checks,
+// instead of only surfacing them as a 429/toast after the fact or as a flag
+// only the reviewing admin ever sees. These are UX nudges, not a security
+// boundary — the backend re-checks everything itself regardless of what
+// this form does or doesn't catch. Keep in sync with the backend file by
+// hand; there's no shared package these two projects both pull from.
+const SUBMIT_COOLDOWN_MS = 15 * 60 * 1000; // matches SUBMIT_COOLDOWN_MS
+const MEMBER_COUNT_RISK_THRESHOLD = 50; // matches MEMBER_COUNT_RISK_THRESHOLD
+const OPEN_ORG_REQUEST_STATUSES = new Set(["PENDING", "NEEDS_INFO"]);
+const FREE_EMAIL_DOMAINS = new Set([
+  "gmail.com",
+  "googlemail.com",
+  "yahoo.com",
+  "ymail.com",
+  "hotmail.com",
+  "outlook.com",
+  "live.com",
+  "msn.com",
+  "aol.com",
+  "icloud.com",
+  "me.com",
+  "protonmail.com",
+  "proton.me",
+  "mail.com",
+  "zoho.com",
+  "yandex.com",
+  "gmx.com",
+  "rediffmail.com",
+]);
+
+function isFreeEmailDomain(email: string): boolean {
+  const domain = email.split("@")[1]?.toLowerCase();
+  return !!domain && FREE_EMAIL_DOMAINS.has(domain);
+}
+
+function formatCooldownRemaining(msRemaining: number): string {
+  const minutes = Math.max(1, Math.ceil(msRemaining / 60000));
+  return minutes === 1 ? "1 minute" : `${minutes} minutes`;
+}
+
 function SubmitOrgRequestModal({
   open,
   onClose,
   onSuccess,
+  myRequests,
 }: {
   open: boolean;
   onClose: () => void;
   onSuccess: () => void;
+  // EDIT: the requester's own request history, passed down from
+  // ManageOrganizationsView (already fetched there for the cooldown check
+  // that gates the "Request Org" button itself) — reused here for the
+  // open-name duplicate warning below, so this one fetch covers both.
+  myRequests: OrgRequestMine[];
 }) {
+  // EDIT: a short explainer screen before the form itself — "intro" is
+  // shown first every time the dialog opens (reset in handleClose below),
+  // "form" is the existing fields. Reframes clicking "Request Org" from an
+  // instant form-fill into a deliberate two-step action without actually
+  // adding a field or a round trip.
+  const [step, setStep] = useState<"intro" | "form">("intro");
   const [orgName, setOrgName] = useState("");
   const [orgEmail, setOrgEmail] = useState("");
   const [expectedMemberCount, setExpectedMemberCount] = useState("");
@@ -403,8 +462,24 @@ function SubmitOrgRequestModal({
   const [submitting, setSubmitting] = useState(false);
 
   const isEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(orgEmail.trim());
+  const memberCountNum = Number(expectedMemberCount.trim());
+  const memberCountAboveThreshold =
+    expectedMemberCount.trim() !== "" &&
+    Number.isInteger(memberCountNum) &&
+    memberCountNum > MEMBER_COUNT_RISK_THRESHOLD;
+
+  // EDIT: mirrors org-requests.service.ts's own findOpenRequestByName() —
+  // same case-insensitive match against this requester's currently-open
+  // (PENDING/NEEDS_INFO) requests. Surfaced as the user types instead of
+  // only as a 409 after they've filled in the whole form.
+  const duplicateOpenRequest = myRequests.find(
+    (r) =>
+      OPEN_ORG_REQUEST_STATUSES.has(r.status) &&
+      r.org_name.trim().toLowerCase() === orgName.trim().toLowerCase(),
+  );
 
   const resetForm = () => {
+    setStep("intro");
     setOrgName("");
     setOrgEmail("");
     setExpectedMemberCount("");
@@ -445,6 +520,34 @@ function SubmitOrgRequestModal({
         return;
       }
     }
+    // EDIT: a superset of the backend's own member_count_risk_flag — that
+    // flag also requires the account to be under a week old, which this
+    // form has no way to know client-side (account age isn't part of the
+    // session/user object). Asking for justification any time the count is
+    // over the same threshold, account age aside, means we over-ask rather
+    // than under-ask — a large, well-justified request just types one
+    // sentence; the point is that a large *unexplained* one no longer
+    // slips through with nothing for an admin to go on.
+    if (
+      memberCount !== undefined &&
+      memberCount > MEMBER_COUNT_RISK_THRESHOLD &&
+      !justification.trim()
+    ) {
+      toast.error(
+        `A brief justification is needed for a request expecting more than ` +
+          `${MEMBER_COUNT_RISK_THRESHOLD} members — it gives the reviewing admin ` +
+          `something to go on.`,
+      );
+      return;
+    }
+    if (duplicateOpenRequest) {
+      toast.error(
+        `You already have an open request for "${duplicateOpenRequest.org_name}" ` +
+          `(reference ${duplicateOpenRequest.reference_code}). Check My Requests ` +
+          `instead of submitting it again.`,
+      );
+      return;
+    }
     setSubmitting(true);
     try {
       const result = await api.submitOrgRequest({
@@ -471,6 +574,29 @@ function SubmitOrgRequestModal({
   const handleSendOtp = async () => {
     if (!orgName.trim()) return toast.error("Organization name is required");
     if (!isEmailValid) return toast.error("Enter a valid organization email");
+    // EDIT: same two checks handleSubmit() runs, moved up here too — this
+    // path sends a verification email and only calls handleSubmit() once a
+    // code comes back, so without this a duplicate-name or missing-
+    // justification submission would waste an OTP round trip before
+    // failing at the very last step.
+    if (
+      Number.isInteger(memberCountNum) &&
+      memberCountNum > MEMBER_COUNT_RISK_THRESHOLD &&
+      !justification.trim()
+    ) {
+      return toast.error(
+        `A brief justification is needed for a request expecting more than ` +
+          `${MEMBER_COUNT_RISK_THRESHOLD} members — it gives the reviewing admin ` +
+          `something to go on.`,
+      );
+    }
+    if (duplicateOpenRequest) {
+      return toast.error(
+        `You already have an open request for "${duplicateOpenRequest.org_name}" ` +
+          `(reference ${duplicateOpenRequest.reference_code}). Check My Requests ` +
+          `instead of submitting it again.`,
+      );
+    }
 
     const email = orgEmail.trim();
 
@@ -513,102 +639,196 @@ function SubmitOrgRequestModal({
         }}
       >
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Request a New Organization</DialogTitle>
-            <DialogDescription>
-              A site admin reviews every request. You'll be notified once it's
-              approved, rejected, or sent back for more information.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-5 mt-2">
-            <div className="space-y-1.5">
-              <Label>
-                Organization Name <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                placeholder="e.g. Acme Corp"
-                value={orgName}
-                onChange={(e) => setOrgName(e.target.value)}
-                autoFocus
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>
-                Organization Email{" "}
-                <span className="text-muted-foreground font-normal">
-                  (optional, strengthens your request)
-                </span>
-              </Label>
-              <Input
-                type="email"
-                placeholder="e.g. contact@acme.com"
-                value={orgEmail}
-                onChange={(e) => setOrgEmail(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                If provided, you'll verify a code sent here before the request
-                can be submitted.
-              </p>
-            </div>
-            <div className="space-y-1.5">
-              <Label>
-                Expected Member Count{" "}
-                <span className="text-muted-foreground font-normal">
-                  (optional)
-                </span>
-              </Label>
-              <Input
-                type="number"
-                min={1}
-                placeholder="e.g. 50"
-                value={expectedMemberCount}
-                onChange={(e) => setExpectedMemberCount(e.target.value)}
-                className="max-w-xs"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>
-                Why does this organization need to exist?{" "}
-                <span className="text-muted-foreground font-normal">
-                  (optional)
-                </span>
-              </Label>
-              <Textarea
-                placeholder="A brief case for the reviewing admin…"
-                value={justification}
-                onChange={(e) => setJustification(e.target.value)}
-                rows={4}
-                className="text-sm"
-              />
-            </div>
-          </div>
-          <DialogFooter className="mt-6">
-            <Button
-              variant="outline"
-              onClick={handleClose}
-              disabled={submitting || sendingOtp}
-            >
-              Cancel
-            </Button>
-            {orgEmail.trim() ? (
-              <Button
-                onClick={handleSendOtp}
-                disabled={sendingOtp || submitting}
-              >
-                {sendingOtp && (
-                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+          {step === "intro" ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>Request a New Organization</DialogTitle>
+                <DialogDescription>
+                  A site admin reviews every request — here's what makes that
+                  review go smoothly.
+                </DialogDescription>
+              </DialogHeader>
+              <ul className="mt-2 space-y-3 text-sm">
+                <li className="flex gap-2.5">
+                  <span className="text-muted-foreground">•</span>
+                  <span>
+                    <span className="font-medium">An organization name.</span>{" "}
+                    The only required field.
+                  </span>
+                </li>
+                <li className="flex gap-2.5">
+                  <span className="text-muted-foreground">•</span>
+                  <span>
+                    <span className="font-medium">
+                      Ideally, an org email you can verify.
+                    </span>{" "}
+                    Using your organization's own domain rather than a
+                    personal one usually moves review along faster.
+                  </span>
+                </li>
+                <li className="flex gap-2.5">
+                  <span className="text-muted-foreground">•</span>
+                  <span>
+                    <span className="font-medium">A short reason.</span> Why
+                    this organization needs to exist — required for larger
+                    expected member counts, optional otherwise.
+                  </span>
+                </li>
+              </ul>
+              <DialogFooter className="mt-6">
+                <Button variant="outline" onClick={handleClose}>
+                  Cancel
+                </Button>
+                <Button onClick={() => setStep("form")}>Continue</Button>
+              </DialogFooter>
+            </>
+          ) : (
+            <>
+              <DialogHeader>
+                <DialogTitle>Request a New Organization</DialogTitle>
+                <DialogDescription>
+                  A site admin reviews every request. You'll be notified once
+                  it's approved, rejected, or sent back for more information.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-5 mt-2">
+                <div className="space-y-1.5">
+                  <Label>
+                    Organization Name{" "}
+                    <span className="text-destructive">*</span>
+                  </Label>
+                  <Input
+                    placeholder="e.g. Acme Corp"
+                    value={orgName}
+                    onChange={(e) => setOrgName(e.target.value)}
+                    autoFocus
+                  />
+                  {/* EDIT: mirrors findOpenRequestByName() server-side — same
+                      case-insensitive match against this requester's own
+                      currently-open requests, shown as they type instead of
+                      only as a 409 after they submit. */}
+                  {duplicateOpenRequest && (
+                    <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5">
+                      You already have an open request for this name
+                      (reference {duplicateOpenRequest.reference_code},{" "}
+                      {duplicateOpenRequest.status === "PENDING"
+                        ? "pending review"
+                        : "needs info"}
+                      ). Check{" "}
+                      <span className="font-medium">My Requests</span> instead
+                      of submitting again.
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-1.5">
+                  <Label>
+                    Organization Email{" "}
+                    <span className="text-muted-foreground font-normal">
+                      (optional, strengthens your request)
+                    </span>
+                  </Label>
+                  <Input
+                    type="email"
+                    placeholder="e.g. contact@acme.com"
+                    value={orgEmail}
+                    onChange={(e) => setOrgEmail(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    If provided, you'll verify a code sent here before the
+                    request can be submitted.
+                  </p>
+                  {/* EDIT: mirrors isFreeEmailDomain() server-side — same
+                      list, surfaced as a tip instead of only as a flag the
+                      requester never sees. */}
+                  {isEmailValid && isFreeEmailDomain(orgEmail.trim()) && (
+                    <p className="text-xs text-amber-700">
+                      Tip: a personal/free email address works, but your
+                      organization's own domain usually speeds up review.
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-1.5">
+                  <Label>
+                    Expected Member Count{" "}
+                    <span className="text-muted-foreground font-normal">
+                      (optional)
+                    </span>
+                  </Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    placeholder="e.g. 50"
+                    value={expectedMemberCount}
+                    onChange={(e) => setExpectedMemberCount(e.target.value)}
+                    className="max-w-xs"
+                  />
+                  {/* EDIT: mirrors member_count_risk_flag's own threshold
+                      (MEMBER_COUNT_RISK_THRESHOLD) — the backend only fires
+                      that flag in combination with a new account, which this
+                      form can't check, so this tip fires on count alone. */}
+                  {memberCountAboveThreshold && (
+                    <p className="text-xs text-amber-700">
+                      Larger expected member counts get a closer look — add a
+                      brief reason below so the reviewing admin has context.
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-1.5">
+                  <Label>
+                    Why does this organization need to exist?{" "}
+                    <span
+                      className={
+                        memberCountAboveThreshold
+                          ? "text-destructive font-normal"
+                          : "text-muted-foreground font-normal"
+                      }
+                    >
+                      {memberCountAboveThreshold
+                        ? `(required for over ${MEMBER_COUNT_RISK_THRESHOLD} expected members)`
+                        : "(optional)"}
+                    </span>
+                  </Label>
+                  <Textarea
+                    placeholder="A brief case for the reviewing admin…"
+                    value={justification}
+                    onChange={(e) => setJustification(e.target.value)}
+                    rows={4}
+                    className="text-sm"
+                  />
+                </div>
+              </div>
+              <DialogFooter className="mt-6">
+                <Button
+                  variant="outline"
+                  onClick={() => setStep("intro")}
+                  disabled={submitting || sendingOtp}
+                >
+                  Back
+                </Button>
+                {orgEmail.trim() ? (
+                  <Button
+                    onClick={handleSendOtp}
+                    disabled={sendingOtp || submitting || !!duplicateOpenRequest}
+                  >
+                    {sendingOtp && (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    )}
+                    {sendingOtp ? "Sending code…" : "Send Verification Code"}
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={() => handleSubmit()}
+                    disabled={submitting || !!duplicateOpenRequest}
+                  >
+                    {submitting && (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    )}
+                    {submitting ? "Submitting…" : "Submit Request"}
+                  </Button>
                 )}
-                {sendingOtp ? "Sending code…" : "Send Verification Code"}
-              </Button>
-            ) : (
-              <Button onClick={() => handleSubmit()} disabled={submitting}>
-                {submitting && (
-                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                )}
-                {submitting ? "Submitting…" : "Submit Request"}
-              </Button>
-            )}
-          </DialogFooter>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
 
@@ -2943,6 +3163,13 @@ function MemberLimitTab({ org }: { org: OrgSummary }) {
   const [justification, setJustification] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  // EDIT: non-null while the dialog is editing an existing NEEDS_INFO row
+  // rather than starting a fresh request — set by openEditDialog(), cleared
+  // by openDialog(). Drives both the dialog's copy and which api call
+  // handleSubmit() makes.
+  const [editingRequestId, setEditingRequestId] = useState<string | null>(
+    null,
+  );
 
   const fetchHistory = useCallback(async () => {
     setLoading(true);
@@ -2974,8 +3201,20 @@ function MemberLimitTab({ org }: { org: OrgSummary }) {
     : 0;
 
   const openDialog = () => {
+    setEditingRequestId(null);
     setRequestedLimit(String(org.member_limit + 1));
     setJustification("");
+    setFormError(null);
+    setDialogOpen(true);
+  };
+
+  // EDIT: opens the same dialog pre-filled from an existing NEEDS_INFO row
+  // instead of the org's current limit — handleSubmit() below routes to
+  // resubmitLimitRequest() whenever editingRequestId is set.
+  const openEditDialog = (r: MemberLimitRequestRow) => {
+    setEditingRequestId(r.request_id);
+    setRequestedLimit(String(r.requested_limit));
+    setJustification(r.justification ?? "");
     setFormError(null);
     setDialogOpen(true);
   };
@@ -2996,10 +3235,20 @@ function MemberLimitTab({ org }: { org: OrgSummary }) {
     setSubmitting(true);
     setFormError(null);
     try {
-      const res = await api.submitLimitRequest(org.orgid, org.uid, {
-        requested_limit: limit,
-        justification: justification.trim() || undefined,
-      });
+      const res = editingRequestId
+        ? await api.resubmitLimitRequest(
+            org.orgid,
+            org.uid,
+            editingRequestId,
+            {
+              requested_limit: limit,
+              justification: justification.trim() || undefined,
+            },
+          )
+        : await api.submitLimitRequest(org.orgid, org.uid, {
+            requested_limit: limit,
+            justification: justification.trim() || undefined,
+          });
       toast.success(res.message);
       setDialogOpen(false);
       await fetchHistory();
@@ -3021,13 +3270,23 @@ function MemberLimitTab({ org }: { org: OrgSummary }) {
             </CardDescription>
           </div>
           {/* One open request per org at a time (unique_open_limit_request,
-              7.1) — disabling this while one is open avoids a guaranteed
-              409 round trip, same "friendly guard in front of a DB-level
-              backstop" reasoning the backend itself uses. */}
-          <Button size="sm" onClick={openDialog} disabled={!!openRequest}>
-            <Plus className="mr-1.5 size-4" />
-            Request increase
-          </Button>
+              7.1) — disabling "Request increase" while one is PENDING
+              avoids a guaranteed 409 round trip, same "friendly guard in
+              front of a DB-level backstop" reasoning the backend itself
+              uses. EDIT: NEEDS_INFO isn't a dead end the way PENDING is —
+              the org can edit and resend that exact row (resubmit()), so it
+              gets its own action instead of just disabling this button. */}
+          {openRequest?.status === "NEEDS_INFO" ? (
+            <Button size="sm" onClick={() => openEditDialog(openRequest)}>
+              <Pencil className="mr-1.5 size-4" />
+              Edit &amp; resend
+            </Button>
+          ) : (
+            <Button size="sm" onClick={openDialog} disabled={!!openRequest}>
+              <Plus className="mr-1.5 size-4" />
+              Request increase
+            </Button>
+          )}
         </CardHeader>
         <CardContent className="space-y-4">
           <Progress value={usagePct} />
@@ -3099,10 +3358,15 @@ function MemberLimitTab({ org }: { org: OrgSummary }) {
       <Dialog open={dialogOpen} onOpenChange={(open) => !open && closeDialog()}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Request a member limit increase</DialogTitle>
+            <DialogTitle>
+              {editingRequestId
+                ? "Edit and resend your request"
+                : "Request a member limit increase"}
+            </DialogTitle>
             <DialogDescription>
-              A site admin will review this request. You'll be notified once
-              it's decided.
+              {editingRequestId
+                ? "Update the requested limit and/or your justification, then send it back for another look."
+                : "A site admin will review this request. You'll be notified once it's decided."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -3142,7 +3406,11 @@ function MemberLimitTab({ org }: { org: OrgSummary }) {
               Cancel
             </Button>
             <Button onClick={handleSubmit} disabled={submitting}>
-              {submitting ? "Submitting..." : "Submit request"}
+              {submitting
+                ? "Submitting..."
+                : editingRequestId
+                  ? "Resend request"
+                  : "Submit request"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -3842,6 +4110,12 @@ export function ManageOrganizationsView() {
   const [loading, setLoading] = useState(true);
   const [selectedOrg, setSelectedOrg] = useState<OrgSummary | null>(null);
   const [registerOpen, setRegisterOpen] = useState(false);
+  // EDIT: this requester's own org-request history — fetched only for
+  // UNIFIED sessions (the only session type that can ever submit one), so
+  // an ORG session doesn't pay for a fetch it has no use for. Drives the
+  // "Request Org" button's own cooldown pre-check below, and is passed into
+  // SubmitOrgRequestModal for its open-name duplicate check.
+  const [myRequests, setMyRequests] = useState<OrgRequestMine[]>([]);
 
   const isUnified = session?.type === "UNIFIED";
   // EDIT (Phase 5 — platform maturity, subphase 5.4): removed `isGov` and
@@ -3883,6 +4157,41 @@ export function ManageOrganizationsView() {
     fetchOrgs();
   }, []);
 
+  // EDIT: separate effect/fetch from fetchOrgs() above — different
+  // endpoint, different session-type gate (isUnified only), and refetched
+  // on its own after a successful submission (see fetchMyRequests passed as
+  // part of onSuccess below) without needing to also redo the orgs fetch.
+  const fetchMyRequests = async () => {
+    if (!isUnified) return;
+    try {
+      setMyRequests(await api.listMyOrgRequests());
+    } catch {
+      // Non-critical: worst case the cooldown/duplicate pre-checks below
+      // just don't fire, and the backend still enforces both for real at
+      // submit time. Not worth surfacing a toast for a background fetch
+      // that only feeds a UX nicety.
+    }
+  };
+
+  useEffect(() => {
+    fetchMyRequests();
+  }, [isUnified]);
+
+  // EDIT: mirrors org-requests.service.ts's own cooldown check
+  // (SUBMIT_COOLDOWN_MS from this file's own constants above) — same "look
+  // at the single most recent row" shape, since listMyOrgRequests() already
+  // comes back ordered newest-first.
+  const mostRecentRequest = myRequests[0];
+  const cooldownUntil = mostRecentRequest
+    ? new Date(mostRecentRequest.created_at).getTime() + SUBMIT_COOLDOWN_MS
+    : 0;
+  const cooldownRemainingMs = cooldownUntil - Date.now();
+  const isCoolingDown = cooldownRemainingMs > 0;
+
+  const requestOrgLabel = isCoolingDown
+    ? `Available in ${formatCooldownRemaining(cooldownRemainingMs)}`
+    : "Request Org";
+
   return (
     <div className="max-w-5xl mx-auto">
       <div className="mb-6 flex items-start justify-between gap-4">
@@ -3897,11 +4206,27 @@ export function ManageOrganizationsView() {
           </p>
         </div>
         {isUnified && (
+          // EDIT: demoted from a filled primary button to outline — this
+          // one is shown on every visit regardless of whether the user
+          // already organizes several orgs, so it shouldn't carry the same
+          // visual weight as a true empty-state CTA (see the "Request your
+          // first organization" button below, which stays primary because
+          // it only appears when there's genuinely nothing else to do on
+          // this page). Also disabled with a countdown label during the
+          // backend's own submission cooldown, instead of only failing
+          // after the user fills out the whole form.
           <Button
+            variant="outline"
             onClick={() => setRegisterOpen(true)}
+            disabled={isCoolingDown}
             className="flex-shrink-0 gap-1.5"
+            title={
+              isCoolingDown
+                ? "You can submit another organization request once the cooldown ends"
+                : undefined
+            }
           >
-            <Plus className="w-4 h-4" /> Request Org
+            <Plus className="w-4 h-4" /> {requestOrgLabel}
           </Button>
         )}
       </div>
@@ -3918,8 +4243,13 @@ export function ManageOrganizationsView() {
                 <p className="text-muted-foreground">
                   You don't have any organizations yet.
                 </p>
-                <Button onClick={() => setRegisterOpen(true)}>
-                  Request your first organization
+                <Button
+                  onClick={() => setRegisterOpen(true)}
+                  disabled={isCoolingDown}
+                >
+                  {isCoolingDown
+                    ? `Available in ${formatCooldownRemaining(cooldownRemainingMs)}`
+                    : "Request your first organization"}
                 </Button>
               </>
             ) : (
@@ -3984,7 +4314,11 @@ export function ManageOrganizationsView() {
         <SubmitOrgRequestModal
           open={registerOpen}
           onClose={() => setRegisterOpen(false)}
-          onSuccess={fetchOrgs}
+          onSuccess={() => {
+            fetchOrgs();
+            fetchMyRequests();
+          }}
+          myRequests={myRequests}
         />
       )}
     </div>

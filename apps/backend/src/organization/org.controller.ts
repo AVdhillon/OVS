@@ -187,10 +187,40 @@ export class OrgController {
   /**
    * GET /org/mine
    * Returns all orgs where the caller has an organizer role.
+   *
+   * BUGFIX: was unconditionally BigInt(user.pid!) regardless of session
+   * type. For an ORG session, org_members.pid can be NULL (a member never
+   * linked to a unified account is still valid — chk_member_identity only
+   * requires pid OR mobile OR email), and BigInt(null) throws. An ORG
+   * session doesn't need the pid-based lookup at all — it already knows
+   * its own (orgid, uid) from the JWT — so it's routed to
+   * getMyOrgForOrgSession() instead, which resolves organizer status
+   * directly from that instead of via pid.
    */
   @Get('mine')
   getMyOrgs(@CurrentUser() user: JwtUser) {
+    if (user.type === 'ORG') {
+      return this.orgService.getMyOrgForOrgSession(user.orgid!, user.uid!);
+    }
     return this.orgService.getMyOrgs(BigInt(user.pid!));
+  }
+
+  /**
+   * GET /org/self
+   * EDIT (Account tab, ORG sessions): the frontend's Account page shows a
+   * plain ORG member their own uid/orgid/org name/contact. /org/mine can't
+   * be reused for this — it's organizer-gated (getMyOrgForOrgSession
+   * returns [] for a non-organizer) — so this is a deliberately
+   * organizer-free sibling: no RequireOrganizer/RolesGuard, just "is this
+   * an active member of the org their own session says they're in".
+   * UNIFIED/SITEADMIN sessions have no (orgid, uid) to resolve here.
+   */
+  @Get('self')
+  getOrgSelfInfo(@CurrentUser() user: JwtUser) {
+    if (user.type !== 'ORG') {
+      throw new BadRequestException('Only available for ORG sessions');
+    }
+    return this.orgService.getOrgSelfInfo(user.orgid!, user.uid!);
   }
 
   /**
@@ -243,6 +273,37 @@ export class OrgController {
   }
 
   /**
+   * PATCH /org/:orgid/member-limit-requests/:requestId
+   * EDIT: edits and resubmits a request that's sitting in NEEDS_INFO — see
+   * OrgLimitRequestsService.resubmit(). Same organizer-only gating as
+   * submitLimitRequest() above. resubmit() itself is the one that enforces
+   * "only NEEDS_INFO, only your own request" — this route is just the
+   * plumbing, same "friendly guard here, real check in the service" split
+   * as every other route on this controller.
+   */
+  @Patch(':orgid/member-limit-requests/:requestId')
+  @UseGuards(RolesGuard)
+  @RequireOrganizer('orgid')
+  resubmitLimitRequest(
+    @Param('orgid') orgid: string,
+    @Param('requestId') requestId: string,
+    @Body() dto: SubmitLimitRequestDto,
+    @Req() req: any,
+  ) {
+    if (!/^\d+$/.test(requestId)) {
+      throw new BadRequestException(`Invalid request id: ${requestId}`);
+    }
+    const callerUid = req.orgContext.uid;
+    return this.orgLimitRequestsService.resubmit(
+      orgid,
+      callerUid,
+      BigInt(requestId),
+      dto.requested_limit,
+      dto.justification,
+    );
+  }
+
+  /**
    * GET /org/:orgid/member-limit-requests
    * EDIT (Phase 7 — subphase 7.3): this org's own member-limit-request
    * history, newest first — see OrgLimitRequestsService.listForOrg(). Gated
@@ -265,11 +326,19 @@ export class OrgController {
    * GET /org/:orgid/members
    * Organizer-only. Lists members within caller's scope.
    */
+  // BUGFIX: was unconditionally BigInt(user.pid!), same failure mode already
+  // documented on getMyOrgs() above. org_members.pid is legitimately NULL for
+  // a member added directly by an org owner who was never linked to a
+  // unified account (chk_member_identity only requires pid OR mobile OR
+  // email), so an ORG session for such a member had user.pid === null and
+  // BigInt(null) threw "Cannot convert null to a BigInt" — a 500 on every
+  // /members request from that member. OrgService.getMembers() never
+  // actually used the pid it was passed (scoping is done via callerUid), so
+  // the parameter is dropped here rather than null-guarded.
   @Get(':orgid/members')
   @UseGuards(RolesGuard)
   @RequireOrganizer('orgid')
   getMembers(
-    @CurrentUser() user: JwtUser,
     @Param('orgid') orgid: string,
     @Req() req: any,
     @Query('role') role?: string,
@@ -277,7 +346,7 @@ export class OrgController {
     @Query('search') search?: string,
   ) {
     const callerUid = req.orgContext.uid;
-    return this.orgService.getMembers(BigInt(user.pid!), orgid, callerUid, {
+    return this.orgService.getMembers(orgid, callerUid, {
       role,
       scope_id: scopeId ? Number(scopeId) : undefined,
       search,
@@ -287,29 +356,33 @@ export class OrgController {
   /**
    * POST /org/:orgid/members
    * Organizer-only. Add members via table or CSV.
+   *
+   * BUGFIX: same crash-prone BigInt(user.pid!) as getMembers() above, and
+   * same fix — OrgService.addMembers()'s `pid` param is never read in the
+   * method body, so it's dropped rather than null-guarded.
    */
   @Post(':orgid/members')
   @UseGuards(RolesGuard)
   @RequireOrganizer('orgid')
   addMembers(
-    @CurrentUser() user: JwtUser,
     @Param('orgid') orgid: string,
     @Body() dto: AddMembersDto,
     @Req() req: any,
   ) {
     const callerUid = req.orgContext.uid;
-    return this.orgService.addMembers(BigInt(user.pid!), orgid, callerUid, dto);
+    return this.orgService.addMembers(orgid, callerUid, dto);
   }
 
   /**
    * PATCH /org/:orgid/members/:uid
    * Organizer-only. Update role or scope of a member.
+   *
+   * BUGFIX: same unused/crash-prone pid as addMembers() above.
    */
   @Patch(':orgid/members/:targetUid')
   @UseGuards(RolesGuard)
   @RequireOrganizer('orgid')
   updateMember(
-    @CurrentUser() user: JwtUser,
     @Param('orgid') orgid: string,
     @Param('targetUid') targetUid: string,
     @Body() dto: UpdateMemberDto,
@@ -318,7 +391,6 @@ export class OrgController {
     const callerUid = req.orgContext.uid;
 
     return this.orgService.updateMember(
-      BigInt(user.pid!),
       orgid,
       callerUid,
       targetUid.toUpperCase(),
@@ -329,19 +401,19 @@ export class OrgController {
   /**
    * DELETE /org/:orgid/members/:uid
    * Organizer-only. Soft-delete a member.
+   *
+   * BUGFIX: same unused/crash-prone pid as addMembers() above.
    */
   @Delete(':orgid/members/:uid')
   @UseGuards(RolesGuard)
   @RequireOrganizer('orgid')
   removeMember(
-    @CurrentUser() user: JwtUser,
     @Param('orgid') orgid: string,
     @Param('uid') targetUid: string,
     @Req() req: any,
   ) {
     const callerUid = req.orgContext.uid;
     return this.orgService.removeMember(
-      BigInt(user.pid!),
       orgid,
       callerUid,
       targetUid.toUpperCase(),
@@ -350,12 +422,13 @@ export class OrgController {
   /*
    * POST /org/:orgid/members/:targetUid/roles
    * Add a new scope assignment to an existing member.
+   *
+   * BUGFIX: same unused/crash-prone pid as addMembers() above.
    */
   @Post(':orgid/members/:targetUid/roles')
   @UseGuards(RolesGuard)
   @RequireOrganizer('orgid')
   addMemberRole(
-    @CurrentUser() user: JwtUser,
     @Param('orgid') orgid: string,
     @Param('targetUid') targetUid: string,
     @Body() dto: AddMemberRoleDto,
@@ -363,7 +436,6 @@ export class OrgController {
   ) {
     const callerUid = req.orgContext.uid;
     return this.orgService.addMemberRole(
-      BigInt(user.pid!),
       orgid,
       callerUid,
       targetUid.toUpperCase(),
@@ -375,12 +447,13 @@ export class OrgController {
    * DELETE /org/:orgid/members/:targetUid/roles/:scopeId
    * Remove one scope assignment from a member.
    * If it is their last assignment, org_members is soft-deleted too.
+   *
+   * BUGFIX: same unused/crash-prone pid as addMembers() above.
    */
   @Delete(':orgid/members/:targetUid/roles/:scopeId')
   @UseGuards(RolesGuard)
   @RequireOrganizer('orgid')
   removeMemberRole(
-    @CurrentUser() user: JwtUser,
     @Param('orgid') orgid: string,
     @Param('targetUid') targetUid: string,
     @Param('scopeId', ParseIntPipe) scopeId: number,
@@ -388,7 +461,6 @@ export class OrgController {
   ) {
     const callerUid = req.orgContext.uid;
     return this.orgService.removeMemberRole(
-      BigInt(user.pid!),
       orgid,
       callerUid,
       targetUid.toUpperCase(),
@@ -401,12 +473,13 @@ export class OrgController {
    * Atomically move a member's scope assignment from one scope to another.
    * NOTE: this route must be declared BEFORE :scopeId routes to avoid NestJS
    * routing the literal string "move" as a ParseIntPipe param.
+   *
+   * BUGFIX: same unused/crash-prone pid as addMembers() above.
    */
   @Post(':orgid/members/:targetUid/roles/move')
   @UseGuards(RolesGuard)
   @RequireOrganizer('orgid')
   moveMemberRole(
-    @CurrentUser() user: JwtUser,
     @Param('orgid') orgid: string,
     @Param('targetUid') targetUid: string,
     @Body() dto: MoveMemberRoleDto,
@@ -414,7 +487,6 @@ export class OrgController {
   ) {
     const callerUid = req.orgContext.uid;
     return this.orgService.moveMemberRole(
-      BigInt(user.pid!),
       orgid,
       callerUid,
       targetUid.toUpperCase(),

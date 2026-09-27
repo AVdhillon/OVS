@@ -1,7 +1,8 @@
 import { Outlet, useNavigate, useLocation } from 'react-router';
 import { useAppContext } from '../context/app-context';
 import type { SessionType } from '../context/app-context';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import { api } from '../../lib/api';
 import {
   Vote,
   Calendar,
@@ -33,30 +34,51 @@ import { toast } from 'sonner';
 
 // ─── Explicit nav item type ───────────────────────────────────────────────────
 
-// EDIT (Phase 1 — auth model consolidation, subphase 1.8): dropped the
-// `hiddenFor` mechanism — it existed solely to hide organizer-only items
-// from GOV sessions, which no longer exist. UNIFIED and ORG (the only
-// session types this app's own login ever produces — see app-context.tsx's
-// SessionType note) were always shown these items regardless, so nothing
-// is hidden now and there's no remaining case for a hiddenFor list to gate.
+// EDIT (tenant portal intuitiveness, item 1): re-introduces a per-item
+// session-type gate — this time driven by what each destination page
+// actually supports, not the old GOV-era `hiddenFor` mechanism. Several
+// items already render an in-page "not available for this session" notice
+// for ORG sessions (My Requests, Identity Wallet — both UNIFIED-only), so
+// linking to them from the nav for an ORG session was always a dead end
+// the user only discovered after clicking through. `sessionTypes` lets the
+// sidebar filter those out up front instead. SITEADMIN is included
+// defensively on every item that both UNIFIED and ORG support — this
+// dashboard isn't meant to be reached by a SITEADMIN session at all (see
+// manage-organizations-view.tsx / manage-events-view.tsx), so there's no
+// real case to design for there.
 interface NavItemConfig {
   path: string;
   label: string;
   icon: React.ElementType;
+  sessionTypes: SessionType[];
+  // EDIT (Manage Events + Organizations gate, ORG sessions): true for an
+  // item that an ORG session should only see if the member holds an
+  // organizer role somewhere in the org — resolved once via GET /org/mine
+  // below (organizerChecked/orgs) and applied generically in
+  // visibleNavItems, rather than re-deriving per item. No effect on
+  // UNIFIED/SITEADMIN sessions.
+  organizerOnly?: boolean;
 }
 
 const NAV_ITEMS: NavItemConfig[] = [
-  { path: '/dashboard/events',          label: 'Events',           icon: Vote     },
-  { path: '/dashboard/manage-events',   label: 'Manage Events',    icon: Calendar },
-  { path: '/dashboard/organizations',   label: 'Organizations',    icon: Building2 },
+  { path: '/dashboard/events',          label: 'Events',           icon: Vote,          sessionTypes: ['UNIFIED', 'ORG'] },
+  { path: '/dashboard/manage-events',   label: 'Manage Events',    icon: Calendar,      sessionTypes: ['UNIFIED', 'ORG'], organizerOnly: true },
+  // EDIT: for an ORG session this tab is now organizer-gated rather than
+  // dropped outright — an organizer still needs it to manage members/
+  // scopes within their role scope (manage-organizations-view.tsx already
+  // scopes everything it shows/does to the caller's own organizer scopes
+  // via the backend, e.g. getCallerOrganizerScopes/assertOrganizerAccess).
+  // A plain, non-organizer ORG member has nothing to do here — for them
+  // org identity lives in Account and events in the Events/Manage Events
+  // tabs — so the tab stays hidden in that case, same as before.
+  { path: '/dashboard/organizations',   label: 'Organizations',    icon: Building2,     sessionTypes: ['UNIFIED', 'ORG'], organizerOnly: true },
   // EDIT (Phase 4 — cutover, subphase 4.7): tracking counterpart to the
-  // Organizations page's "Request Org" flow (4.6) — not gated out of
-  // NAV_ITEMS for non-UNIFIED sessions, same as every other item here since
-  // 1.8; the page itself shows a notice instead (mirrors Identity Wallet's
-  // own UNIFIED-only gate one row up).
-  { path: '/dashboard/my-requests',     label: 'My Requests',      icon: ClipboardList },
-  { path: '/dashboard/identity-wallet', label: 'Identity Wallet',  icon: Wallet   },
-  { path: '/dashboard/account',         label: 'Account',          icon: Settings },
+  // Organizations page's "Request Org" flow (4.6). my-org-requests-view.tsx
+  // shows a notice for any non-UNIFIED session, so this is UNIFIED-only —
+  // mirrors Identity Wallet's own UNIFIED-only gate one row down.
+  { path: '/dashboard/my-requests',     label: 'My Requests',      icon: ClipboardList, sessionTypes: ['UNIFIED'] },
+  { path: '/dashboard/identity-wallet', label: 'Identity Wallet',  icon: Wallet,        sessionTypes: ['UNIFIED'] },
+  { path: '/dashboard/account',         label: 'Account',          icon: Settings,      sessionTypes: ['UNIFIED', 'ORG'] },
 ];
 
 // ─── Session type badge ───────────────────────────────────────────────────────
@@ -185,16 +207,88 @@ function Sidebar({ collapsed, showToggle, onToggle, onNavigate, isActive, navIte
 export function DashboardLayout() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, session, logout } = useAppContext();
+  const { user, session, logout, orgs, setOrgs } = useAppContext();
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
+  // EDIT (Manage Events gate, ORG sessions): a plain ORG member (no
+  // organizer role in any scope of this org) has no use for Manage Events
+  // — every action on that page requires being an organizer somewhere.
+  // GET /org/mine already resolves exactly this for an ORG session
+  // (org.service.ts::getMyOrgForOrgSession returns [] when the caller
+  // holds no organizer role anywhere in the org, [org] otherwise), so
+  // that's reused here rather than adding a second way to ask the same
+  // question. Populating it into the shared context also means
+  // manage-events-view.tsx's own `if (orgs.length === 0) loadOrgs()` on
+  // mount is a no-op once this has already resolved.
+  //
+  // `organizerChecked` starts false and is only ever flipped to true on a
+  // *successful* resolution — a failed fetch leaves it false so a
+  // transient network error hides nothing (see the NAV_ITEMS filter
+  // below, which shows Manage Events until this is known either way).
+  const [organizerChecked, setOrganizerChecked] = useState(false);
+
+  useEffect(() => {
+    if (session?.type !== 'ORG') return;
+    let cancelled = false;
+
+    api
+      .getMyOrgs()
+      .then((data) => {
+        if (cancelled) return;
+        setOrgs(data);
+        setOrganizerChecked(true);
+      })
+      .catch(() => {
+        // leave organizerChecked=false — see comment above
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.type, session?.orgid, session?.uid]);
+
   // FIX 6: Memoize derived values that depend on stable inputs so they are
   //         not recomputed on every render caused by unrelated state changes.
+  // NOTE: deliberately looked up against the *unfiltered* NAV_ITEMS — a
+  // direct URL visit to a page that's been filtered out of the sidebar for
+  // this session type should still show a correct breadcrumb, not fall
+  // back to "Dashboard".
   const currentNav = useMemo(
       () => NAV_ITEMS.find((n) => n.path === location.pathname),
       [location.pathname],
+  );
+
+  // EDIT (tenant portal intuitiveness, item 1): the sidebar's actual item
+  // list, filtered by session type. While the session hasn't resolved yet
+  // (`!session?.type`, during initial load) show everything rather than
+  // nothing, so there's no flash of an empty sidebar before it loads.
+  //
+  // EDIT (Manage Events + Organizations gate, ORG sessions): a second,
+  // `organizerOnly`-driven filter layered on top of the session-type
+  // filter — applies the same organizer check generically to every item
+  // marked organizerOnly (Manage Events, Organizations) instead of
+  // special-casing one path. Same "show rather than hide while unresolved"
+  // reasoning as the session-type filter above: only hide once
+  // organizerChecked is true and the resolved org list came back empty.
+  const visibleNavItems = useMemo(
+      () =>
+          NAV_ITEMS.filter((n) => {
+            if (session?.type && !n.sessionTypes.includes(session.type as SessionType)) {
+              return false;
+            }
+            if (
+                n.organizerOnly &&
+                session?.type === 'ORG' &&
+                organizerChecked &&
+                orgs.length === 0
+            ) {
+              return false;
+            }
+            return true;
+          }),
+      [session?.type, organizerChecked, orgs.length],
   );
 
   const userInitials = useMemo(
@@ -267,15 +361,18 @@ export function DashboardLayout() {
             </div>
 
             {/* Session badge */}
+            {/* EDIT (tenant portal intuitiveness, item 3): dropped the inline
+                UID — it was always visible in the sticky header on every page
+                for any ORG session, pure decoration for a plain voter. Moved
+                into the user-menu dropdown below (parallel to the existing
+                UNIFIED-only PID row), which the user already has to opt into
+                opening. */}
             {sessionInfo && (
                 <Badge
                     variant="outline"
                     className={`hidden sm:flex flex-shrink-0 text-xs px-2.5 py-0.5 ${sessionInfo.className}`}
                 >
                   {sessionInfo.label}
-                  {session?.type === 'ORG' && session.uid && (
-                      <span className="ml-1.5 font-mono opacity-75">{session.uid}</span>
-                  )}
                 </Badge>
             )}
 
@@ -310,9 +407,18 @@ export function DashboardLayout() {
                     {user?.mobile && !user?.email && (
                         <p className="text-xs text-muted-foreground">{user.mobile}</p>
                     )}
-                    {user?.pid && (
+                    {/* EDIT: PID row removed — nothing in the app ever asks
+                        the user to know or quote back their PID (org
+                        linking uses orgid+UID, org requests use
+                        reference_code, and there's no support/contact flow
+                        that references it), so it was pure internal-ID
+                        clutter with no user-facing purpose. */}
+                    {/* EDIT (tenant portal intuitiveness, item 3): parallel
+                        row for ORG sessions — the UID this now replaces used
+                        to live in the always-visible top-bar badge. */}
+                    {session?.type === 'ORG' && session.uid && (
                         <p className="text-xs font-mono text-muted-foreground">
-                          PID: {user.pid}
+                          UID: {session.uid}
                         </p>
                     )}
                   </div>
@@ -361,7 +467,7 @@ export function DashboardLayout() {
                       onToggle={() => setSidebarCollapsed((c) => !c)}
                       onNavigate={handleSidebarNavigate}
                       isActive={isActive}
-                      navItems={NAV_ITEMS}
+                      navItems={visibleNavItems}
                   />
                 </aside>
               </div>
@@ -380,7 +486,7 @@ export function DashboardLayout() {
                 onToggle={() => setSidebarCollapsed((c) => !c)}
                 onNavigate={(path) => navigate(path)}
                 isActive={isActive}
-                navItems={NAV_ITEMS}
+                navItems={visibleNavItems}
             />
           </aside>
 

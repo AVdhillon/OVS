@@ -8,8 +8,6 @@ import {
   Card,
   CardContent,
   CardHeader,
-  CardTitle,
-  CardDescription,
 } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
@@ -47,6 +45,12 @@ const EMPTY_FORM: AddFormState = {
 
 // ─── Wallet Entry Card ────────────────────────────────────────────────────────
 
+// EDIT (tenant portal intuitiveness, item 3): Org ID + UID used to be shown
+// three times on this card — once in CardTitle/CardDescription, then again
+// as labeled rows in the body. Kept the labeled rows (clearest for someone
+// scanning several cards) as the single source of truth, and replaced the
+// title/description pairing with just the "Organization" badge context —
+// nothing left up top that only repeats the body below it.
 function WalletCard({ entry }: { entry: WalletIdentity }) {
   return (
     <Card className="transition-shadow hover:shadow-md border-violet-200">
@@ -62,10 +66,6 @@ function WalletCard({ entry }: { entry: WalletIdentity }) {
             Organization
           </Badge>
         </div>
-        <CardTitle className="text-sm mt-3">{entry.identity_id}</CardTitle>
-        <CardDescription className="text-xs font-mono">
-          UID: {entry.uid ?? "—"}
-        </CardDescription>
       </CardHeader>
       <CardContent className="pt-0">
         <div className="space-y-1.5 text-xs">
@@ -392,9 +392,6 @@ export function IdentityWalletView() {
                       {[user.first_name, user.middle_name, user.last_name]
                         .filter(Boolean)
                         .join(" ")}
-                    </p>
-                    <p className="text-xs text-muted-foreground font-mono mt-0.5">
-                      PID: {user.pid}
                     </p>
                     <div className="flex gap-3 mt-1.5 flex-wrap">
                       {user.mobile && (

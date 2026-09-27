@@ -15,6 +15,17 @@ import { normalizeEvent } from "../utils/normalizeEvent";
 
 // ── Response types ────────────────────────────────────────────────────────────
 
+// EDIT (Account tab, ORG sessions): shape of GET /org/self
+// (org.controller.ts::getOrgSelfInfo) — the organizer-free counterpart to
+// OrgSummary, since a plain (non-organizer) ORG member's Account tab has no
+// use for the organizer-only fields (is_active, member_limit, etc.).
+export interface OrgSelfInfo {
+  orgid: string;
+  org_name: string;
+  org_email?: string;
+  uid: string;
+}
+
 export interface EventResults {
   event_id: number;
   title: string;
@@ -455,7 +466,10 @@ export const api = {
   createEvent: (body: {
     orgid: string;
     uid: string;
-    scope_id: number;
+    // Optional — omit or send null to default to the org's ROOT scope
+    // (see the "Scope (defaults to org root)" copy in CreateEventForm and
+    // EventsService.createEvent()'s resolution of this default).
+    scope_id?: number | null;
     title: string;
     start_time: string;
     end_time: string;
@@ -540,6 +554,10 @@ export const api = {
 
   getMyOrgs: () => request<OrgSummary[]>("/org/mine"),
 
+  // EDIT (Account tab, ORG sessions): organizer-free — any ORG session can
+  // read its own org's name/contact + own uid. See GET /org/self.
+  getOrgSelfInfo: () => request<OrgSelfInfo>("/org/self"),
+
   // EDIT (Phase 4 — cutover, subphase 4.6): replaces registerOrg(), whose
   // route (POST /org/register) was removed outright in 4.1 — this app had
   // no working caller for org creation until this subphase.
@@ -566,13 +584,10 @@ export const api = {
   // org_email_otp above. Mirrors sendOtp()'s response shape (an `otp` field
   // is present only in non-production dev-OTP builds, same as sendOtp()).
   sendOrgDomainOtp: (org_email: string) =>
-    request<{ message: string; otp?: string }>(
-      "/org/request/send-domain-otp",
-      {
-        method: "POST",
-        body: JSON.stringify({ org_email }),
-      },
-    ),
+    request<{ message: string; otp?: string }>("/org/request/send-domain-otp", {
+      method: "POST",
+      body: JSON.stringify({ org_email }),
+    }),
 
   // EDIT (Phase 4 — cutover, subphase 4.7): the "My requests" view's two
   // calls — listing this account's own requests, and the edit-and-resubmit
@@ -591,13 +606,10 @@ export const api = {
       justification?: string;
     },
   ) =>
-    request<OrgRequestSubmitResponse>(
-      `/org/request/${requestId}/resubmit`,
-      {
-        method: "POST",
-        body: JSON.stringify(body),
-      },
-    ),
+    request<OrgRequestSubmitResponse>(`/org/request/${requestId}/resubmit`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   // EDIT (Phase 6 — post-approval org finalization, subphase 6.5): the
   // finalize-setup wizard's two calls — a live, read-only "is this orgid
@@ -613,13 +625,10 @@ export const api = {
     ),
 
   finalizeOrgRequest: (requestId: string, body: FinalizeOrgRequestBody) =>
-    request<FinalizeOrgRequestResponse>(
-      `/org/request/${requestId}/finalize`,
-      {
-        method: "POST",
-        body: JSON.stringify(body),
-      },
-    ),
+    request<FinalizeOrgRequestResponse>(`/org/request/${requestId}/finalize`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   // EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.4): the org
   // admin dashboard's "Request increase" action and its own request
@@ -640,6 +649,20 @@ export const api = {
   listLimitRequestsForOrg: (orgid: string, uid: string) =>
     request<MemberLimitRequestRow[]>(
       `/org/${orgid}/member-limit-requests?uid=${encodeURIComponent(uid)}`,
+    ),
+
+  // EDIT: edits and resends a request that's in NEEDS_INFO — backs the
+  // "Edit & resend" action MemberLimitTab shows in place of a disabled
+  // "Request increase" button once the open request needs more info.
+  resubmitLimitRequest: (
+    orgid: string,
+    uid: string,
+    requestId: string,
+    body: { requested_limit: number; justification?: string },
+  ) =>
+    request<MemberLimitRequestSubmitResponse>(
+      `/org/${orgid}/member-limit-requests/${requestId}?uid=${encodeURIComponent(uid)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
     ),
 
   // ── Org Members ────────────────────────────────────────────────────────────
