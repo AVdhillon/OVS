@@ -39,8 +39,12 @@ const server = http.createServer((req, res) => {
       serveFile(filePath, res);
       return;
     }
-    // SPA fallback: any unmatched route (or directory) serves index.html
-    serveFile(path.join(distPath, "index.html"), res);
+    // SPA fallback: mirrors vercel.json's rewrites — /admin and /admin/*
+    // fall back to the admin app's shell, everything else falls back to
+    // the main app's shell.
+    const isAdminRoute = urlPath === "/admin" || urlPath.startsWith("/admin/");
+    const fallback = isAdminRoute ? "admin.html" : "index.html";
+    serveFile(path.join(distPath, fallback), res);
   });
 });
 
