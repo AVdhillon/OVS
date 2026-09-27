@@ -42,11 +42,6 @@ import { ImageWithFallback } from "../components/figma/ImageWithFallback";
 import { api, type LoginBody } from "../../lib/api";
 import { countryStateMap } from "../../constants/location";
 
-// EDIT (Phase 1 — auth model consolidation, subphase 1.6): GOV login tab
-// removed. GOV retired platform-wide (backend narrowed LoginDto to
-// 'UNIFIED' | 'ORG' in subphase 1.2; frontend's LoginType/LoginBody
-// narrowed to match in subphase 1.5) — there is no longer a server-side
-// login path for a third mode here.
 type LoginMode = "UNIFIED" | "ORG";
 
 export function AuthPage() {

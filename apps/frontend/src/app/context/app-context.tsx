@@ -9,15 +9,13 @@ import { api } from "../../lib/api";
 
 // ─── Identity / Session types ─────────────────────────────────────────────────
 
-// EDIT (Phase 1 — auth model consolidation, subphase 1.5): GOV retired
-// platform-wide, SITEADMIN added — mirrors the backend's JwtUser narrowing
-// (subphase 1.2: 'UNIFIED' | 'ORG' | 'SITEADMIN'). Note this app's own
-// GET /auth/profile call can in practice only ever resolve to UNIFIED or
-// ORG — SITEADMIN sessions live on the separate ovp_admin_token cookie,
-// read by the standalone admin app (subphase 1.10), never by this app's
-// JwtStrategy. SITEADMIN is included in the union anyway so this type
-// stays a complete, accurate mirror of the JWT payload shape rather than
-// one that's silently wrong the moment anything shares it.
+// Mirrors the backend's JwtUser type. Note this app's own GET /auth/profile
+// call can in practice only ever resolve to UNIFIED or ORG — SITEADMIN
+// sessions live on the separate ovp_admin_token cookie, read by the
+// standalone admin app, never by this app's JwtStrategy. SITEADMIN is
+// included in the union anyway so this type stays a complete, accurate
+// mirror of the JWT payload shape rather than one that's silently wrong
+// the moment anything shares it.
 export type SessionType = "UNIFIED" | "ORG" | "SITEADMIN";
 
 /** Mirrors JWT payload. pid is string (BigInt serialised). */
@@ -46,10 +44,8 @@ export interface User {
 
 // ─── Identity Wallet entry ────────────────────────────────────────────────────
 
-// EDIT (Phase 1 — auth model consolidation, subphase 1.5): narrowed to
-// 'ORG' only — matches the backend's identity_wallet.chk_identity_type
-// CHECK constraint (subphase 1.1) and AddIdentityDto (subphase 1.4). GOV
-// identities can no longer exist in any wallet.
+// Matches the backend's identity_wallet.chk_identity_type CHECK constraint
+// and AddIdentityDto — wallet entries are ORG-only.
 export interface WalletIdentity {
   identity_type: "ORG";
   identity_id: string; // orgid

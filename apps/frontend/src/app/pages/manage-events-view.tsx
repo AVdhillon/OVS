@@ -1286,13 +1286,9 @@ export function ManageEventsView() {
       !isFuture(new Date(e.start_time)),
   ).length;
 
-  // EDIT (Phase 1 — auth model consolidation, subphase 1.9): the
-  // "GOV sessions have no event management access" early return removed
-  // along with `isGov` above — GOV was the only session type that this
-  // page ever refused to render for. UNIFIED and ORG (this app's only real
-  // session types — SITEADMIN sessions live on the separate admin app, see
-  // app-context.tsx's SessionType note) both reach the full page below now,
-  // same as they always could.
+  // UNIFIED and ORG (this app's only real session types — SITEADMIN
+  // sessions live on the separate admin app, see app-context.tsx's
+  // SessionType note) both reach the full page below.
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">

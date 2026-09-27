@@ -4,9 +4,6 @@ export class LoginDto {
   /**
    * Login type: UNIFIED (mobile/email) or ORG (orgid+uid).
    *
-   * EDIT (Phase 1 — auth model consolidation, subphase 1.2): GOV retired
-   * platform-wide (see prisma/migrations/manual/gov-removal-schema-changes.sql,
-   * subphase 1.1) — `epic_id` and the 'GOV' branch are gone from this DTO.
    * Site-admin login is intentionally NOT a third value of this `type`
    * union — see SiteAdminLoginDto below for why it's a separate class.
    */

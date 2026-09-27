@@ -271,8 +271,7 @@ export class UsersService {
     //
     // Criteria for THIN:
     //   • The OTHER contact field is null
-    //   • Zero identity_wallet entries (no ORG identities bound — EDIT,
-    //     Phase 1 subphase 1.4: comment updated, GOV retired platform-wide)
+    //   • Zero identity_wallet entries (no ORG identities bound)
     //   • Zero org_members entries linked via pid (no org memberships)
     const otherField = field === 'mobile' ? 'email' : 'mobile';
     const isThin =

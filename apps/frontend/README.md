@@ -25,8 +25,8 @@
     JS, closing that specific exfiltration path.
   - **Why it's still this way today:** simplicity — no CSRF-token plumbing,
     works cleanly across the Vercel-preview / API-on-a-different-origin setup
-    (`credentials: true` CORS), and is consistent with how the three session
-    types (UNIFIED/ORG/GOV) are threaded through the SPA today.
+    (`credentials: true` CORS), and is consistent with how the session
+    types (UNIFIED/ORG/SITEADMIN) are threaded through the SPA today.
   - **If pursued:** moving to httpOnly cookies + CSRF tokens is an
     architectural change (backend sets/reads the cookie, frontend stops
     managing the token directly, CSRF middleware added) and should be scoped

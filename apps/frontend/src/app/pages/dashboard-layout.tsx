@@ -34,10 +34,9 @@ import { toast } from 'sonner';
 
 // ─── Explicit nav item type ───────────────────────────────────────────────────
 
-// EDIT (tenant portal intuitiveness, item 1): re-introduces a per-item
-// session-type gate — this time driven by what each destination page
-// actually supports, not the old GOV-era `hiddenFor` mechanism. Several
-// items already render an in-page "not available for this session" notice
+// Re-introduces a per-item session-type gate — driven by what each
+// destination page actually supports. Several items already render an
+// in-page "not available for this session" notice
 // for ORG sessions (My Requests, Identity Wallet — both UNIFIED-only), so
 // linking to them from the nav for an ORG session was always a dead end
 // the user only discovered after clicking through. `sessionTypes` lets the

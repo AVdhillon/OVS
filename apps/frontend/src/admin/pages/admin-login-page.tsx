@@ -15,16 +15,14 @@ import { useAdminContext } from "../context/admin-context";
 import { adminApi } from "../lib/admin-api";
 import { ShieldCheck } from "lucide-react";
 
-// EDIT (Phase 1 — auth model consolidation, subphase 1.10): admin login
-// page for the standalone admin app. Same OTP-atomic-with-login shape as
-// AuthPage's UNIFIED/ORG login (subphase 1.6 left those in
-// src/app/pages/auth-page.tsx), just against admin_id +
-// /auth/send-admin-login-otp/-admin-login instead — deliberately not
-// reusing AuthPage itself, since that page's tabs/state are scoped to the
-// UNIFIED/ORG login modes only (see LoginMode there) and this app has
-// exactly one login mode. The OTPVerificationModal component is generic
-// (contact/onVerify/onResend callbacks, no GOV/UNIFIED/ORG-specific logic
-// inside it) so it's reused as-is here.
+// Admin login page for the standalone admin app. Same OTP-atomic-with-login
+// shape as AuthPage's UNIFIED/ORG login (src/app/pages/auth-page.tsx), just
+// against admin_id + /auth/send-admin-login-otp/-admin-login instead —
+// deliberately not reusing AuthPage itself, since that page's tabs/state
+// are scoped to the UNIFIED/ORG login modes only (see LoginMode there) and
+// this app has exactly one login mode. The OTPVerificationModal component
+// is generic (contact/onVerify/onResend callbacks, no login-mode-specific
+// logic inside it) so it's reused as-is here.
 export function AdminLoginPage() {
   const navigate = useNavigate();
   const { setAdmin } = useAdminContext();

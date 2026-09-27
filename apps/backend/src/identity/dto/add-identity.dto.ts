@@ -1,11 +1,6 @@
 import { IsIn, IsNotEmpty, IsString } from 'class-validator';
 
 export class AddIdentityDto {
-  // EDIT (Phase 1 — auth model consolidation, subphase 1.4): GOV retired
-  // platform-wide (gov_identity dropped in subphase 1.1) — only ORG
-  // identities can be linked into a unified account's wallet now. Matches
-  // identity_wallet's chk_identity_type CHECK constraint (subphase 1.1),
-  // which likewise only accepts 'ORG'.
   @IsIn(['ORG'])
   identity_type: 'ORG';
 

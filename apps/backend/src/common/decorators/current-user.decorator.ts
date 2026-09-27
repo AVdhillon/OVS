@@ -12,10 +12,6 @@ export interface JwtUser {
   // `BigInt(user.pid)`, which happens to accept a string fine — the old
   // `number` type was just misleading, not a runtime bug.
   pid?: string; // present for UNIFIED / ORG logins
-  // EDIT (Phase 1 — auth model consolidation, subphase 1.2): GOV retired,
-  // SITEADMIN added — matches the `identity_type` values now accepted by
-  // user_sessions (chk_session_identity_type, subphase 1.1) and the
-  // narrowed LoginDto/SiteAdminLoginDto union (subphase 1.2).
   type: 'UNIFIED' | 'ORG' | 'SITEADMIN';
   orgid?: string; // ORG login
   uid?: string; // ORG login

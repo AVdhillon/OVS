@@ -313,15 +313,9 @@ function EventGrid({
 // ─── Main View ────────────────────────────────────────────────────────────────
 
 export function EventsView() {
-    // EDIT (Phase 1 — auth model consolidation, subphase 1.8): GOV removed.
-    // GOV was the only session type that couldn't cast a vote, so the
-    // `canVote`/"Not eligible to vote in this session" gating has no
-    // remaining case that trips it — UNIFIED and ORG sessions (the only
-    // types that ever load this app, see app-context.tsx's SessionType
-    // note) can both vote. Dropped the gating entirely rather than hardcode
-    // it to `true` and leave dead branches around. `session` is no longer
-    // read anywhere else in this file, so it's dropped from the destructure
-    // too.
+    // UNIFIED and ORG sessions (the only types that ever load this app, see
+    // app-context.tsx's SessionType note) can both vote, so there's no
+    // gating needed here.
     const {events, setEvents, updateEventInList} = useAppContext();
 
     const [loading, setLoading] = useState(false);

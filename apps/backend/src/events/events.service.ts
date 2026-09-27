@@ -645,13 +645,6 @@ export class EventsService {
    *                     get_visible_events will correctly find nothing
    *                     unless the event is visible independent of org
    *                     membership.
-   *
-   * EDIT (Phase 1 — auth model consolidation, subphase 1.4): GOV retired
-   * (subphase 1.2) — updated to SITEADMIN in the doc comments above and
-   * below. No code branch existed for GOV in either method; both already
-   * fell through to the undefined/[] "no org identity" case for any
-   * session type they didn't explicitly recognize, so SITEADMIN sessions
-   * are handled correctly with no code change needed here.
    */
   private async resolveViewerUidInOrg(
     user: JwtUser,

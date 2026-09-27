@@ -329,14 +329,11 @@ async function request<T>(
 }
 
 // ── Auth types ────────────────────────────────────────────────────────────────
-// EDIT (Phase 1 — auth model consolidation, subphase 1.5): GOV retired
-// platform-wide (backend narrowed LoginDto to 'UNIFIED' | 'ORG' only in
-// subphase 1.2 — GovLoginBody/epic_id had no server-side counterpart left
-// to send to). SITEADMIN is deliberately NOT added here: site-admin login
-// is a wholly separate flow served by the standalone admin app (subphase
-// 1.10) against POST /auth/admin-login, not this app's POST /auth/login —
-// mirrors the backend split, where SiteAdminLoginDto is its own class, not
-// a third arm of LoginDto's union.
+// SITEADMIN is deliberately NOT included here: site-admin login is a wholly
+// separate flow served by the standalone admin app against
+// POST /auth/admin-login, not this app's POST /auth/login — mirrors the
+// backend split, where SiteAdminLoginDto is its own class, not a third arm
+// of LoginDto's union.
 export type LoginType = "UNIFIED" | "ORG";
 
 export interface UnifiedLoginBody {

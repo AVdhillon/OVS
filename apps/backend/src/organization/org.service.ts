@@ -897,11 +897,6 @@ export class OrgService {
    *   An optional client-supplied `requestedUid` is only honored if it
    *   matches a row actually owned by this pid — otherwise 403.
    * - SITEADMIN session: never has an org identity.
-   *
-   * EDIT (Phase 1 — auth model consolidation, subphase 1.4): GOV retired
-   * (subphase 1.2 narrowed JwtUser.type to 'UNIFIED' | 'ORG' | 'SITEADMIN')
-   * — only the fallback throw below and this comment changed; the
-   * ORG/UNIFIED branches themselves are untouched.
    */
   async resolveCallerUid(
     user: JwtUser,

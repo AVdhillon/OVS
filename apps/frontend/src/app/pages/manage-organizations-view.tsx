@@ -4118,16 +4118,9 @@ export function ManageOrganizationsView() {
   const [myRequests, setMyRequests] = useState<OrgRequestMine[]>([]);
 
   const isUnified = session?.type === "UNIFIED";
-  // EDIT (Phase 5 — platform maturity, subphase 5.4): removed `isGov` and
-  // its two call sites below (the early useEffect return and the whole
-  // "Not available" early-return render) — GOV was the only session type
-  // this page ever refused to render for, and GOV no longer exists as a
-  // possible SessionType (narrowed in subphase 1.5). Same pattern as
-  // manage-events-view.tsx's own GOV-gate removal in subphase 1.9; this
-  // file just wasn't in that subphase's file list, so its copy of the
-  // same dead branch survived until now. UNIFIED and ORG (this app's only
-  // real session types — SITEADMIN lives on the separate admin app) both
-  // reach the full page below unconditionally, same as they always could.
+  // UNIFIED and ORG (this app's only real session types — SITEADMIN lives
+  // on the separate admin app) both reach the full page below
+  // unconditionally.
   const isOrg = session?.type === "ORG";
 
   const fetchOrgs = async () => {

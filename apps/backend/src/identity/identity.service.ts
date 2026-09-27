@@ -40,12 +40,6 @@ export class IdentityService {
     await this.otpService.verifyOtp(dto.identifier, dto.otp);
     return await this.prisma.$transaction(async (tx) => {
       // 3. Validate the identity exists and the identifier matches it.
-      // EDIT (Phase 1 — auth model consolidation, subphase 1.4): the GOV
-      // branch (gov_identity lookup) is removed — GOV identities can no
-      // longer be linked (AddIdentityDto.identity_type is now 'ORG' only,
-      // matching identity_wallet's chk_identity_type CHECK constraint from
-      // subphase 1.1). dto.uid is guaranteed present by AddIdentityDto's
-      // validation now that it's no longer conditional on identity_type.
       const member = await tx.org_members.findFirst({
         where: { orgid: dto.identity_id, uid: dto.uid },
       });

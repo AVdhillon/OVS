@@ -35,11 +35,8 @@ export class AuthService {
   // The client supplies orgid+uid. We look up the mobile/email that was
   // stored when that identity was enrolled, and send the OTP there — the
   // user never gets to specify an arbitrary identifier for this flow.
-  //
-  // EDIT (Phase 1 — auth model consolidation, subphase 1.2): the GOV branch
-  // (epic_id -> gov_identity lookup) is removed — GOV login is retired
-  // platform-wide (subphase 1.1 dropped gov_identity itself). See
-  // resolveSiteAdminOtpIdentifier() below for the equivalent SITEADMIN flow.
+  // See resolveSiteAdminOtpIdentifier() below for the equivalent SITEADMIN
+  // flow.
 
   async resolveOtpIdentifier(dto: LoginDto): Promise<string> {
     if (dto.type === 'UNIFIED') {

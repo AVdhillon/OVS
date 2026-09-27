@@ -22,7 +22,7 @@ function PublicRoute() {
 function ProtectedRoute() {
   const { loading, session } = useAppContext();
   if (loading) return <div className="flex h-screen items-center justify-center text-muted-foreground">Loading...</div>;
-  // Guard on session — ORG/GOV sessions have no `user` object but are still authenticated
+  // Guard on session — ORG sessions have no `user` object but are still authenticated
   if (!session) return <Navigate to="/" replace />;
   return <Outlet />;
 }

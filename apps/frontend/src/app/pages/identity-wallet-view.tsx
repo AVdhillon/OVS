@@ -26,11 +26,8 @@ import { Shield, Building2, Plus, Loader2, User } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-// EDIT (Phase 1 — auth model consolidation, subphase 1.7): GOV identity
-// linking removed. Wallet entries are ORG-only now (matches WalletIdentity,
-// narrowed in 1.5, and AddIdentityDto, narrowed in 1.4), so there's no
-// longer an identity-type choice to make in this form — Org ID + UID are
-// the only fields left.
+// Wallet entries are ORG-only, so there's no identity-type choice to make
+// in this form — Org ID + UID are the only fields left.
 interface AddFormState {
   identity_id: string; // orgid
   uid: string; // member UID in that org
@@ -338,9 +335,7 @@ export function IdentityWalletView() {
       .catch(() => setWallet([...wallet, entry]));
   };
 
-  // EDIT (Phase 1 — auth model consolidation, subphase 1.7): wallet entries
-  // are ORG-only now (WalletIdentity narrowed in 1.5), so there's no GOV
-  // group left to split out — every entry is an org entry.
+  // Wallet entries are ORG-only, so every entry is an org entry.
   const orgEntries = wallet;
 
   return (
