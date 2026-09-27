@@ -38,12 +38,14 @@ import { ALL_LIMIT_REQUEST_STATUSES } from './org-limit-requests.service';
 // for raw SQL when there's no Prisma-level equivalent, rather than change
 // generator config this session can't confirm still builds.
 
-export type AdminReviewQueueRequestType = 'ORG_CREATION' | 'MEMBER_LIMIT_INCREASE';
+export type AdminReviewQueueRequestType =
+  | 'ORG_CREATION'
+  | 'MEMBER_LIMIT_INCREASE';
 
 export const ALL_REVIEW_QUEUE_REQUEST_TYPES: readonly AdminReviewQueueRequestType[] =
   ['ORG_CREATION', 'MEMBER_LIMIT_INCREASE'];
 
-interface AdminReviewQueueRow {
+export interface AdminReviewQueueRow {
   id: string;
   request_type: AdminReviewQueueRequestType;
   status: string;
@@ -143,9 +145,7 @@ export class AdminReviewQueueService {
     }
     const normalized = requestType.map((t) => t.trim().toUpperCase());
     for (const t of normalized) {
-      if (
-        !(ALL_REVIEW_QUEUE_REQUEST_TYPES as readonly string[]).includes(t)
-      ) {
+      if (!(ALL_REVIEW_QUEUE_REQUEST_TYPES as readonly string[]).includes(t)) {
         throw new BadRequestException(
           `Invalid request_type "${t}". Expected one of: ${ALL_REVIEW_QUEUE_REQUEST_TYPES.join(', ')}.`,
         );
