@@ -3,6 +3,18 @@ import { Request } from 'express';
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
+// Login/OTP bootstrap endpoints must remain usable when a browser still has
+// an older session cookie. A fresh tab may have no CSRF token in
+// sessionStorage, while the browser still automatically sends the old
+// httpOnly session cookie. Requiring CSRF on these endpoints would block the
+// login that is supposed to establish the new CSRF token in the first place.
+const CSRF_EXEMPT_AUTH_PATHS = new Set([
+  '/auth/send-login-otp',
+  '/auth/login',
+  '/auth/send-admin-login-otp',
+  '/auth/admin-login',
+]);
+
 // Generalized from
 // a single hardcoded cookie pair to a list, so the same guard covers both
 // the regular user session (`ovp_token`/`ovp_csrf`) and the new admin
@@ -45,6 +57,12 @@ export class CsrfGuard implements CanActivate {
     const req = context.switchToHttp().getRequest<Request>();
 
     if (SAFE_METHODS.has(req.method)) return true;
+
+    // These endpoints establish/prepare authentication and therefore cannot
+    // rely on a CSRF token from the session they are about to replace.
+    // This also handles a stale session cookie left by an older admin/user
+    // session in another tab.
+    if (CSRF_EXEMPT_AUTH_PATHS.has(req.path)) return true;
 
     // Check whichever session-cookie pair (if any) is actually present on
     // this request. A given request carries at most one of these in
