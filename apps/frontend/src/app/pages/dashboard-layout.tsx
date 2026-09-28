@@ -209,7 +209,14 @@ export function DashboardLayout() {
   const location = useLocation();
   const { user, session, logout, orgs, setOrgs } = useAppContext();
 
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // Compact-sidebar preference: shared by the phone drawer and the desktop
+  // sidebar, and remembered across drawer opens, rotations and reloads.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem('sidebarCollapsed') === '1'; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('sidebarCollapsed', sidebarCollapsed ? '1' : '0'); } catch { /* storage unavailable */ }
+  }, [sidebarCollapsed]);
   const [mobileOpen, setMobileOpen] = useState(false);
 
   // A plain ORG member (no
@@ -321,15 +328,9 @@ export function DashboardLayout() {
 
   const isActive = (path: string) => location.pathname === path;
 
-  // 4: Each time the phone drawer opens it starts expanded (labels visible);
-  //         the user can still switch it to the compact icon rail with the
-  //         toggle at the bottom of the drawer.
-  const handleMobileToggle = () => {
-    setMobileOpen((open) => {
-      if (!open) setSidebarCollapsed(false);
-      return !open;
-    });
-  };
+  // The collapsed preference is deliberately NOT reset here any more, so the
+  // drawer reopens in whichever mode the user last chose.
+  const handleMobileToggle = () => setMobileOpen((open) => !open);
 
   const handleSidebarNavigate = (path: string) => {
     navigate(path);
