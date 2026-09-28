@@ -1,3 +1,4 @@
+import { PageSkeleton } from "../app/components/loading-skeletons";
 import { createBrowserRouter, Navigate, Outlet } from "react-router";
 import { AdminLoginPage } from "./pages/admin-login-page";
 import { AdminDashboardPage } from "./pages/admin-dashboard-page";
@@ -23,11 +24,7 @@ import { useAdminContext } from "./context/admin-context";
 function PublicRoute() {
   const { loading, admin } = useAdminContext();
   if (loading)
-    return (
-      <div className="flex h-dvh items-center justify-center text-muted-foreground">
-        Loading...
-      </div>
-    );
+    return <PageSkeleton />;
   if (admin) return <Navigate to="/dashboard" replace />;
   return <Outlet />;
 }
@@ -35,11 +32,7 @@ function PublicRoute() {
 function ProtectedRoute() {
   const { loading, admin } = useAdminContext();
   if (loading)
-    return (
-      <div className="flex h-dvh items-center justify-center text-muted-foreground">
-        Loading...
-      </div>
-    );
+    return <PageSkeleton />;
   if (!admin) return <Navigate to="/" replace />;
   return <Outlet />;
 }

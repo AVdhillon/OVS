@@ -1,3 +1,4 @@
+import { ListSkeleton } from "../../app/components/loading-skeletons";
 import { useEffect, useState, useCallback } from "react";
 import {
   Card,
@@ -275,9 +276,7 @@ export function AdminAccountsPage() {
             {error && <p className="mb-4 text-sm text-destructive">{error}</p>}
 
             {loading ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">
-                Loading...
-              </p>
+              <ListSkeleton />
             ) : !admins || admins.length === 0 ? (
               <div className="flex flex-col items-center gap-2 py-12 text-center text-muted-foreground">
                 <ShieldCheck className="size-8" />

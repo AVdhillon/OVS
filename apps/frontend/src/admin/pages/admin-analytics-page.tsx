@@ -1,3 +1,4 @@
+import { ChartSkeleton } from "../../app/components/loading-skeletons";
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router";
 import {
@@ -322,9 +323,7 @@ export function AdminAnalyticsPage() {
             )}
 
             {seriesLoading ? (
-              <p className="py-12 text-center text-sm text-muted-foreground">
-                Loading...
-              </p>
+              <ChartSkeleton />
             ) : !series || series.total === 0 ? (
               <div className="flex flex-col items-center gap-2 py-12 text-center text-muted-foreground">
                 <BarChart3 className="size-8" />

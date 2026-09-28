@@ -1,3 +1,4 @@
+import { DetailSkeleton } from "../../app/components/loading-skeletons";
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useNavigate, Link } from "react-router";
 import {
@@ -270,9 +271,7 @@ export function AdminRequestDetailPage() {
         </Link>
 
         {loading ? (
-          <p className="py-8 text-center text-sm text-muted-foreground">
-            Loading...
-          </p>
+          <DetailSkeleton />
         ) : error || !detail ? (
           <Card>
             <CardContent className="py-8 text-center text-sm text-destructive">

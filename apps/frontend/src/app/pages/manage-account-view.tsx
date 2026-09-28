@@ -468,6 +468,8 @@ export function ManageAccountView() {
                           value={emailOtp}
                           onChange={(e) => setEmailOtp(e.target.value)}
                           maxLength={6}
+                          autoComplete="one-time-code"
+                          inputMode="numeric"
                           className="max-w-48 font-mono tracking-widest"
                       />
                   )}
@@ -512,6 +514,8 @@ export function ManageAccountView() {
                           value={mobileOtp}
                           onChange={(e) => setMobileOtp(e.target.value)}
                           maxLength={6}
+                          autoComplete="one-time-code"
+                          inputMode="numeric"
                           className="max-w-48 font-mono tracking-widest"
                       />
                   )}

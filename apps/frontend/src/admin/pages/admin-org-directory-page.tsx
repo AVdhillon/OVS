@@ -1,3 +1,4 @@
+import { ListSkeleton } from "../../app/components/loading-skeletons";
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router";
 import {
@@ -176,9 +177,7 @@ export function AdminOrgDirectoryPage() {
             )}
 
             {loading ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">
-                Loading...
-              </p>
+              <ListSkeleton />
             ) : !orgs || orgs.length === 0 ? (
               <div className="flex flex-col items-center gap-2 py-12 text-center text-muted-foreground">
                 <Building2 className="size-8" />

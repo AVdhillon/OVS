@@ -1,3 +1,4 @@
+import { ListSkeleton } from "../../app/components/loading-skeletons";
 import { useEffect, useState, useCallback } from "react";
 import { useSearchParams, Link } from "react-router";
 import {
@@ -338,7 +339,7 @@ function AuditFeedRow({ entry }: { entry: AdminAuditLogEntry }) {
         <TableRow>
           <TableCell colSpan={6} className="bg-muted/40">
             {loading ? (
-              <p className="py-2 text-sm text-muted-foreground">Loading...</p>
+              <ListSkeleton rows={2} className="space-y-2 py-2" />
             ) : error ? (
               <p className="py-2 text-sm text-destructive">{error}</p>
             ) : detail ? (
@@ -628,9 +629,7 @@ export function AdminAuditLogPage() {
             {error && <p className="mb-4 text-sm text-destructive">{error}</p>}
 
             {loading ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">
-                Loading...
-              </p>
+              <ListSkeleton />
             ) : !entries || entries.length === 0 ? (
               <div className="flex flex-col items-center gap-2 py-12 text-center text-muted-foreground">
                 <ScrollText className="size-8" />

@@ -1,3 +1,4 @@
+import { PageSkeleton } from "./components/loading-skeletons";
 import { createBrowserRouter, Navigate, Outlet } from "react-router";
 import { AuthPage } from "./pages/auth-page";
 import { DashboardLayout } from "./pages/dashboard-layout";
@@ -11,7 +12,7 @@ import { useAppContext } from "./context/app-context";
 
 function PublicRoute() {
   const { loading, session } = useAppContext();
-  if (loading) return <div className="flex h-dvh items-center justify-center text-muted-foreground">Loading...</div>;
+  if (loading) return <PageSkeleton />;
   // Session is populated on mount via a cookie-authenticated /auth/profile
   // call (see app-context.tsx) — the JWT itself is no longer readable from
   // JS, so this is the only way to know "is there a valid session".
@@ -21,7 +22,7 @@ function PublicRoute() {
 
 function ProtectedRoute() {
   const { loading, session } = useAppContext();
-  if (loading) return <div className="flex h-dvh items-center justify-center text-muted-foreground">Loading...</div>;
+  if (loading) return <PageSkeleton />;
   // Guard on session — ORG sessions have no `user` object but are still authenticated
   if (!session) return <Navigate to="/" replace />;
   return <Outlet />;

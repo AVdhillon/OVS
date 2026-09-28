@@ -147,6 +147,11 @@ export function OTPVerificationModal({
         <div className="flex flex-col items-center gap-6 py-4">
           <InputOTP
             maxLength={6}
+            // Lets iOS/Android offer the SMS/email code above the keyboard,
+            // shows a numeric keypad, and focuses the field when the modal opens.
+            autoComplete="one-time-code"
+            inputMode="numeric"
+            autoFocus
             value={otp}
             onChange={(val) => {
               setOtp(val);

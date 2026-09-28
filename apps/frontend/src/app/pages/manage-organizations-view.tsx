@@ -1,3 +1,4 @@
+import { ListSkeleton } from "../components/loading-skeletons";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { api } from "../../lib/api";
 import type { MemberRole, OrgMemberWithRoles } from "../../lib/api";
@@ -3315,9 +3316,7 @@ function MemberLimitTab({ org }: { org: OrgSummary }) {
         </CardHeader>
         <CardContent>
           {loading ? (
-            <p className="py-6 text-center text-sm text-muted-foreground">
-              Loading...
-            </p>
+            <ListSkeleton rows={3} />
           ) : history.length === 0 ? (
             <p className="py-6 text-center text-sm text-muted-foreground">
               No member limit requests yet.
@@ -3781,9 +3780,7 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
           )}
 
           {membersLoading ? (
-            <div className="py-10 text-center text-sm text-muted-foreground">
-              Loading members…
-            </div>
+            <ListSkeleton rows={6} />
           ) : (
             <div className="border rounded-md overflow-hidden">
               <Table>
@@ -4026,9 +4023,7 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
         {/* ── SCOPE TAB ── */}
         <TabsContent value="scope" className="mt-4">
           {scopeLoading ? (
-            <div className="py-10 text-center text-sm text-muted-foreground">
-              Loading scope tree…
-            </div>
+            <ListSkeleton rows={5} />
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Card>
@@ -4219,9 +4214,7 @@ export function ManageOrganizationsView() {
       </div>
 
       {loading ? (
-        <div className="py-16 text-center text-muted-foreground text-sm">
-          Loading organizations…
-        </div>
+        <ListSkeleton rows={4} />
       ) : orgs.length === 0 ? (
         <Card>
           <CardContent className="py-16 text-center space-y-3">
