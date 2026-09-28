@@ -154,12 +154,16 @@ export class EventsService {
 
     if (!event) throw new NotFoundException('Event not found');
 
-    //await this.assertEventVisible(user, event);
+    // Visibility is enforced here: without this, any logged-in user could read
+    // any event (and its candidates / live results) in any org by id.
+    // assertEventVisible applies the same rules as getVisibleEvents, so
+    // anything the caller can see in their list can be opened here.
+    await this.assertEventVisible(user, event);
 
     // Checking `user.type === 'ORG'` alone would make has_voted always false
     // for UNIFIED sessions — even when that account had voted via a linked org
     // identity — because UNIFIED JWTs carry a pid, not a uid.
-    // resolveViewerUidInOrg (also used by assertEventVisible below) resolves the correct uid for both
+    // resolveViewerUidInOrg (also used by assertEventVisible above) resolves the correct uid for both
     // session types: it returns the ORG session's own uid directly, or hops
     // pid -> org_members -> uid for UNIFIED sessions via resolveOrgIdentities.
     let has_voted = false;
@@ -637,14 +641,29 @@ export class EventsService {
     // arbitrary row could wrongly hide it.
     const roles = await this.prisma.member_roles.findMany({
       where: { orgid: event.orgid ?? '', uid },
-      select: { scope_id: true },
+      select: { scope_id: true, is_organizer: true },
       orderBy: { scope_id: 'asc' },
     });
     if (roles.length === 0) {
       throw new ForbiddenException('Event not visible to your account');
     }
 
-    for (const { scope_id } of roles) {
+    for (const { scope_id, is_organizer } of roles) {
+      // Organizer branch — mirrors getVisibleEvents: an organizer always
+      // sees every event in their scope's subtree (including scope_only
+      // ones), because they manage them. get_visible_events() has no such
+      // branch, so without this an organizer could see an event in their
+      // list but get a 403 opening it (and the creator could not open their
+      // own scope_only event in a descendant scope).
+      if (is_organizer && event.scope_id != null) {
+        const inSubtree = await this.prisma.$queryRaw<{ scope_id: number }[]>`
+          SELECT scope_id
+          FROM get_scope_descendants(${scope_id}::int)
+          WHERE scope_id = ${event.scope_id}::int
+        `;
+        if (inSubtree.length > 0) return;
+      }
+
       const rows = await this.prisma.$queryRaw<{ event_id: number }[]>`
         SELECT event_id
         FROM get_visible_events(${event.orgid}::varchar, ${scope_id}::int)

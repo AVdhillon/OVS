@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { EventsService } from './events.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrgService } from '../organization/org.service';
@@ -400,6 +400,163 @@ describe('EventsService', () => {
 
       expect(result).toBeDefined();
       expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('getEventDetail visibility', () => {
+    // Event in ORG_B at scope 5 that has not ended and hides live results,
+    // so the vote_results branch is skipped unless a test opts in.
+    const detailEvent = {
+      ...orgBEvent,
+      scope_id: 5,
+      scope_only: true,
+      status: 'ACTIVE',
+      show_live_results: false,
+      end_time: new Date(Date.now() + 2 * 60 * 60 * 1000),
+      candidates: [{ candidate_id: 1 }],
+    };
+    let eventParticipants: { findFirst: jest.Mock };
+    let voteResults: { findMany: jest.Mock };
+
+    beforeEach(() => {
+      prisma.events.findFirst.mockResolvedValue(detailEvent);
+      eventParticipants = { findFirst: jest.fn().mockResolvedValue(null) };
+      voteResults = { findMany: jest.fn().mockResolvedValue([]) };
+      (prisma as any).event_participants = eventParticipants;
+      (prisma.vote_results as any).findMany = voteResults.findMany;
+    });
+
+    it('throws NotFound for a missing event without evaluating visibility', async () => {
+      prisma.events.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.getEventDetail(orgSessionOrgBUser, 1),
+      ).rejects.toThrow(NotFoundException);
+      expect(prisma.member_roles.findMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects a caller from another org and returns no event data', async () => {
+      // ORG-session user of ORG_A: resolveViewerUidInOrg -> undefined for ORG_B
+      await expect(
+        service.getEventDetail(orgSessionOrgAUser, 1),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prisma.member_roles.findMany).not.toHaveBeenCalled();
+      expect(voteResults.findMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects a UNIFIED caller with no org_members link to the event org', async () => {
+      (prisma as any).org_members = {
+        findMany: jest.fn().mockResolvedValue([]),
+      };
+
+      await expect(service.getEventDetail(unifiedOrgAUser, 1)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('rejects a member of the org who has no role rows', async () => {
+      prisma.member_roles.findMany.mockResolvedValue([]);
+
+      await expect(
+        service.getEventDetail(orgSessionOrgBUser, 1),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('rejects a non-organizer voter when get_visible_events does not return the event', async () => {
+      prisma.member_roles.findMany.mockResolvedValue([
+        { scope_id: 5, is_organizer: false },
+      ]);
+      prisma.$queryRaw.mockResolvedValue([]);
+
+      await expect(
+        service.getEventDetail(orgSessionOrgBUser, 1),
+      ).rejects.toThrow(ForbiddenException);
+      // Non-organizer: only the get_visible_events lookup ran (no subtree branch).
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+      expect(voteResults.findMany).not.toHaveBeenCalled();
+    });
+
+    it('allows a voter when get_visible_events returns the event', async () => {
+      prisma.member_roles.findMany.mockResolvedValue([
+        { scope_id: 5, is_organizer: false },
+      ]);
+      prisma.$queryRaw.mockResolvedValue([{ event_id: 1 }]);
+
+      const result = await service.getEventDetail(orgSessionOrgBUser, 1);
+
+      expect(result.event_id).toBe(1);
+      expect(result.has_voted).toBe(false);
+      expect(result.results).toBeNull();
+    });
+
+    it('allows an organizer to open a scope_only event in their subtree (matches the list)', async () => {
+      prisma.member_roles.findMany.mockResolvedValue([
+        { scope_id: 2, is_organizer: true },
+      ]);
+      // Subtree of scope 2 contains the event's scope 5.
+      prisma.$queryRaw.mockResolvedValueOnce([{ scope_id: 5 }]);
+
+      const result = await service.getEventDetail(orgSessionOrgBUser, 1);
+
+      expect(result.event_id).toBe(1);
+      // Allowed by the organizer branch alone — get_visible_events not needed.
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not let an organizer see an event outside their subtree', async () => {
+      prisma.member_roles.findMany.mockResolvedValue([
+        { scope_id: 2, is_organizer: true },
+      ]);
+      // Subtree check finds nothing; get_visible_events finds nothing either.
+      prisma.$queryRaw.mockResolvedValue([]);
+
+      await expect(
+        service.getEventDetail(orgSessionOrgBUser, 1),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not apply the organizer branch to a voter role, even if the same member organizes elsewhere', async () => {
+      // Voter at scope 5 (event's scope), organizer at scope 9 (unrelated).
+      prisma.member_roles.findMany.mockResolvedValue([
+        { scope_id: 5, is_organizer: false },
+        { scope_id: 9, is_organizer: true },
+      ]);
+      prisma.$queryRaw.mockResolvedValue([]); // nothing matches anywhere
+
+      await expect(
+        service.getEventDetail(orgSessionOrgBUser, 1),
+      ).rejects.toThrow(ForbiddenException);
+      // scope 5 (voter): 1 get_visible_events call
+      // scope 9 (organizer): 1 subtree call + 1 get_visible_events call
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(3);
+    });
+
+    it('allows the event when only a later scope of a multi-scope member can see it', async () => {
+      prisma.member_roles.findMany.mockResolvedValue([
+        { scope_id: 3, is_organizer: false },
+        { scope_id: 5, is_organizer: false },
+      ]);
+      prisma.$queryRaw
+        .mockResolvedValueOnce([]) // scope 3: not visible
+        .mockResolvedValueOnce([{ event_id: 1 }]); // scope 5: visible
+
+      const result = await service.getEventDetail(orgSessionOrgBUser, 1);
+
+      expect(result.event_id).toBe(1);
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+    });
+
+    it('still reports has_voted for a visible event', async () => {
+      prisma.member_roles.findMany.mockResolvedValue([
+        { scope_id: 5, is_organizer: false },
+      ]);
+      prisma.$queryRaw.mockResolvedValue([{ event_id: 1 }]);
+      eventParticipants.findFirst.mockResolvedValue({ has_voted: true });
+
+      const result = await service.getEventDetail(orgSessionOrgBUser, 1);
+
+      expect(result.has_voted).toBe(true);
     });
   });
 });
