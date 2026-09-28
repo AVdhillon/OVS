@@ -5,11 +5,28 @@ import * as React from "react";
 import { cn } from "./utils";
 
 /**
- * Copies each header cell's text onto the matching body cells as `data-label`,
- * so that below `md` (where rows are restyled as stacked cards) every value can
- * show its column name beside it. Done in the DOM so the ~9 existing tables get
- * the mobile layout without each cell needing a label prop.
+ * Below `md` every row is restyled as a card (see the "Table → card" block in
+ * styles/index.css). To do that without touching ~10 call sites, this walks the
+ * table and tags each cell with:
+ *
+ *   data-label  the column name (shown beside the value on phones)
+ *   data-kind   primary | field | select | aux | actions | detail | empty
+ *   data-first  the first cell that flows in the card body (no top hairline)
+ *
+ * and each row with data-kind="detail" | "empty" when it is a full-width row.
+ * Only attributes are written, and the observer watches childList only, so it
+ * can't re-trigger itself.
  */
+const FORM_CONTROLS = "input, textarea, select, [role='combobox']";
+
+function setAttr(el: Element, name: string, value: string | null) {
+  if (value === null) {
+    if (el.hasAttribute(name)) el.removeAttribute(name);
+  } else if (el.getAttribute(name) !== value) {
+    el.setAttribute(name, value);
+  }
+}
+
 function applyColumnLabels(table: HTMLTableElement) {
   const headRow = table.tHead?.rows[0];
   if (!headRow) return;
@@ -17,17 +34,58 @@ function applyColumnLabels(table: HTMLTableElement) {
     (th) => th.textContent?.replace(/\s+/g, " ").trim() ?? "",
   );
   for (const body of Array.from(table.tBodies)) {
+    let prevWasDataRow = false;
     for (const row of Array.from(body.rows)) {
-      let col = 0;
-      for (const cell of Array.from(row.cells)) {
-        // Full-width cells (empty states, expanded details) have no column.
-        if (cell.colSpan <= 1) {
-          const label = labels[col] ?? "";
-          if (cell.getAttribute("data-label") !== label) {
-            cell.setAttribute("data-label", label);
-          }
+      const cells = Array.from(row.cells);
+      const isFullWidth = cells.length > 0 && cells.every((c) => c.colSpan > 1);
+
+      if (isFullWidth) {
+        // An expanded-detail row belongs to the card above it; a lone
+        // full-width row (no data row before it) is an empty state.
+        const kind = prevWasDataRow ? "detail" : "empty";
+        setAttr(row, "data-kind", kind);
+        for (const cell of cells) {
+          setAttr(cell, "data-kind", kind);
+          setAttr(cell, "data-label", null);
+          setAttr(cell, "data-first", null);
         }
+        if (kind === "empty") prevWasDataRow = false;
+        continue;
+      }
+
+      setAttr(row, "data-kind", null);
+      prevWasDataRow = true;
+
+      let col = 0;
+      let primaryTaken = false;
+      let firstFlowTaken = false;
+      for (const cell of cells) {
+        const label = labels[col] ?? "";
         col += cell.colSpan;
+        setAttr(cell, "data-label", label);
+
+        let kind: string;
+        if (!label) {
+          kind = cell.querySelector("[role='checkbox']") ? "select" : "aux";
+        } else if (/^actions?$/i.test(label)) {
+          kind = "actions";
+        } else if (!primaryTaken && !cell.querySelector(FORM_CONTROLS)) {
+          // First readable column becomes the card title.
+          kind = "primary";
+          primaryTaken = true;
+        } else {
+          kind = "field";
+          primaryTaken = true; // a form control as first column = no title
+        }
+        setAttr(cell, "data-kind", kind);
+
+        const flows = kind === "primary" || kind === "field";
+        if (flows && !firstFlowTaken) {
+          firstFlowTaken = true;
+          setAttr(cell, "data-first", "true");
+        } else {
+          setAttr(cell, "data-first", null);
+        }
       }
     }
   }
@@ -58,7 +116,7 @@ function Table({ className, ...props }: React.ComponentProps<"table">) {
         data-slot="table"
         // Below md: drop the table layout so each row becomes a stacked card.
         className={cn(
-          "w-full caption-bottom text-sm max-md:block",
+          "w-full caption-bottom text-sm max-md:block max-md:min-w-0",
           className,
         )}
         {...props}
@@ -84,7 +142,7 @@ function TableBody({ className, ...props }: React.ComponentProps<"tbody">) {
     <tbody
       data-slot="table-body"
       className={cn(
-        "[&_tr:last-child]:border-0 max-md:block max-md:space-y-3",
+        "md:[&_tr:last-child]:border-0 max-md:flex max-md:flex-col max-md:gap-3",
         className,
       )}
       {...props}
@@ -111,8 +169,8 @@ function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
       data-slot="table-row"
       className={cn(
         "hover:bg-muted/50 data-[state=selected]:bg-muted border-b transition-colors",
-        // Card on phones.
-        "max-md:block max-md:rounded-lg max-md:border max-md:p-3 max-md:space-y-1.5",
+        // Card on phones (layout details live in styles/index.css).
+        "max-md:relative max-md:block max-md:rounded-xl max-md:border max-md:overflow-hidden",
         className,
       )}
       {...props}
@@ -133,23 +191,25 @@ function TableHead({ className, ...props }: React.ComponentProps<"th">) {
   );
 }
 
-function TableCell({ className, ...props }: React.ComponentProps<"td">) {
+function TableCell({
+  className,
+  children,
+  ...props
+}: React.ComponentProps<"td">) {
   return (
     <td
       data-slot="table-cell"
       className={cn(
-        "p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
-        // Phones: "Label ........ value" line inside the row card.
-        "max-md:flex max-md:items-center max-md:justify-between max-md:gap-4 max-md:p-0 max-md:whitespace-normal max-md:text-right max-md:min-h-8",
-        "max-md:before:content-[attr(data-label)] max-md:before:shrink-0 max-md:before:text-left max-md:before:text-xs max-md:before:font-medium max-md:before:text-muted-foreground",
-        // Full-width cells (empty state, expanded detail) and cells with no
-        // value shouldn't render as label/value lines.
-        "max-md:[&[colspan]]:block max-md:[&[colspan]]:p-4 max-md:[&[colspan]]:text-left max-md:[&[colspan]]:before:hidden",
-        "max-md:empty:hidden",
+        "md:p-2 md:whitespace-nowrap align-middle md:[&:has([role=checkbox])]:pr-0 md:[&_[role=checkbox]]:translate-y-[2px]",
         className,
       )}
       {...props}
-    />
+    >
+      {/* Wrapper is `display: contents` on desktop (no layout change) and the
+          value column on phones, so multi-node values (text + badge, several
+          buttons) stay together next to the label. */}
+      <div data-slot="table-cell-value">{children}</div>
+    </td>
   );
 }
 

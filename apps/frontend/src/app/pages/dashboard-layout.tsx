@@ -180,19 +180,21 @@ function Sidebar({ collapsed, showToggle, onToggle, onNavigate, isActive, navIte
           ))}
         </div>
 
-        {/* Both states use the same ChevronRight icon (rotated 180° when
-             expanded) so the toggle looks consistent either way. The toggle
-             is hidden on mobile, where a collapsed w-16 drawer is useless. */}
+        {/* Same ChevronRight icon in both states (rotated 180° when expanded).
+             Shown in the desktop sidebar and the phone drawer alike; the
+             label makes the action obvious on touch screens. */}
         {showToggle && (
-            <div className="p-2">
+            <div className="border-t p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
               <Button
                   variant="ghost"
                   size="sm"
-                  className="w-full text-muted-foreground hover:text-foreground"
+                  className="h-10 w-full gap-2 text-muted-foreground hover:text-foreground md:h-8"
                   onClick={onToggle}
                   title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                  aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
               >
                 <ChevronRight className={`h-4 w-4 transition-transform ${collapsed ? '' : 'rotate-180'}`} />
+                {!collapsed && <span className="text-xs font-medium">Collapse</span>}
               </Button>
             </div>
         )}
@@ -319,8 +321,9 @@ export function DashboardLayout() {
 
   const isActive = (path: string) => location.pathname === path;
 
-  // 4: Reset sidebarCollapsed to false whenever the mobile drawer opens so
-  //         the user never gets a barely-usable 64 px mobile panel.
+  // 4: Each time the phone drawer opens it starts expanded (labels visible);
+  //         the user can still switch it to the compact icon rail with the
+  //         toggle at the bottom of the drawer.
   const handleMobileToggle = () => {
     setMobileOpen((open) => {
       if (!open) setSidebarCollapsed(false);
@@ -459,10 +462,10 @@ export function DashboardLayout() {
                     aria-label="Close menu"
                 />
                 <aside className={`absolute left-0 top-14 bottom-0 max-w-[85vw] bg-background border-r shadow-lg flex flex-col transition-all duration-200 ${sidebarCollapsed ? 'w-16' : 'w-64'}`}>
-                  {/* Same Sidebar component as desktop; no collapse toggle on mobile */}
+                  {/* Same Sidebar component as desktop, including the compact toggle */}
                   <Sidebar
                       collapsed={sidebarCollapsed}
-                      showToggle={false}
+                      showToggle={true}
                       onToggle={() => setSidebarCollapsed((c) => !c)}
                       onNavigate={handleSidebarNavigate}
                       isActive={isActive}

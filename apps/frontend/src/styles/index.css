@@ -12,3 +12,208 @@ img, svg, video, canvas { max-width: 100%; height: auto; }
 }
 /* Respect notches / home-indicator */
 body { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+
+/* ── Table → card (phones) ────────────────────────────────────────────────
+   <Table> (components/ui/table.tsx) tags cells with data-kind / data-label /
+   data-first. On desktop everything below is inert (the value wrapper is
+   `display: contents`). Below md each row is one card:
+
+     ┌────────────────────────────┐
+     │ TITLE (primary cell)   [✓] │  ← select / aux cell floats top-right
+     │ ────────────────────────── │
+     │ Label              value   │  ← field rows, hairline separated
+     │ Label              value   │
+     │ ▒▒▒▒▒▒▒▒▒▒▒  ⇄  ✎  🗑  ▒▒▒ │  ← actions footer, 44px targets
+     └────────────────────────────┘
+
+   Everything sits in the `components` layer so a call-site utility class
+   (e.g. bg-primary/5 for a selected row) still wins; !important is used only
+   where a call-site utility would otherwise break the card (fixed widths,
+   nowrap/truncate, tiny hit areas).                                         */
+@layer components {
+  [data-slot="table-cell-value"] { display: contents; }
+
+  @media (max-width: 767px) {
+    :root { --card-hairline: color-mix(in oklab, var(--border) 70%, transparent); }
+
+    [data-slot="table-row"] {
+      background-color: var(--card);
+      box-shadow: 0 1px 2px rgb(16 24 40 / 0.05);
+      transition: border-color .15s, box-shadow .15s, background-color .15s;
+    }
+
+    /* selected card (members / add-members tables) */
+    [data-slot="table-row"]:has([data-kind="select"] [role="checkbox"][data-state="checked"]) {
+      border-color: color-mix(in oklab, var(--primary) 45%, transparent);
+      box-shadow: 0 0 0 1px color-mix(in oklab, var(--primary) 30%, transparent);
+    }
+
+    [data-slot="table-cell"] {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: .625rem 1rem !important;
+      min-height: 2.75rem;
+      text-align: right !important;
+      white-space: normal !important;
+      max-width: none !important;
+      overflow: visible !important;
+      text-overflow: clip !important;
+      border-top: 1px solid var(--card-hairline);
+    }
+    [data-slot="table-cell"][data-first="true"] { border-top: 0; }
+
+    [data-slot="table-cell"]::before {
+      content: attr(data-label);
+      flex: 0 0 auto;
+      max-width: 42%;
+      font-size: .75rem;
+      line-height: 1.25;
+      font-weight: 500;
+      text-align: left;
+      color: var(--muted-foreground);
+    }
+
+    [data-slot="table-cell-value"] {
+      display: flex;
+      flex: 1 1 auto;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-end;
+      gap: .25rem .5rem;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    /* cells with nothing to show are dropped instead of leaving a blank row */
+    [data-slot="table-cell"]:has(> [data-slot="table-cell-value"]:empty) { display: none; }
+
+    /* form controls inside a row (add-members tables) fill the value column */
+    [data-slot="table-cell"] input:not([type="checkbox"]):not([type="radio"]),
+    [data-slot="table-cell"] [role="combobox"],
+    [data-slot="table-cell"] [data-slot="select-trigger"] {
+      width: 100% !important;
+      max-width: none !important;
+      min-height: 2.5rem;
+      text-align: left;
+    }
+    [data-slot="table-cell"]:has(input:not([type="checkbox"]), [role="combobox"]) [data-slot="table-cell-value"] {
+      flex-wrap: nowrap;
+    }
+    [data-slot="table-cell"]:has(input:not([type="checkbox"]), [role="combobox"]) { padding-block: .5rem !important; }
+
+    /* ── primary: the card title ── */
+    [data-slot="table-cell"][data-kind="primary"] {
+      justify-content: flex-start;
+      text-align: left !important;
+      padding: .875rem 3.25rem .5rem 1rem !important;
+      font-size: .9375rem;
+      font-weight: 600;
+      min-height: 0;
+      border-top: 0;
+    }
+    [data-slot="table-cell"][data-kind="primary"]::before { display: none; }
+    [data-slot="table-cell"][data-kind="primary"] [data-slot="table-cell-value"] {
+      justify-content: flex-start;
+      gap: .25rem .5rem;
+    }
+    /* a title row sits directly on the first field, so drop that hairline */
+    [data-slot="table-cell"][data-kind="primary"] + [data-slot="table-cell"][data-kind="field"] {
+      border-top: 0;
+      padding-top: .25rem !important;
+    }
+    [data-slot="table-cell"][data-kind="primary"] + [data-slot="table-cell"][data-kind="field"] ~ [data-slot="table-cell"][data-kind="field"] { border-top: 1px solid var(--card-hairline); }
+
+    /* ── select / aux: float top-right, no row of their own ── */
+    [data-slot="table-cell"][data-kind="select"],
+    [data-slot="table-cell"][data-kind="aux"] {
+      position: absolute;
+      top: .375rem;
+      right: .5rem;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 2.5rem;
+      height: 2.5rem;
+      min-height: 0;
+      padding: 0 !important;
+      border: 0;
+    }
+    [data-slot="table-cell"][data-kind="select"]::before,
+    [data-slot="table-cell"][data-kind="aux"]::before { display: none; }
+    [data-slot="table-cell"][data-kind="select"] [data-slot="table-cell-value"],
+    [data-slot="table-cell"][data-kind="aux"] [data-slot="table-cell-value"] { flex: 0 0 auto; justify-content: center; }
+    /* checkbox + remove button in the same card: sit side by side */
+    [data-slot="table-row"]:has(> [data-kind="aux"]) > [data-kind="select"] { right: 3rem; }
+    [data-slot="table-cell"][data-kind="aux"] button { min-width: 2.5rem; min-height: 2.5rem; }
+    /* the expand chevron rotates with its row's state */
+    [data-slot="table-cell"][data-kind="aux"] svg { width: 1.125rem; height: 1.125rem; }
+
+    /* ── actions: footer strip ── */
+    [data-slot="table-cell"][data-kind="actions"] {
+      justify-content: flex-end;
+      padding: .375rem .5rem !important;
+      min-height: 0;
+      background: color-mix(in oklab, var(--muted) 45%, transparent);
+    }
+    [data-slot="table-cell"][data-kind="actions"]::before { display: none; }
+    [data-slot="table-cell"][data-kind="actions"] [data-slot="table-cell-value"] { justify-content: flex-end; gap: .125rem; flex-wrap: nowrap; }
+    [data-slot="table-cell"][data-kind="actions"] [data-slot="table-cell-value"] > div { justify-content: flex-end; }
+    [data-slot="table-cell"][data-kind="actions"] button,
+    [data-slot="table-cell"][data-kind="actions"] a[role="button"] {
+      min-width: 2.5rem !important;
+      min-height: 2.5rem !important;
+    }
+    [data-slot="table-cell"][data-kind="actions"] svg { width: 1.0625rem !important; height: 1.0625rem !important; }
+
+    /* ── checkboxes: real touch targets ── */
+    [data-slot="table-cell"] [role="checkbox"] {
+      position: relative;
+      width: 1.25rem !important;
+      height: 1.25rem !important;
+      border-radius: .375rem;
+    }
+    [data-slot="table-cell"] [role="checkbox"]::after { content: ""; position: absolute; inset: -.625rem; }
+    [data-slot="table-cell"] [role="checkbox"] svg { width: .875rem; height: .875rem; }
+
+    /* ── detail (expanded) row: welded to the card above ── */
+    [data-slot="table-row"][data-kind="detail"] {
+      margin-top: -0.75rem;
+      border-top: 0;
+      border-top-left-radius: 0;
+      border-top-right-radius: 0;
+      box-shadow: none;
+      background: color-mix(in oklab, var(--muted) 45%, transparent);
+    }
+    [data-slot="table-row"]:has(+ [data-slot="table-row"][data-kind="detail"]) {
+      border-bottom-left-radius: 0;
+      border-bottom-right-radius: 0;
+      border-bottom-color: transparent;
+      box-shadow: none;
+    }
+    [data-slot="table-cell"][data-kind="detail"] {
+      display: block;
+      text-align: left !important;
+      padding: .75rem 1rem !important;
+      border-top: 1px dashed var(--card-hairline);
+    }
+    [data-slot="table-cell"][data-kind="detail"]::before { display: none; }
+    [data-slot="table-cell"][data-kind="detail"] [data-slot="table-cell-value"] { display: block; }
+
+    /* ── empty state: a quiet dashed placeholder, not a card ── */
+    [data-slot="table-row"][data-kind="empty"] {
+      border-style: dashed;
+      background: transparent;
+      box-shadow: none;
+    }
+    [data-slot="table-cell"][data-kind="empty"] {
+      display: block;
+      text-align: center !important;
+      padding: 2rem 1rem !important;
+      color: var(--muted-foreground);
+    }
+    [data-slot="table-cell"][data-kind="empty"]::before { display: none; }
+    [data-slot="table-cell"][data-kind="empty"] [data-slot="table-cell-value"] { display: block; }
+  }
+}

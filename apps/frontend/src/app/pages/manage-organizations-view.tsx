@@ -1061,7 +1061,7 @@ function ManageAssignmentsDialog({
                 No scope assignments. Add one below.
               </div>
             ) : (
-              <div className="border rounded-md overflow-hidden">
+              <div className="border rounded-md overflow-hidden max-md:border-0 max-md:rounded-none max-md:overflow-visible">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -1996,27 +1996,39 @@ function BulkActionBar({
 }) {
   const allSelected = selectedCount === totalCount && totalCount > 0;
   return (
-    <div className="flex items-center gap-3 px-3 py-2 bg-primary/5 border border-primary/20 rounded-lg flex-wrap">
-      <div className="flex items-center gap-2 min-w-0">
-        <span className="text-sm font-semibold text-primary tabular-nums">
-          {selectedCount}
-        </span>
-        <span className="text-sm text-muted-foreground">
-          of {totalCount} selected
-        </span>
+    <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 md:flex md:flex-wrap md:items-center md:gap-3 md:rounded-lg md:px-3 md:py-2">
+      {/* Row 1 (phones): count + select-all on the left, clear on the right */}
+      <div className="flex items-center gap-3 md:contents">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="text-sm font-semibold text-primary tabular-nums">
+            {selectedCount}
+          </span>
+          <span className="text-sm text-muted-foreground">
+            of {totalCount} selected
+          </span>
+        </div>
+        <Separator orientation="vertical" className="h-4" />
+        <button
+          className="text-xs text-primary hover:underline font-medium whitespace-nowrap py-1"
+          onClick={allSelected ? onClearSelection : onSelectAll}
+        >
+          {allSelected ? "Clear all" : `Select all ${totalCount}`}
+        </button>
+        <button
+          className="ml-auto -mr-1 grid size-8 place-items-center rounded-md text-muted-foreground hover:bg-primary/10 hover:text-foreground md:hidden"
+          onClick={onClearSelection}
+          title="Clear selection"
+          aria-label="Clear selection"
+        >
+          <X className="w-4 h-4" />
+        </button>
       </div>
-      <Separator orientation="vertical" className="h-4" />
-      <button
-        className="text-xs text-primary hover:underline font-medium whitespace-nowrap"
-        onClick={allSelected ? onClearSelection : onSelectAll}
-      >
-        {allSelected ? "Clear all" : `Select all ${totalCount}`}
-      </button>
-      <div className="ml-auto flex items-center gap-2">
+      {/* Row 2 (phones): three equal, full-width actions */}
+      <div className="mt-3 grid grid-cols-3 gap-2 md:mt-0 md:ml-auto md:flex md:items-center">
         <Button
           size="sm"
           variant="outline"
-          className="h-7 text-xs gap-1.5"
+          className="h-10 gap-1.5 bg-card px-2 text-xs md:h-7"
           onClick={onBulkMove}
         >
           <ArrowLeftRight className="w-3.5 h-3.5" /> Move
@@ -2024,7 +2036,7 @@ function BulkActionBar({
         <Button
           size="sm"
           variant="outline"
-          className="h-7 text-xs gap-1.5"
+          className="h-10 gap-1.5 bg-card px-2 text-xs md:h-7"
           onClick={onBulkEdit}
         >
           <Pencil className="w-3.5 h-3.5" /> Edit roles
@@ -2032,13 +2044,13 @@ function BulkActionBar({
         <Button
           size="sm"
           variant="outline"
-          className="h-7 text-xs gap-1.5 text-destructive border-destructive/30 hover:bg-destructive/5 hover:text-destructive"
+          className="h-10 gap-1.5 bg-card px-2 text-xs text-destructive border-destructive/30 hover:bg-destructive/5 hover:text-destructive md:h-7"
           onClick={onBulkRemove}
         >
           <Trash2 className="w-3.5 h-3.5" /> Remove
         </Button>
         <button
-          className="text-muted-foreground hover:text-foreground ml-1"
+          className="ml-1 hidden text-muted-foreground hover:text-foreground md:block"
           onClick={onClearSelection}
           title="Clear selection"
         >
@@ -2692,7 +2704,7 @@ function AddMembersDialog({
                 <p className="text-xs text-muted-foreground">
                   Enter members below. You'll assign scopes on the next screen.
                 </p>
-                <div className="border rounded-md overflow-hidden">
+                <div className="border rounded-md overflow-hidden max-md:border-0 max-md:rounded-none max-md:overflow-visible">
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -2937,7 +2949,7 @@ function AddMembersDialog({
                 </div>
               )}
 
-              <div className="border rounded-md overflow-hidden">
+              <div className="border rounded-md overflow-hidden max-md:border-0 max-md:rounded-none max-md:overflow-visible">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -3782,7 +3794,7 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
           {membersLoading ? (
             <ListSkeleton rows={6} />
           ) : (
-            <div className="border rounded-md overflow-hidden">
+            <div className="border rounded-md overflow-hidden max-md:border-0 max-md:rounded-none max-md:overflow-visible">
               <Table>
                 <TableHeader>
                   <TableRow>
