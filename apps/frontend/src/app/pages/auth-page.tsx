@@ -687,7 +687,7 @@ export function AuthPage() {
       />
 
       <Dialog open={showWhatsAppHelp} onOpenChange={setShowWhatsAppHelp}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Using Mobile Number?</DialogTitle>
           </DialogHeader>

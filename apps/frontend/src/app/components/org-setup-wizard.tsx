@@ -221,7 +221,7 @@ export function OrgSetupWizardDialog({ request, onClose, onSuccess }: Props) {
           if (!o) handleClose();
         }}
       >
-        <DialogContent className="max-w-lg max-h-[90dvh] overflow-y-auto">
+        <DialogContent className="sm:max-w-lg max-h-[90dvh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Set Up Your Organization</DialogTitle>
             <DialogDescription>

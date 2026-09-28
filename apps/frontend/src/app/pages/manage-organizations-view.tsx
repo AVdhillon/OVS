@@ -635,7 +635,7 @@ function SubmitOrgRequestModal({
           if (!o) handleClose();
         }}
       >
-        <DialogContent className="max-w-lg max-h-[90dvh] overflow-y-auto">
+        <DialogContent className="sm:max-w-lg max-h-[90dvh] overflow-y-auto">
           {step === "intro" ? (
             <>
               <DialogHeader>
@@ -841,7 +841,7 @@ function SubmitOrgRequestModal({
       {/* Spinner overlay while the request submits after OTP verification */}
       {submitting && !otpOpen && (
         <Dialog open>
-          <DialogContent className="max-w-xs text-center py-8">
+          <DialogContent className="sm:max-w-xs text-center py-8">
             <Loader2 className="h-8 w-8 animate-spin mx-auto text-primary" />
             <p className="text-sm text-muted-foreground mt-3">
               Submitting request…
@@ -1038,7 +1038,7 @@ function ManageAssignmentsDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onClose}>
-        <DialogContent className="max-w-2xl max-h-[90dvh] flex flex-col gap-0 p-0">
+        <DialogContent className="sm:max-w-2xl max-h-[90dvh] flex flex-col gap-0 p-0">
           <div className="px-6 pt-5 pb-4 border-b">
             <DialogTitle className="text-base font-semibold">
               Manage Assignments
@@ -1750,7 +1750,7 @@ function BulkEditDialog({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Bulk Edit Members</DialogTitle>
           <DialogDescription>
@@ -2653,7 +2653,7 @@ function AddMembersDialog({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-3xl max-h-[90dvh] flex flex-col gap-0 p-0">
+      <DialogContent className="sm:max-w-3xl max-h-[90dvh] flex flex-col gap-0 p-0">
         <div className="px-6 pt-6 pb-4 border-b">
           <DialogTitle className="text-base font-semibold">
             Add Members to {org.org_name}

@@ -197,7 +197,7 @@ function AddIdentityDialog({
           if (!o) handleClose();
         }}
       >
-        <DialogContent className="max-w-sm">
+        <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>Link Identity</DialogTitle>
             <DialogDescription>
@@ -291,7 +291,7 @@ function AddIdentityDialog({
       {/* Spinner overlay while submitting after OTP */}
       {submitting && (
         <Dialog open>
-          <DialogContent className="max-w-xs text-center py-8">
+          <DialogContent className="sm:max-w-xs text-center py-8">
             <Loader2 className="h-8 w-8 animate-spin mx-auto text-primary" />
             <p className="text-sm text-muted-foreground mt-3">
               Linking identity…

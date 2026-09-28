@@ -252,7 +252,7 @@ function ResubmitOrgRequestDialog({
           if (!o) handleClose();
         }}
       >
-        <DialogContent className="max-w-lg max-h-[90dvh] overflow-y-auto">
+        <DialogContent className="sm:max-w-lg max-h-[90dvh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Edit &amp; Resubmit Request</DialogTitle>
             <DialogDescription>
@@ -368,7 +368,7 @@ function ResubmitOrgRequestDialog({
 
       {submitting && !otpOpen && (
         <Dialog open>
-          <DialogContent className="max-w-xs text-center py-8">
+          <DialogContent className="sm:max-w-xs text-center py-8">
             <Loader2 className="h-8 w-8 animate-spin mx-auto text-primary" />
             <p className="text-sm text-muted-foreground mt-3">
               Resubmitting request…
