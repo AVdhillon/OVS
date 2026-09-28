@@ -24,7 +24,7 @@ function PublicRoute() {
   const { loading, admin } = useAdminContext();
   if (loading)
     return (
-      <div className="flex h-screen items-center justify-center text-muted-foreground">
+      <div className="flex h-dvh items-center justify-center text-muted-foreground">
         Loading...
       </div>
     );
@@ -36,7 +36,7 @@ function ProtectedRoute() {
   const { loading, admin } = useAdminContext();
   if (loading)
     return (
-      <div className="flex h-screen items-center justify-center text-muted-foreground">
+      <div className="flex h-dvh items-center justify-center text-muted-foreground">
         Loading...
       </div>
     );

@@ -91,7 +91,7 @@ function OrgAccountView({ session }: { session: Session }) {
 
         {/* Page header */}
         <div className="mb-6">
-          <h1 className="text-2xl font-bold tracking-tight mb-1">Account</h1>
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight mb-1">Account</h1>
           <p className="text-sm text-muted-foreground">Your organization membership details</p>
         </div>
 
@@ -433,7 +433,7 @@ export function ManageAccountView() {
                 {/* Email */}
                 <div className="space-y-1.5">
                   <Label htmlFor="email">Email</Label>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2 sm:flex-nowrap">
                     <Input
                         id="email"
                         type="email"
@@ -444,7 +444,7 @@ export function ManageAccountView() {
                           setEmailOtp('');
                         }}
                         disabled={!isEditing}
-                        className="flex-1"
+                        className="min-w-0 flex-1 basis-40"
                     />
                     {isEditing && emailChanged && (
                         <Button
@@ -476,7 +476,7 @@ export function ManageAccountView() {
                 {/* Mobile */}
                 <div className="space-y-1.5">
                   <Label htmlFor="mobile">Mobile <span className="text-muted-foreground font-normal text-xs">(10 digits)</span></Label>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2 sm:flex-nowrap">
                     <Input
                         id="mobile"
                         type="tel"
@@ -531,7 +531,7 @@ export function ManageAccountView() {
             {isEditing && (
                 <>
                   <Separator />
-                  <div className="flex gap-2 pt-1">
+                  <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row">
                     <Button onClick={handleSave} disabled={saving}>
                       {saving ? 'Saving…' : 'Save Changes'}
                     </Button>

@@ -635,7 +635,7 @@ function SubmitOrgRequestModal({
           if (!o) handleClose();
         }}
       >
-        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-lg max-h-[90dvh] overflow-y-auto">
           {step === "intro" ? (
             <>
               <DialogHeader>
@@ -1038,7 +1038,7 @@ function ManageAssignmentsDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onClose}>
-        <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col gap-0 p-0">
+        <DialogContent className="max-w-2xl max-h-[90dvh] flex flex-col gap-0 p-0">
           <div className="px-6 pt-5 pb-4 border-b">
             <DialogTitle className="text-base font-semibold">
               Manage Assignments
@@ -2653,7 +2653,7 @@ function AddMembersDialog({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col gap-0 p-0">
+      <DialogContent className="max-w-3xl max-h-[90dvh] flex flex-col gap-0 p-0">
         <div className="px-6 pt-6 pb-4 border-b">
           <DialogTitle className="text-base font-semibold">
             Add Members to {org.org_name}
@@ -2825,7 +2825,7 @@ function AddMembersDialog({
                   onChange={(v) => setDefaultScopeId(v === "all" ? "" : v)}
                   allowAll
                   placeholder="Org root"
-                  className="w-56 flex-shrink-0"
+                  className="w-full sm:w-56 sm:flex-shrink-0"
                 />
               </div>
 
@@ -2853,7 +2853,7 @@ function AddMembersDialog({
                   value={reviewRoleFilter}
                   onValueChange={(v) => setReviewRoleFilter(v as any)}
                 >
-                  <SelectTrigger className="w-36 h-8 text-sm">
+                  <SelectTrigger className="w-full sm:w-36 h-8 text-sm">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -3074,7 +3074,7 @@ function AddMembersDialog({
           )}
         </div>
 
-        <div className="px-6 py-4 border-t flex items-center justify-between gap-3">
+        <div className="px-4 py-3 sm:px-6 sm:py-4 border-t flex flex-wrap items-center justify-between gap-3">
           <div>
             {step === "review" && (
               <p className="text-xs text-muted-foreground">
@@ -3633,12 +3633,12 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-5">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-semibold leading-tight">
+      <div className="flex items-start justify-between gap-3 sm:gap-4">
+        <div className="min-w-0">
+          <h2 className="text-lg font-semibold leading-tight break-words">
             {org.org_name}
           </h2>
-          <div className="flex items-center gap-2 mt-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1">
             <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded text-muted-foreground">
               {org.orgid}
             </span>
@@ -3673,13 +3673,13 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
         <TabsContent value="members" className="space-y-3 mt-4">
           <div className="space-y-2">
             <div className="flex gap-2 flex-wrap items-center">
-              <div className="relative">
+              <div className="relative w-full sm:w-auto">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
                 <Input
                   placeholder="Search UID, email or mobile…"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-8 pr-7 w-56"
+                  className="pl-8 pr-7 w-full sm:w-56"
                 />
                 {searchQuery && (
                   <button
@@ -3695,7 +3695,7 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
                 value={roleFilter}
                 onValueChange={(v) => setRoleFilter(v as any)}
               >
-                <SelectTrigger className="w-40">
+                <SelectTrigger className="w-full sm:w-40">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -3714,7 +3714,7 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
                 onChange={setScopeFilter}
                 allowAll
                 placeholder="All scopes"
-                className="w-44"
+                className="w-full sm:w-44"
               />
               {hasActiveFilters && (
                 <Button
@@ -3730,7 +3730,7 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
                   Clear filters
                 </Button>
               )}
-              <div className="ml-auto flex items-center gap-2">
+              <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
                 <Button
                   variant="outline"
                   size="sm"
@@ -4032,13 +4032,13 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Card>
-                <CardHeader className="pb-2 pt-4 px-4">
+                <CardHeader className="pb-2 pt-4 px-4 sm:pt-4 sm:px-4">
                   <CardTitle className="text-sm">Hierarchy</CardTitle>
                   <CardDescription className="text-xs">
                     Click a node to view or edit
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="px-2 pb-4">
+                <CardContent className="px-2 pb-4 sm:px-2">
                   {scopeTree.length === 0 ? (
                     <p className="text-sm text-muted-foreground px-2">
                       No scopes found
@@ -4057,12 +4057,12 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
                 </CardContent>
               </Card>
               <Card>
-                <CardHeader className="pb-2 pt-4 px-4">
+                <CardHeader className="pb-2 pt-4 px-4 sm:pt-4 sm:px-4">
                   <CardTitle className="text-sm">
                     {selectedScope ? "Scope Actions" : "Select a Scope"}
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="px-4 pb-4">
+                <CardContent className="px-4 pb-4 sm:px-4">
                   {!selectedScope ? (
                     <p className="text-sm text-muted-foreground">
                       Select a node from the hierarchy to rename, add children,
@@ -4181,9 +4181,9 @@ export function ManageOrganizationsView() {
 
   return (
     <div className="max-w-5xl mx-auto">
-      <div className="mb-6 flex items-start justify-between gap-4">
+      <div className="mb-6 flex flex-col items-start justify-between gap-3 sm:flex-row sm:gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight mb-1">
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight mb-1">
             Organizations
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -4249,7 +4249,7 @@ export function ManageOrganizationsView() {
         </Card>
       ) : isOrg ? (
         <Card>
-          <CardContent className="pt-5 pb-6 px-5">
+          <CardContent className="pt-5 pb-6 px-5 sm:px-5">
             {selectedOrg && (
               <ManageOrgPanel key={selectedOrg.orgid} org={selectedOrg} />
             )}
@@ -4282,7 +4282,7 @@ export function ManageOrganizationsView() {
           <div className="md:col-span-3">
             {selectedOrg ? (
               <Card>
-                <CardContent className="pt-5 pb-6 px-5">
+                <CardContent className="pt-5 pb-6 px-5 sm:px-5">
                   <ManageOrgPanel key={selectedOrg.orgid} org={selectedOrg} />
                 </CardContent>
               </Card>

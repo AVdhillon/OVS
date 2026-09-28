@@ -534,9 +534,9 @@ function EditEventSheet({
     <Sheet open={!!event} onOpenChange={(open) => !open && onClose()}>
       <SheetContent
         side="right"
-        className="w-full sm:max-w-lg flex flex-col gap-0 p-0"
+        className="w-full max-w-full sm:max-w-lg flex flex-col gap-0 p-0"
       >
-        <SheetHeader className="px-6 py-5 border-b">
+        <SheetHeader className="px-4 py-4 sm:px-6 sm:py-5 border-b">
           <SheetTitle className="text-left">
             {editable ? "Edit Event" : "Event Details"}
           </SheetTitle>
@@ -547,7 +547,7 @@ function EditEventSheet({
           </SheetDescription>
         </SheetHeader>
 
-        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+        <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5 space-y-6">
           {/* Details */}
           <section className="space-y-4">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
@@ -579,7 +579,7 @@ function EditEventSheet({
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
               Timeline
             </p>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 min-[480px]:grid-cols-2">
               {(
                 [
                   {
@@ -712,7 +712,7 @@ function EditEventSheet({
                 <p className="text-xs font-medium text-muted-foreground">
                   Add candidate
                 </p>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 gap-2 min-[480px]:grid-cols-2">
                   <Input
                     placeholder="Name"
                     value={newCandName}
@@ -740,7 +740,7 @@ function EditEventSheet({
         </div>
 
         {editable && (
-          <div className="px-6 py-4 border-t flex gap-3">
+          <div className="px-4 py-3 sm:px-6 sm:py-4 border-t flex gap-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
             <Button
               variant="outline"
               onClick={onClose}
@@ -817,7 +817,7 @@ function MyEventsList({
               key={event.event_id}
               className="hover:shadow-sm transition-shadow"
             >
-              <CardContent className="py-4 px-5">
+              <CardContent className="py-4 px-5 sm:px-5">
                 <div className="flex items-start gap-4">
                   <div className="flex-1 min-w-0 space-y-1.5">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -1293,9 +1293,9 @@ export function ManageEventsView() {
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">
             Manage Events
           </h1>
           <p className="text-muted-foreground text-sm mt-1">
@@ -1322,7 +1322,7 @@ export function ManageEventsView() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-3 gap-2 sm:gap-3">
         {(
           [
             {
@@ -1333,8 +1333,8 @@ export function ManageEventsView() {
             { label: "Live now", value: liveCount },
           ] as { label: string; value: number | string }[]
         ).map(({ label, value }) => (
-          <Card key={label} className="py-4 px-5">
-            <p className="text-2xl font-bold">{value}</p>
+          <Card key={label} className="py-3 px-3 sm:py-4 sm:px-5">
+            <p className="text-xl sm:text-2xl font-bold">{value}</p>
             <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
           </Card>
         ))}

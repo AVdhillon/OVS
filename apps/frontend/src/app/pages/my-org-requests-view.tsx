@@ -252,7 +252,7 @@ function ResubmitOrgRequestDialog({
           if (!o) handleClose();
         }}
       >
-        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-lg max-h-[90dvh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Edit &amp; Resubmit Request</DialogTitle>
             <DialogDescription>
@@ -528,10 +528,10 @@ export function MyOrgRequestsView() {
   }, []);
 
   return (
-    <div className="max-w-3xl mx-auto space-y-8">
+    <div className="max-w-3xl mx-auto space-y-6 sm:space-y-8">
       {/* Page header */}
       <div>
-        <h1 className="text-2xl font-bold tracking-tight mb-1">My Requests</h1>
+        <h1 className="text-xl sm:text-2xl font-bold tracking-tight mb-1">My Requests</h1>
         <p className="text-sm text-muted-foreground">
           Organization requests you've submitted and their review status
         </p>

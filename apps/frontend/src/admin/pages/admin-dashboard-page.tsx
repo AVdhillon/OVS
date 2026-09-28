@@ -20,9 +20,9 @@ export function AdminDashboardPage() {
   const { admin } = useAdminContext();
 
   return (
-    <div className="min-h-screen bg-muted/30">
+    <div className="min-h-dvh bg-muted/30">
       <AdminHeader />
-      <div className="mx-auto max-w-2xl space-y-4 p-6">
+      <div className="mx-auto max-w-2xl space-y-4 p-4 sm:p-6">
         <Card>
           <CardHeader>
             <CardTitle>Signed in</CardTitle>

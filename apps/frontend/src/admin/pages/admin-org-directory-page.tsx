@@ -114,9 +114,9 @@ export function AdminOrgDirectoryPage() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <div className="min-h-screen bg-muted/30">
+    <div className="min-h-dvh bg-muted/30">
       <AdminHeader />
-      <div className="mx-auto max-w-6xl space-y-4 p-6">
+      <div className="mx-auto max-w-6xl space-y-4 p-4 sm:p-6">
         <div>
           <h1 className="text-xl font-semibold">Organizations</h1>
           <p className="text-sm text-muted-foreground">
@@ -137,15 +137,15 @@ export function AdminOrgDirectoryPage() {
 
           <form
             onSubmit={handleSearchSubmit}
-            className="flex items-center gap-2"
+            className="flex w-full items-center gap-2 sm:w-auto"
           >
-            <div className="relative">
+            <div className="relative min-w-0 flex-1 sm:flex-none">
               <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
                 placeholder="Search by name or orgid..."
-                className="w-64 pl-8"
+                className="w-full pl-8 sm:w-64"
               />
             </div>
             <Button type="submit" variant="outline" size="sm">
@@ -237,7 +237,7 @@ export function AdminOrgDirectoryPage() {
                 </Table>
 
                 {totalPages > 1 && (
-                  <div className="mt-4 flex items-center justify-between">
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
                     <p className="text-sm text-muted-foreground">
                       Page {page} of {totalPages}
                     </p>

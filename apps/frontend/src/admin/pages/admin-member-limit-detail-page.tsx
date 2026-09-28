@@ -188,9 +188,9 @@ export function AdminMemberLimitDetailPage() {
   };
 
   return (
-    <div className="min-h-screen bg-muted/30">
+    <div className="min-h-dvh bg-muted/30">
       <AdminHeader />
-      <div className="mx-auto max-w-3xl space-y-4 p-6">
+      <div className="mx-auto max-w-3xl space-y-4 p-4 sm:p-6">
         <Link
           to="/requests"
           className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
@@ -211,9 +211,9 @@ export function AdminMemberLimitDetailPage() {
           </Card>
         ) : (
           <>
-            <div className="flex items-start justify-between gap-4">
+            <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:gap-4">
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <h1 className="text-xl font-semibold">
                     {detail.organization?.org_name ?? detail.orgid}
                   </h1>
@@ -262,7 +262,7 @@ export function AdminMemberLimitDetailPage() {
                   {detail.requester?.mobile ? ` · ${detail.requester.mobile}` : ""}
                 </CardDescription>
               </CardHeader>
-              <CardContent className="grid grid-cols-2 gap-4">
+              <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
                   <p className="text-sm text-muted-foreground">Current limit</p>
                   <p className="text-lg font-semibold">{detail.current_limit}</p>

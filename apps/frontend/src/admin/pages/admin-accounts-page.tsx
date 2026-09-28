@@ -213,9 +213,9 @@ export function AdminAccountsPage() {
 
   if (!admin?.is_super_admin) {
     return (
-      <div className="min-h-screen bg-muted/30">
+      <div className="min-h-dvh bg-muted/30">
         <AdminHeader />
-        <div className="mx-auto max-w-3xl p-6">
+        <div className="mx-auto max-w-3xl p-4 sm:p-6">
           <Card>
             <CardContent className="space-y-2 py-10 text-center">
               <Shield className="mx-auto h-8 w-8 text-muted-foreground" />
@@ -231,9 +231,9 @@ export function AdminAccountsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-muted/30">
+    <div className="min-h-dvh bg-muted/30">
       <AdminHeader />
-      <div className="mx-auto max-w-5xl space-y-4 p-6">
+      <div className="mx-auto max-w-5xl space-y-4 p-4 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-xl font-semibold">Admin Accounts</h1>
@@ -358,7 +358,7 @@ export function AdminAccountsPage() {
                 </Table>
 
                 {totalPages > 1 && (
-                  <div className="mt-4 flex items-center justify-between">
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
                     <p className="text-sm text-muted-foreground">
                       Page {page} of {totalPages}
                     </p>

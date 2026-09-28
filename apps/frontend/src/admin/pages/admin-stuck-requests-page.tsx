@@ -142,9 +142,9 @@ export function AdminStuckRequestsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-muted/30">
+    <div className="min-h-dvh bg-muted/30">
       <AdminHeader />
-      <div className="mx-auto max-w-5xl space-y-4 p-6">
+      <div className="mx-auto max-w-5xl space-y-4 p-4 sm:p-6">
         <Link
           to="/requests"
           className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
@@ -162,7 +162,7 @@ export function AdminStuckRequestsPage() {
         </div>
 
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-4">
+          <CardHeader className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center sm:gap-4">
             <div>
               <CardTitle className="flex items-center gap-2">
                 <Clock className="size-4 text-muted-foreground" />
@@ -179,7 +179,7 @@ export function AdminStuckRequestsPage() {
               </CardDescription>
             </div>
             <Select value={minHours} onValueChange={setMinHours}>
-              <SelectTrigger className="w-40">
+              <SelectTrigger className="w-full sm:w-40">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

@@ -63,15 +63,15 @@ function WalletCard({ entry }: { entry: WalletIdentity }) {
       </CardHeader>
       <CardContent className="pt-0">
         <div className="space-y-1.5 text-xs">
-          <div className="flex justify-between text-muted-foreground">
+          <div className="flex justify-between gap-3 text-muted-foreground">
             <span>Org ID</span>
-            <span className="font-mono font-medium text-foreground">
+            <span className="font-mono font-medium text-foreground break-all text-right">
               {entry.identity_id}
             </span>
           </div>
-          <div className="flex justify-between text-muted-foreground">
+          <div className="flex justify-between gap-3 text-muted-foreground">
             <span>Member UID</span>
-            <span className="font-mono font-medium text-foreground">
+            <span className="font-mono font-medium text-foreground break-all text-right">
               {entry.uid ?? "—"}
             </span>
           </div>
@@ -252,7 +252,7 @@ function AddIdentityDialog({
             </div>
 
             {/* Actions */}
-            <div className="flex gap-2 pt-1">
+            <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row">
               <Button
                 variant="outline"
                 onClick={handleClose}
@@ -336,11 +336,11 @@ export function IdentityWalletView() {
   const orgEntries = wallet;
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8">
+    <div className="max-w-4xl mx-auto space-y-6 sm:space-y-8">
       {/* Page header */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight mb-1">
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight mb-1">
             Identity Wallet
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -392,7 +392,7 @@ export function IdentityWalletView() {
                         </span>
                       )}
                       {user.email && (
-                        <span className="text-xs text-muted-foreground">
+                        <span className="text-xs text-muted-foreground break-all">
                           ✉️ {user.email}
                         </span>
                       )}

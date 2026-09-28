@@ -258,9 +258,9 @@ export function AdminRequestDetailPage() {
   };
 
   return (
-    <div className="min-h-screen bg-muted/30">
+    <div className="min-h-dvh bg-muted/30">
       <AdminHeader />
-      <div className="mx-auto max-w-3xl space-y-4 p-6">
+      <div className="mx-auto max-w-3xl space-y-4 p-4 sm:p-6">
         <Link
           to="/requests"
           className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
@@ -281,9 +281,9 @@ export function AdminRequestDetailPage() {
           </Card>
         ) : (
           <>
-            <div className="flex items-start justify-between gap-4">
+            <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:gap-4">
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <h1 className="text-xl font-semibold">
                     {detail.org_name}
                   </h1>
@@ -351,7 +351,7 @@ export function AdminRequestDetailPage() {
               <CardHeader>
                 <CardTitle>Request details</CardTitle>
               </CardHeader>
-              <CardContent className="grid grid-cols-2 gap-4 text-sm">
+              <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2 text-sm">
                 <div>
                   <p className="text-muted-foreground">Requested email</p>
                   <p>{detail.org_email ?? "—"}</p>
@@ -383,7 +383,7 @@ export function AdminRequestDetailPage() {
               <CardHeader>
                 <CardTitle>Requester</CardTitle>
               </CardHeader>
-              <CardContent className="grid grid-cols-2 gap-4 text-sm">
+              <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2 text-sm">
                 <div>
                   <p className="text-muted-foreground">Name</p>
                   <p>{getRequesterName(detail.requester)}</p>

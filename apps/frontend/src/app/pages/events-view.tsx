@@ -1,4 +1,4 @@
-import {useState, useEffect, useCallback} from 'react';
+import {useState, useEffect, useCallback, useRef} from 'react';
 import {useAppContext, VotingEvent} from '../context/app-context';
 import {api} from '../../lib/api';
 import {Card, CardContent, CardHeader, CardTitle} from '../components/ui/card';
@@ -194,10 +194,13 @@ function EventCard({event, onVote, onViewResults}: EventCardProps) {
                     )}
 
                     {event.has_voted && (
-                        <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-1.5 text-emerald-600 text-sm font-medium">
-                                <CheckCircle2 className="h-4 w-4"/>
-                                <span>Vote submitted</span>
+                        <div
+                            role="status"
+                            className="flex items-center justify-between gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2"
+                        >
+                            <div className="flex items-center gap-2 text-emerald-700 text-sm font-medium">
+                                <CheckCircle2 className="h-4 w-4 shrink-0"/>
+                                <span>You voted ✓</span>
                             </div>
                             {(showResults) && (
                                 <Button
@@ -328,6 +331,9 @@ export function EventsView() {
     const [selectedCandidate, setSelectedCandidate] = useState<number | null>(null);
     const [confirmOpen, setConfirmOpen] = useState(false);
     const [submitting, setSubmitting] = useState(false);
+    // Synchronous guard: state updates are async, so a fast double-tap could
+    // otherwise fire two requests before `submitting` re-renders as true.
+    const submitLockRef = useRef(false);
 
     const filterVoterOnly = (list: VotingEvent[]) =>
         list.filter((e) => e.is_voter);
@@ -397,6 +403,8 @@ export function EventsView() {
 
     const handleSubmitVote = async () => {
         if (!sheetEvent || selectedCandidate === null) return;
+        if (submitLockRef.current) return;
+        submitLockRef.current = true;
 
         setSubmitting(true);
         try {
@@ -418,6 +426,7 @@ export function EventsView() {
         } catch (e: any) {
             toast.error(e.message ?? 'Failed to submit vote');
         } finally {
+            submitLockRef.current = false;
             setSubmitting(false);
         }
     };
@@ -435,9 +444,9 @@ export function EventsView() {
     return (
         <div className="max-w-7xl mx-auto space-y-6">
             {/* Header */}
-            <div className="flex items-start justify-between gap-4">
+            <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:gap-4">
                 <div>
-                    <h1 className="text-2xl font-semibold tracking-tight">My Voting Events</h1>
+                    <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">My Voting Events</h1>
                     <p className="text-muted-foreground text-sm mt-1">
                         View and participate in events you're eligible for
                     </p>
@@ -522,11 +531,11 @@ export function EventsView() {
 
             {/* ── Vote / Results Sheet ─────────────────────────────────────────────── */}
             <Sheet open={!!sheetEvent} onOpenChange={(open) => !open && setSheetEvent(null)}>
-                <SheetContent side="right" className="w-full sm:max-w-lg flex flex-col gap-0 p-0">
+                <SheetContent side="right" className="w-full max-w-full sm:max-w-lg flex flex-col gap-0 p-0">
                     {sheetEvent && (
                         <>
                             {/* Sheet header */}
-                            <SheetHeader className="px-6 py-5 border-b">
+                            <SheetHeader className="px-4 py-4 sm:px-6 sm:py-5 border-b">
                                 <div className="flex items-center gap-2 mb-1">
                                     <StatusBadge event={sheetEvent}/>
                                     {sheetMode === 'results' && (
@@ -554,7 +563,7 @@ export function EventsView() {
                             </SheetHeader>
 
                             {/* Sheet body */}
-                            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+                            <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5 space-y-6">
                                 {sheetLoading ? (
                                     <div className="space-y-4">
                                         {[1, 2, 3].map((i) => (
@@ -640,7 +649,7 @@ export function EventsView() {
                                                             <div key={r.candidate_id} className="space-y-1.5">
                                                                 <div
                                                                     className="flex items-center justify-between text-sm">
-                                                                    <div className="flex items-center gap-2">
+                                                                    <div className="flex items-center gap-2 min-w-0">
                                                                         {i === 0 && (
                                                                             <span
                                                                                 className="text-amber-500 text-xs font-bold">
@@ -648,7 +657,7 @@ export function EventsView() {
                                       </span>
                                                                         )}
                                                                         <span
-                                                                            className="font-medium">{r.candidate_name}</span>
+                                                                            className="font-medium truncate">{r.candidate_name}</span>
                                                                     </div>
                                                                     <div
                                                                         className="flex items-center gap-3 text-muted-foreground shrink-0">
@@ -684,20 +693,21 @@ export function EventsView() {
 
                             {/* Sheet footer */}
                             {sheetMode === 'vote' && !sheetLoading && (
-                                <div className="px-6 py-4 border-t flex gap-3">
+                                <div className="px-4 py-3 sm:px-6 sm:py-4 border-t flex gap-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
                                     <Button
                                         variant="outline"
                                         onClick={() => setSheetEvent(null)}
+                                        disabled={submitting}
                                         className="flex-1"
                                     >
                                         Cancel
                                     </Button>
                                     <Button
                                         onClick={() => setConfirmOpen(true)}
-                                        disabled={selectedCandidate === null}
+                                        disabled={selectedCandidate === null || submitting}
                                         className="flex-1"
                                     >
-                                        Confirm Vote
+                                        {submitting ? 'Submitting…' : 'Confirm Vote'}
                                     </Button>
                                 </div>
                             )}
@@ -707,7 +717,12 @@ export function EventsView() {
             </Sheet>
 
             {/* ── Confirm Dialog ────────────────────────────────────────────────────── */}
-            <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+            <AlertDialog
+                open={confirmOpen}
+                onOpenChange={(open) => {
+                    if (!submitting) setConfirmOpen(open);
+                }}
+            >
                 <AlertDialogContent>
                     <AlertDialogHeader>
                         <AlertDialogTitle>Confirm your vote</AlertDialogTitle>
@@ -720,7 +735,13 @@ export function EventsView() {
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel disabled={submitting}>Go back</AlertDialogCancel>
-                        <AlertDialogAction onClick={handleSubmitVote} disabled={submitting}>
+                        <AlertDialogAction
+                            onClick={(e) => {
+                                e.preventDefault(); // keep dialog open (and button disabled) until the request finishes
+                                handleSubmitVote();
+                            }}
+                            disabled={submitting}
+                        >
                             {submitting ? 'Submitting…' : 'Submit vote'}
                         </AlertDialogAction>
                     </AlertDialogFooter>

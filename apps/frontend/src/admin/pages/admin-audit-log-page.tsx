@@ -503,9 +503,9 @@ export function AdminAuditLogPage() {
     : 1;
 
   return (
-    <div className="min-h-screen bg-muted/30">
+    <div className="min-h-dvh bg-muted/30">
       <AdminHeader />
-      <div className="mx-auto max-w-6xl space-y-4 p-6">
+      <div className="mx-auto max-w-6xl space-y-4 p-4 sm:p-6">
         <div>
           <h1 className="text-xl font-semibold">Audit log</h1>
           <p className="text-sm text-muted-foreground">
@@ -518,7 +518,7 @@ export function AdminAuditLogPage() {
           <CardContent className="pt-6">
             <form
               onSubmit={handleSearchSubmit}
-              className="flex flex-wrap items-end gap-3"
+              className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end"
             >
               <div className="space-y-1.5">
                 <Label htmlFor="admin_id" className="text-xs">
@@ -529,7 +529,7 @@ export function AdminAuditLogPage() {
                   value={adminIdInput}
                   onChange={(e) => setAdminIdInput(e.target.value)}
                   placeholder="SA0001"
-                  className="w-40"
+                  className="w-full sm:w-40"
                 />
               </div>
               <div className="space-y-1.5">
@@ -541,12 +541,12 @@ export function AdminAuditLogPage() {
                   value={targetIdInput}
                   onChange={(e) => setTargetIdInput(e.target.value)}
                   placeholder="ABC1234 or a request id"
-                  className="w-56"
+                  className="w-full sm:w-56"
                 />
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs">Target type</Label>
-                <div className="flex gap-1">
+                <div className="flex flex-wrap gap-1">
                   {(
                     [
                       "ORG_REQUEST",
@@ -657,7 +657,7 @@ export function AdminAuditLogPage() {
                 </Table>
 
                 {totalPages > 1 && (
-                  <div className="mt-4 flex items-center justify-between">
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
                     <p className="text-sm text-muted-foreground">
                       Page {page} of {totalPages}
                     </p>

@@ -215,10 +215,10 @@ export function AdminRequestQueuePage() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <div className="min-h-screen bg-muted/30">
+    <div className="min-h-dvh bg-muted/30">
       <AdminHeader />
-      <div className="mx-auto max-w-5xl space-y-4 p-6">
-        <div className="flex items-start justify-between gap-4">
+      <div className="mx-auto max-w-5xl space-y-4 p-4 sm:p-6">
+        <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:gap-4">
           <div>
             <h1 className="text-xl font-semibold">Requests</h1>
             <p className="text-sm text-muted-foreground">
@@ -251,7 +251,7 @@ export function AdminRequestQueuePage() {
           </Tabs>
 
           <Select value={typeFilter} onValueChange={(v) => handleTypeChange(v as any)}>
-            <SelectTrigger className="w-[200px]">
+            <SelectTrigger className="w-full sm:w-[200px]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -349,7 +349,7 @@ export function AdminRequestQueuePage() {
                 </Table>
 
                 {totalPages > 1 && (
-                  <div className="mt-4 flex items-center justify-between">
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
                     <p className="text-sm text-muted-foreground">
                       Page {page} of {totalPages}
                     </p>

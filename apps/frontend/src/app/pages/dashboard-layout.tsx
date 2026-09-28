@@ -120,7 +120,7 @@ function NavItem({
           title={collapsed ? item.label : undefined}
           // 3a: aria-current for screen readers to identify the active route
           aria-current={isActive ? 'page' : undefined}
-          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors
+          className={`w-full flex items-center gap-3 px-3 py-3 md:py-2.5 rounded-lg text-sm font-medium transition-colors
         ${isActive
               ? 'bg-primary text-primary-foreground'
               : 'text-muted-foreground hover:bg-accent hover:text-foreground'
@@ -152,12 +152,12 @@ function Sidebar({ collapsed, showToggle, onToggle, onNavigate, isActive, navIte
         {/* Logo */}
         <div className={`flex items-center gap-2.5 px-3 py-4 ${collapsed ? 'justify-center' : ''}`}>
           <div className="flex-shrink-0">
-            <svg width="32" height="32" viewBox="0 0 80 80">
+            <svg width="32" height="32" viewBox="0 0 80 80" aria-hidden="true">
               <circle cx="40" cy="40" r="37" fill="#1e40af"/>
-              <circle cx="40" cy="40" r="28" stroke="#6B8AFF" stroke-width="2.5" fill="none"
-                      stroke-dasharray="158 18" transform="rotate(-90 40 40)" stroke-linecap="round"/>
-              <path d="M21 40 L33 52 L59 24" stroke="white" stroke-width="7"
-                    stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+              <circle cx="40" cy="40" r="28" stroke="#6B8AFF" strokeWidth="2.5" fill="none"
+                      strokeDasharray="158 18" transform="rotate(-90 40 40)" strokeLinecap="round"/>
+              <path d="M21 40 L33 52 L59 24" stroke="white" strokeWidth="7"
+                    strokeLinecap="round" strokeLinejoin="round" fill="none"/>
             </svg>
           </div>
           {!collapsed && (
@@ -334,17 +334,19 @@ export function DashboardLayout() {
   };
 
   return (
-      <div className="min-h-screen bg-background flex flex-col">
+      <div className="min-h-dvh bg-background flex flex-col">
 
         {/* ── Top bar ── */}
         <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-          <div className="flex items-center gap-3 px-4 h-14">
+          <div className="flex items-center gap-2 sm:gap-3 px-3 sm:px-4 h-14">
 
             {/* Mobile menu toggle */}
             <Button
                 variant="ghost"
                 size="icon"
                 className="md:hidden flex-shrink-0"
+                aria-label={mobileOpen ? 'Close navigation menu' : 'Open navigation menu'}
+                aria-expanded={mobileOpen}
                 // 4: uses extracted handler that resets collapsed state
                 onClick={handleMobileToggle}
             >
@@ -392,7 +394,7 @@ export function DashboardLayout() {
                   </Avatar>
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuContent align="end" className="w-56 max-w-[calc(100vw-1.5rem)]">
                 <DropdownMenuLabel className="font-normal">
                   <div className="space-y-1">
                     <p className="text-sm font-semibold leading-none">
@@ -456,7 +458,7 @@ export function DashboardLayout() {
                     onClick={() => setMobileOpen(false)}
                     aria-label="Close menu"
                 />
-                <aside className={`absolute left-0 top-14 bottom-0 bg-background border-r shadow-lg flex flex-col transition-all duration-200 ${sidebarCollapsed ? 'w-16' : 'w-64'}`}>
+                <aside className={`absolute left-0 top-14 bottom-0 max-w-[85vw] bg-background border-r shadow-lg flex flex-col transition-all duration-200 ${sidebarCollapsed ? 'w-16' : 'w-64'}`}>
                   {/* Same Sidebar component as desktop; no collapse toggle on mobile */}
                   <Sidebar
                       collapsed={sidebarCollapsed}
@@ -489,7 +491,7 @@ export function DashboardLayout() {
 
           {/* ── Main content ── */}
           <main className="flex-1 min-w-0">
-            <div className="p-6 md:p-8 max-w-screen-xl mx-auto">
+            <div className="p-4 sm:p-6 md:p-8 max-w-screen-xl mx-auto pb-[max(1rem,env(safe-area-inset-bottom))]">
               <Outlet />
             </div>
           </main>

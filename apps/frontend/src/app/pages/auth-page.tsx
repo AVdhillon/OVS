@@ -292,7 +292,7 @@ export function AuthPage() {
   const contactIsPhone = (v: string): boolean => !!v && !v.includes("@");
 
   return (
-    <div className="min-h-screen flex">
+    <div className="min-h-dvh flex">
       {/* ── Left side — Branding ── */}
       <div className="hidden lg:flex lg:w-1/2 bg-[#1e40af] relative overflow-hidden">
         <div className="absolute inset-0 opacity-20">
@@ -362,7 +362,16 @@ export function AuthPage() {
       </div>
 
       {/* ── Right side — Auth forms ── */}
-      <div className="flex-1 flex items-center justify-center p-8 bg-gray-50">
+      <div className="flex-1 flex flex-col items-center justify-center gap-5 px-3 py-6 sm:p-8 bg-gray-50">
+        {/* Compact brand mark — the full branding panel is hidden below lg */}
+        <div className="flex items-center gap-2.5 lg:hidden">
+          <svg width="40" height="40" viewBox="0 0 80 80" aria-hidden="true">
+            <circle cx="40" cy="40" r="37" fill="#1e40af" />
+            <circle cx="40" cy="40" r="28" stroke="#6B8AFF" strokeWidth="2.5" fill="none" strokeDasharray="158 18" transform="rotate(-90 40 40)" strokeLinecap="round" />
+            <path d="M21 40 L33 52 L59 24" stroke="white" strokeWidth="7" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+          </svg>
+          <span className="text-2xl font-bold tracking-tight">VoteCore</span>
+        </div>
         <Card className="w-full max-w-md shadow-lg">
           <CardHeader>
             <CardTitle>Welcome to VoteCore</CardTitle>
@@ -530,7 +539,7 @@ export function AuthPage() {
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="firstName">
                       First Name <span className="text-destructive">*</span>
@@ -583,7 +592,7 @@ export function AuthPage() {
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="country">
                       Country <span className="text-destructive">*</span>
@@ -707,7 +716,7 @@ export function AuthPage() {
               <img
                 src="/whatsappqr.svg"
                 alt="WhatsApp QR"
-                className="w-48 h-48"
+                className="w-40 h-40 sm:w-48 sm:h-48"
               />
             </div>
           </div>

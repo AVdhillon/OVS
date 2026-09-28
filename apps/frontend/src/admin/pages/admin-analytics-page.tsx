@@ -214,9 +214,9 @@ export function AdminAnalyticsPage() {
   );
 
   return (
-    <div className="min-h-screen bg-muted/30">
+    <div className="min-h-dvh bg-muted/30">
       <AdminHeader />
-      <div className="mx-auto max-w-6xl space-y-4 p-6">
+      <div className="mx-auto max-w-6xl space-y-4 p-4 sm:p-6">
         <div>
           <h1 className="text-xl font-semibold">Platform analytics</h1>
           <p className="text-sm text-muted-foreground">
