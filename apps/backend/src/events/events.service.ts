@@ -25,6 +25,9 @@ export class EventsService {
   // GET VISIBLE EVENTS
   // ─────────────────────────────────────────────────────────────────────────
   async getVisibleEvents(user: JwtUser) {
+    // One identity per member_roles row (orgid, uid, scope_id) — a member who
+    // holds several scopes now has each of them evaluated, and the results
+    // are merged below.
     const identities = await this.resolveOrgIdentities(user);
 
     if (identities.length === 0) {
@@ -32,11 +35,16 @@ export class EventsService {
     }
 
     const now = new Date();
-    const active_pending: any[] = [];
-    const voted: any[] = [];
-    const completed: any[] = [];
+    // Merge by event_id across every (org, scope) role row. If an event is
+    // reachable through more than one scope, is_organizer is true when ANY
+    // of those role rows is an organizer role.
+    const merged = new Map<number, any>();
 
-    for (const { orgid, uid, scope_id } of identities) {
+    for (const { orgid, uid, scope_id, is_organizer } of identities) {
+      // is_organizer comes from the SAME member_roles row as scope_id (passed
+      // in as a parameter) instead of LEFT JOINing member_roles on
+      // (orgid, uid) alone, which paired one row's organizer flag with a
+      // different row's scope.
       const rows = await this.prisma.$queryRaw<any[]>`
         SELECT e.event_id,
                e.orgid,
@@ -52,21 +60,18 @@ export class EventsService {
                e.created_by_uid,
                ep.has_voted,
                CASE WHEN ep.uid IS NOT NULL THEN TRUE ELSE FALSE END AS is_voter,
-               COALESCE(mr.is_organizer, FALSE)                      AS is_organizer
+               ${is_organizer}::boolean                              AS is_organizer
         FROM events e
                LEFT JOIN event_participants ep
                          ON ep.event_id = e.event_id
                            AND ep.orgid = ${orgid}
                            AND ep.uid = ${uid}
-               LEFT JOIN member_roles mr
-                         ON mr.orgid = ${orgid}
-                           AND mr.uid = ${uid}
         WHERE e.orgid = ${orgid}
           AND e.is_deleted = FALSE
           AND (
           -- Organizer can always see events within their scope downward (manages them)
           (
-            mr.is_organizer = TRUE
+            ${is_organizer}::boolean = TRUE
               AND e.scope_id IN (SELECT scope_id FROM get_scope_descendants(${scope_id}::int))
             )
             OR
@@ -93,7 +98,12 @@ export class EventsService {
       `;
 
       for (const ev of rows) {
-        const entry = {
+        const existing = merged.get(ev.event_id);
+        if (existing) {
+          existing.is_organizer = existing.is_organizer || ev.is_organizer;
+          continue;
+        }
+        merged.set(ev.event_id, {
           ...ev,
           start_time: ev.start_time?.toISOString(),
           end_time: ev.end_time?.toISOString(),
@@ -102,33 +112,34 @@ export class EventsService {
           created_by_uid: ev.created_by_uid,
           is_voter: ev.is_voter,
           is_organizer: ev.is_organizer,
-        };
-
-        const end = new Date(ev.end_time);
-
-        if (ev.status === 'COMPLETED' || end < now) {
-          completed.push(entry);
-        } else if (ev.has_voted) {
-          voted.push(entry);
-        } else {
-          active_pending.push(entry);
-        }
+        });
       }
     }
 
-    const dedup = (arr: any[]) => {
-      const seen = new Set<number>();
-      return arr.filter((e) => {
-        if (seen.has(e.event_id)) return false;
-        seen.add(e.event_id);
-        return true;
-      });
-    };
+    const active_pending: any[] = [];
+    const voted: any[] = [];
+    const completed: any[] = [];
+
+    for (const entry of merged.values()) {
+      const end = new Date(entry.end_time);
+
+      if (entry.status === 'COMPLETED' || end < now) {
+        completed.push(entry);
+      } else if (entry.has_voted) {
+        voted.push(entry);
+      } else {
+        active_pending.push(entry);
+      }
+    }
+
+    // Rows arrive grouped per role row now, so restore the newest-first order.
+    const byStartDesc = (x: any, y: any) =>
+      String(y.start_time ?? '').localeCompare(String(x.start_time ?? ''));
 
     return {
-      active_pending: dedup(active_pending),
-      voted: dedup(voted),
-      completed: dedup(completed),
+      active_pending: active_pending.sort(byStartDesc),
+      voted: voted.sort(byStartDesc),
+      completed: completed.sort(byStartDesc),
     };
   }
 
@@ -463,13 +474,19 @@ export class EventsService {
     const orgid = event.orgid ?? '';
     const callerUid = await this.resolveCallerIdentityInOrg(user, orgid);
 
+    // Existence check only — WHICH scopes the caller organizes is resolved in
+    // the SQL below, so it no longer matters which single row this returns.
     const role = await this.prisma.member_roles.findFirst({
       where: { orgid, uid: callerUid, is_organizer: true },
     });
     if (!role) throw new ForbiddenException('Not an organizer');
 
+    // Participants are limited to the union of the subtrees of EVERY scope the
+    // caller organizes (not one arbitrarily chosen role row). DISTINCT stops a
+    // participant who holds several role rows inside those subtrees from
+    // being listed once per row.
     const participants = await this.prisma.$queryRaw<any[]>`
-      SELECT
+      SELECT DISTINCT
         ep.uid,
         ep.orgid,
         ep.has_voted,
@@ -480,7 +497,12 @@ export class EventsService {
       JOIN member_roles mr ON mr.orgid = ep.orgid AND mr.uid = ep.uid
       WHERE ep.event_id = ${eventId}
         AND mr.scope_id IN (
-          SELECT scope_id FROM get_scope_descendants(${role.scope_id}::int)
+          SELECT d.scope_id
+          FROM member_roles org_r
+          CROSS JOIN LATERAL get_scope_descendants(org_r.scope_id) AS d
+          WHERE org_r.orgid = ${orgid}
+            AND org_r.uid = ${callerUid}
+            AND org_r.is_organizer = TRUE
         )
       ORDER BY ep.uid
     `;
@@ -610,21 +632,28 @@ export class EventsService {
     if (!uid) {
       throw new ForbiddenException('Event not visible to your account');
     }
-    const role = await this.prisma.member_roles.findFirst({
+    // A member can hold several scopes (PK is orgid, uid, scope_id). The event
+    // is visible if it is visible from ANY of them — checking only one
+    // arbitrary row could wrongly hide it.
+    const roles = await this.prisma.member_roles.findMany({
       where: { orgid: event.orgid ?? '', uid },
+      select: { scope_id: true },
+      orderBy: { scope_id: 'asc' },
     });
-    if (!role) {
+    if (roles.length === 0) {
       throw new ForbiddenException('Event not visible to your account');
     }
 
-    const rows = await this.prisma.$queryRaw<{ event_id: number }[]>`
-    SELECT event_id 
-    FROM get_visible_events(${event.orgid}::varchar, ${role.scope_id}::int)
-    WHERE event_id = ${event.event_id}::int
-  `;
-    if (rows.length === 0) {
-      throw new ForbiddenException('Event not visible to your account');
+    for (const { scope_id } of roles) {
+      const rows = await this.prisma.$queryRaw<{ event_id: number }[]>`
+        SELECT event_id
+        FROM get_visible_events(${event.orgid}::varchar, ${scope_id}::int)
+        WHERE event_id = ${event.event_id}::int
+      `;
+      if (rows.length > 0) return;
     }
+
+    throw new ForbiddenException('Event not visible to your account');
   }
 
   /**
@@ -653,22 +682,45 @@ export class EventsService {
   }
 
   /**
-   * Resolves all (orgid, uid, scope_id) pairs the calling user can act as.
-   * Exported so CandidatesService can reuse it without duplication.
+   * Resolves every (orgid, uid, scope_id) role row the calling user can act
+   * as, with that row's is_organizer flag. A member with several scopes in an
+   * org yields one entry per scope, ordered by scope_id so the result is
+   * deterministic. Exported so CandidatesService can reuse it without
+   * duplication.
    *
-   * - ORG session     → single identity from JWT
-   * - UNIFIED session → all ORG memberships linked via org_members.pid
+   * - ORG session     → all role rows for the JWT's (orgid, uid)
+   * - UNIFIED session → all role rows for every org_members link of the pid
    * - SITEADMIN session → no org identities (returns empty)
    */
-  async resolveOrgIdentities(
-    user: JwtUser,
-  ): Promise<{ orgid: string; uid: string; scope_id: number }[]> {
+  async resolveOrgIdentities(user: JwtUser): Promise<
+    {
+      orgid: string;
+      uid: string;
+      scope_id: number;
+      is_organizer: boolean;
+    }[]
+  > {
+    const toIdentities = (
+      roles: {
+        orgid: string | null;
+        uid: string | null;
+        scope_id: number;
+        is_organizer: boolean | null;
+      }[],
+    ) =>
+      roles.map((r) => ({
+        orgid: r.orgid as string,
+        uid: r.uid as string,
+        scope_id: r.scope_id,
+        is_organizer: r.is_organizer ?? false,
+      }));
+
     if (user.type === 'ORG' && user.orgid && user.uid) {
-      const role = await this.prisma.member_roles.findFirst({
+      const roles = await this.prisma.member_roles.findMany({
         where: { orgid: user.orgid, uid: user.uid },
+        orderBy: { scope_id: 'asc' },
       });
-      if (!role) return [];
-      return [{ orgid: user.orgid, uid: user.uid, scope_id: role.scope_id }];
+      return toIdentities(roles);
     }
 
     if (user.type === 'UNIFIED' && user.pid) {
@@ -678,15 +730,13 @@ export class EventsService {
         where: { pid: BigInt(user.pid) },
         select: { orgid: true, uid: true },
       });
+      if (links.length === 0) return [];
 
-      const result: { orgid: string; uid: string; scope_id: number }[] = [];
-      for (const { orgid, uid } of links) {
-        const role = await this.prisma.member_roles.findFirst({
-          where: { orgid, uid },
-        });
-        if (role) result.push({ orgid, uid, scope_id: role.scope_id });
-      }
-      return result;
+      const roles = await this.prisma.member_roles.findMany({
+        where: { OR: links.map(({ orgid, uid }) => ({ orgid, uid })) },
+        orderBy: [{ orgid: 'asc' }, { uid: 'asc' }, { scope_id: 'asc' }],
+      });
+      return toIdentities(roles);
     }
 
     return [];
