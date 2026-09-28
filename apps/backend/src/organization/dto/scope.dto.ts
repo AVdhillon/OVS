@@ -20,7 +20,7 @@ export class CreateScopeDto {
   parent_scope_id?: number;
 }
 
-// FIX: removed parent_scope_id entirely.
+// Removed parent_scope_id entirely.
 // Project design: "Scope is a fixed tree — nodes are not moved."
 // Node reattachment is explicitly not supported to keep the tree stable
 // and avoid expensive subtree restructuring. Only renaming is allowed.

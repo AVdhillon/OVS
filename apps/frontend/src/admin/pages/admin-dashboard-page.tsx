@@ -12,18 +12,10 @@ import { useAdminContext } from "../context/admin-context";
 import { Link } from "react-router";
 import { Inbox } from "lucide-react";
 
-// EDIT (Phase 1 — auth model consolidation, subphase 1.10): originally a
-// placeholder proving login -> session -> protected-route works, with its
-// own inline logo/nav/sign-out header.
-//
-// EDIT (Phase 3 — admin portal core, subphase 3.5): switched to the new
-// shared AdminHeader (see src/admin/components/admin-header.tsx) instead
-// of the inline header this page used to carry, so the header doesn't
-// silently drift from the request-queue/detail pages this subphase also
-// adds. Replaced the "lands in Phase 3" placeholder line with a real card
-// linking into the request queue — this page is still intentionally thin;
-// 3.6's org-directory link is expected to land here the same way once it
-// exists.
+// Admin landing page. Uses the shared AdminHeader (see
+// src/admin/components/admin-header.tsx) rather than an inline header, so the
+// header can't drift from the request-queue and detail pages. The page is
+// intentionally thin: it is a set of cards linking into the admin sections.
 export function AdminDashboardPage() {
   const { admin } = useAdminContext();
 

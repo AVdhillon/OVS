@@ -39,9 +39,8 @@ import { adminApi, type StuckOrgRequestItem } from "../lib/admin-api";
 import { toast } from "sonner";
 import { ArrowLeft, Clock, Undo2 } from "lucide-react";
 
-// EDIT (Phase 6 — post-approval org setup, subphase 6.6): the "small admin
-// view for requests stuck in APPROVED_PENDING_SETUP past some age
-// threshold" the plan calls for. Purely visibility plus one action — see
+// Admin view of requests stuck in APPROVED_PENDING_SETUP past an age
+// threshold. Purely visibility plus one action — see
 // OrgRequestsService.listStuckPendingSetup()'s own comment: this is not an
 // automated expiry, it's a place for an admin to notice and, if they
 // choose, revoke() the specific request themselves.

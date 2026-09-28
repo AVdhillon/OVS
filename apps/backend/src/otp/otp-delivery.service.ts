@@ -2,11 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import sgMail from '@sendgrid/mail';
 import twilio from 'twilio';
 
-// EDIT (Phase 4 — cutover, subphase 4.3): every OTP this service has ever
-// sent was implicitly a login/registration-adjacent "prove you control this
-// identifier" message. `OtpPurpose` names that ('LOGIN', the default every
-// existing caller keeps using) and adds the one new case this subphase
-// needs: 'ORG_DOMAIN_OWNERSHIP', OrgRequestsService.submit()'s check that
+// Every OTP this service sends is implicitly a login/registration-adjacent
+// "prove you control this identifier" message. `OtpPurpose` names that
+// ('LOGIN', the default every existing caller uses) and adds one other
+// case: 'ORG_DOMAIN_OWNERSHIP', OrgRequestsService.submit()'s check that
 // whoever supplied an org's contact email actually controls it. Defined
 // here (not in otp.service.ts) so otp.service.ts can import it from this
 // file without the two files importing from each other.
@@ -31,7 +30,7 @@ export class OtpDeliveryService {
    *   Email (contains @) → SendGrid
    *   10-digit mobile    → Twilio WhatsApp sandbox
    *
-   * EDIT (Phase 4 — cutover, subphase 4.3): `purpose` is passed through to
+   * `purpose` is passed through to
    * sendEmail() so the message can say what it's actually confirming — see
    * that method. WhatsApp delivery doesn't take it: 'ORG_DOMAIN_OWNERSHIP'
    * only ever targets org_email (SubmitOrgRequestDto validates it with
@@ -56,7 +55,7 @@ export class OtpDeliveryService {
     otp: string,
     purpose: OtpPurpose = 'LOGIN',
   ): Promise<void> {
-    // EDIT (Phase 4 — cutover, subphase 4.3): purpose-specific copy so an
+    // Purpose-specific copy so an
     // org-request submitter opening this email sees a message about
     // confirming their organization's email, not a generic "OTP Code" one
     // that reads like a login attempt they may not recognize.

@@ -11,17 +11,16 @@ import { PrismaService } from '../prisma/prisma.service';
 import { OrgService } from './org.service';
 import { OrgLimitRequestEmailService } from './org-limit-request-email.service';
 
-// ─── OrgLimitRequestsService unit tests (Phase 7, subphase 7.6) ────────────
+// ─── OrgLimitRequestsService unit tests ────────────────────────────────────
 //
-// Scope, per post-approval-org-setup-plan.md's 7.6 section:
+// Scope:
 //   - organizer-only submit guard
 //   - one-open-request-per-org guard
 //   - approve() applying the new limit atomically
 //   - concurrent submit race
 //
-// Plus light coverage of the 7.5 notification wiring (submit()/approve()
-// firing the right email with the right arguments), since that's the part
-// of this service most recently changed and least exercised elsewhere.
+// Plus light coverage of the notification wiring (submit()/approve()
+// firing the right email with the right arguments).
 //
 // Mocking shape mirrors admin-review-queue.service.spec.ts /
 // org-requests.finalize.spec.ts: PrismaService is a hand-built stub rather
@@ -338,7 +337,7 @@ describe('OrgLimitRequestsService', () => {
     });
   });
 
-  // ── reject()/requestInfo() notification wiring (7.5), light coverage ────
+  // ── reject()/requestInfo() notification wiring, light coverage ────
   describe('reject() and requestInfo()', () => {
     const requestId = 4n;
 

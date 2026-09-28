@@ -6,11 +6,9 @@ import { OrgLimitRequestEmailService } from './org-limit-request-email.service';
 import { AddMembersDto } from './dto/add-members.dto';
 
 // ─── Integration: submit → approve → organization.member_limit updated → a
-// previously-blocked member add now succeeds (Phase 7, subphase 7.6) ───────
+// previously-blocked member add now succeeds ───────────────────────────────
 //
-// post-approval-org-setup-plan.md's 7.6 section calls for exactly this run.
-// Same shape/spirit as org-request-lifecycle.integration.spec.ts (Phase 6,
-// subphase 6.7): the real OrgLimitRequestsService.submit()/approve() and
+// Same shape as org-request-lifecycle.integration.spec.ts: the real OrgLimitRequestsService.submit()/approve() and
 // OrgService.addMembers() code runs end to end against a small in-memory
 // fake standing in for PrismaService, rather than a real Postgres instance.
 //
@@ -22,14 +20,14 @@ import { AddMembersDto } from './dto/add-members.dto';
 //
 // What this test is NOT: a substitute for running this against a real
 // Postgres instance. trg_check_limit_request_organizer and
-// unique_open_limit_request (7.1, dbschema.sql) are DB-level guarantees —
+// unique_open_limit_request (dbschema.sql) are DB-level guarantees —
 // there is no SQL engine here to execute them — so this only proves the
 // service-level guards (assertOrganizerAccess(), the findFirst-based
 // duplicate-request pre-check) and the addMembers() member-limit pre-check.
-// Same limitation the 6.7 integration spec already documents for
-// trg_check_member_limit.
+// The same limitation applies to trg_check_member_limit in
+// org-request-lifecycle.integration.spec.ts.
 //
-// Outbound email (org-limit-request-email.service.ts, 7.5) is stubbed
+// Outbound email (org-limit-request-email.service.ts) is stubbed
 // rather than faked in full — already exercised in isolation by
 // org-limit-requests.service.spec.ts.
 
@@ -184,7 +182,7 @@ async function countActiveMembers(
 // OrgLimitRequestsService.submit()/approve() and OrgService.addMembers()/
 // assertOrganizerAccess()/getCallerOrganizerScopes()/getDescendantScopeIds()
 // — not a general Prisma stand-in. $transaction runs its callback against
-// the same store synchronously, same as the Phase 6 integration spec's own
+// the same store synchronously, same as the org-request lifecycle integration spec's own
 // fake (no concurrent callers here, so no isolation/rollback semantics are
 // needed) — including the unique_open_limit_request race, which is
 // exercised at the service layer's own findFirst-based pre-check (step 3
@@ -208,7 +206,7 @@ function createFakeOrgDb() {
   }
 
   // Routes a tagged-template $queryRaw call by sniffing the SQL text — same
-  // approach as the Phase 6 integration spec's own fake.
+  // approach as the org-request lifecycle integration spec's own fake.
   function queryRaw(strings: TemplateStringsArray, ...values: any[]) {
     const sql = strings.join('?');
     if (sql.includes('get_scope_descendants')) {
@@ -350,7 +348,7 @@ function createFakeOrgDb() {
   };
 }
 
-/** Very small subset of Prisma's `where` matching — same shape as the Phase 6 integration spec's own helper. */
+/** Very small subset of Prisma's `where` matching — same shape as the org-request lifecycle integration spec's own helper. */
 function matches(row: any, where: any): boolean {
   if (!where) return true;
   return Object.entries(where).every(([key, cond]: [string, any]) => {

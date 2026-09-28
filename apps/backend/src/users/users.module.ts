@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
 import { PrismaModule } from '../prisma/prisma.module';
-import { OtpModule } from '../otp/otp.module'; // FIX: added — needed to inject OtpService
+import { OtpModule } from '../otp/otp.module'; // Required so UsersService can inject OtpService
 
 @Module({
   imports: [PrismaModule, OtpModule],

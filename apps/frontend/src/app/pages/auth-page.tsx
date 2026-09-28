@@ -81,7 +81,7 @@ export function AuthPage() {
   const [loading, setLoading] = useState(false);
   const [otpActive, setOtpActive] = useState(false);
 
-  // FIX: epoch ms when the OTP was last dispatched — passed to the modal so
+  // Epoch ms when the OTP was last dispatched — passed to the modal so
   // its resend-cooldown timer is based on the real send time, not mount time.
   const [otpSentAt, setOtpSentAt] = useState<number | null>(null);
 

@@ -32,7 +32,7 @@ export function AdminLoginPage() {
   const [loading, setLoading] = useState(false);
   const [showOTPModal, setShowOTPModal] = useState(false);
   const [otpSentAt, setOtpSentAt] = useState<number | null>(null);
-  // FIX: admin ID an OTP is currently pending for. Lets handleSendOtp tell
+  // Admin ID an OTP is currently pending for. Lets handleSendOtp tell
   // "user accidentally closed the dialog and is reclicking the same button"
   // apart from "user actually wants a fresh OTP" (see handleSendOtp below).
   const [otpContact, setOtpContact] = useState<string | null>(null);
@@ -45,7 +45,7 @@ export function AdminLoginPage() {
     }
     setError(null);
 
-    // FIX: an OTP is already pending for this admin ID — just reopen the
+    // An OTP is already pending for this admin ID — just reopen the
     // dialog instead of requesting a new one. Without this, clicking
     // outside the OTP dialog (which closes it, e.g. from the dev-mode OTP
     // toast) and then clicking "Send OTP" again immediately re-hits the

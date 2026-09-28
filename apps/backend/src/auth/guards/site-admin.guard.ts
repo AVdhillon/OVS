@@ -1,7 +1,6 @@
 // src/auth/guards/site-admin.guard.ts
 //
-// EDIT (Phase 1 — auth model consolidation, subphase 1.3): new. The admin
-// app's counterpart to jwt.guard.ts's JwtAuthGuard, plus the
+// The admin app's counterpart to jwt.guard.ts's JwtAuthGuard, plus the
 // @RequireSuperAdmin() check folded in.
 //
 // Usage:

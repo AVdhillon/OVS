@@ -20,8 +20,7 @@ import * as express from 'express';
 
 // Route-specific overrides of the global ThrottlerModule default (see
 // app.module.ts), applied to the endpoints that actually gate access —
-// OTP dispatch/verification and login (fraud-heuristic-implementation-plan.md,
-// Module A). These are deliberately tighter than the app-wide default:
+// OTP dispatch/verification and login. These are deliberately tighter than the app-wide default:
 // each is keyed per-IP by ThrottlerGuard, so a single client can't hammer
 // OTP generation/guessing or credential attempts past these caps even
 // though otp_verification.attempts already locks a *given* OTP record —
@@ -30,14 +29,14 @@ import * as express from 'express';
 const OTP_SEND_THROTTLE = { default: { ttl: 60_000, limit: 3 } }; // 3/min/IP
 const OTP_VERIFY_THROTTLE = { default: { ttl: 60_000, limit: 5 } }; // 5/min/IP
 const LOGIN_THROTTLE = { default: { ttl: 60_000, limit: 5 } }; // 5/min/IP
-// EDIT (Phase 1 — auth model consolidation, subphase 1.3): admin login
+// Admin login
 // gets its own (tighter) throttle rather than reusing LOGIN_THROTTLE —
 // the admin surface is smaller-population and higher-trust than regular
 // login, so a lower cap costs legitimate admins little while meaningfully
 // narrowing the brute-force window.
 //
-// EDIT (Phase 4 — cutover, subphase 4.4): tightened from 3/min/IP to
-// 5/15min/IP, per 1.3's own note that this value was a starting point.
+// Tightened from 3/min/IP to
+// 5/15min/IP, a starting value that can be tuned per deployment.
 // The two aren't directly comparable by "limit" alone — what matters is
 // the sustained rate a per-minute window allows: 3/min/IP lets a
 // sustained attacker make up to 180 attempts/hour by just staying under
@@ -57,7 +56,7 @@ const TOKEN_COOKIE = 'ovp_token';
 const CSRF_COOKIE = 'ovp_csrf';
 const SESSION_MAX_AGE_MS = 60 * 60 * 1000; // keep in sync with auth.service.ts expires_at (1 hour)
 
-// EDIT (Phase 1 — auth model consolidation, subphase 1.3): admin session's
+// Admin session's
 // own cookie pair, deliberately distinct names from TOKEN_COOKIE/
 // CSRF_COOKIE above. site-admin-jwt.strategy.ts is the only other reader
 // of ADMIN_TOKEN_COOKIE; csrf.guard.ts is the only other reader of
@@ -134,7 +133,7 @@ export class AuthController {
       maxAge: SESSION_MAX_AGE_MS,
     });
 
-    // FIX (cross-origin CSRF cookie unreadable): the ovp_csrf cookie is set
+    // The ovp_csrf cookie is set
     // as before for backends/frontends that DO share a registrable domain
     // (where document.cookie can read it directly). But when frontend and
     // backend live on unrelated hosts — e.g. two separate *.azurewebsites.net
@@ -200,18 +199,17 @@ export class AuthController {
   }
 
   // ── Admin app routes ────────────────────────────────────────────────────
-  // EDIT (Phase 1 — auth model consolidation, subphase 1.3): new. Mirror
-  // the UNIFIED/ORG routes above one-for-one, but drive
-  // SiteAdminLoginDto/AuthService's SITEADMIN methods (subphase 1.2) and
-  // set the separate ovp_admin_token/ovp_admin_csrf cookie pair instead of
-  // ovp_token/ovp_csrf — see the constants at the top of this file for why
-  // that split exists. Kept on this same controller rather than a new one:
+  // Mirror the UNIFIED/ORG routes above one-for-one, but drive
+  // SiteAdminLoginDto/AuthService's SITEADMIN methods and set the separate
+  // ovp_admin_token/ovp_admin_csrf cookie pair instead of ovp_token/
+  // ovp_csrf — see the constants at the top of this file for why that
+  // split exists. Kept on this same controller rather than a new one:
   // the underlying concerns (OTP dispatch, login, CSRF rehydration,
   // logout, profile) are identical in shape to the routes above, just
   // against a different identity table and cookie pair — splitting them
   // into a second controller would mean duplicating all of the
   // documentation above for no behavioral difference. The admin *app*
-  // itself (separate frontend build, subphase 1.10) is what's standalone
+  // itself (a separate frontend build) is what's standalone
   // here, not this controller.
 
   /**

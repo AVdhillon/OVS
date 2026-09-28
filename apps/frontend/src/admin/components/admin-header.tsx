@@ -4,24 +4,16 @@ import { useAdminContext } from "../context/admin-context";
 import { ShieldCheck, LogOut } from "lucide-react";
 import { cn } from "../../app/components/ui/utils";
 
-// EDIT (Phase 3 — admin portal core, subphase 3.5): new, small, shared top
-// bar for the admin app. admin-dashboard-page.tsx (subphase 1.10) inlined
-// its own logo/nav/sign-out header when it was the only page that existed;
-// now that this subphase adds the request-queue and request-detail pages
-// (and 3.6 is about to add an org-directory pair on top of those), three-
-// plus pages would otherwise each carry their own copy of the same markup
-// and silently drift. Pulled out here instead — dashboard-page.tsx is
-// updated in this subphase to use it too (see its own EDIT comment).
+// Small, shared top bar for the admin app, pulled out once more than one
+// admin page needed the same logo/nav/sign-out header — keeping that markup
+// in one place avoids each page carrying its own copy that silently drifts
+// from the others.
 //
 // Deliberately NOT a full sidebar/layout like the main app's
-// dashboard-layout.tsx: the admin app today has three top-level sections
-// (Dashboard, Org Requests, Organizations), so a simple top nav bar still
-// carries that without building out a heavier layout shell this subphase
-// doesn't need. If 5.x grows the nav further, this is the file to extend,
-// not replace.
-//
-// EDIT (Phase 3 — admin portal core, subphase 3.6): added the
-// "Organizations" nav item for this subphase's new directory/detail pages.
+// dashboard-layout.tsx: the admin app has a small, fixed set of top-level
+// sections (Dashboard, Org Requests, Organizations), so a simple top nav
+// bar covers it without building out a heavier layout shell. If the nav
+// grows substantially, this is the file to extend, not replace.
 const NAV_ITEMS: Array<{
   path: string;
   label: string;
@@ -30,17 +22,11 @@ const NAV_ITEMS: Array<{
   { path: "/dashboard", label: "Dashboard" },
   { path: "/requests", label: "Org Requests" },
   { path: "/organizations", label: "Organizations" },
-  // EDIT (Phase 5 — platform maturity, subphase 5.1): the audit-log viewer,
-  // added here exactly as this file's 3.5-era comment above anticipated
-  // ("if 5.x grows the nav further, this is the file to extend").
   { path: "/audit", label: "Audit Log" },
-  // EDIT (Phase 5 — platform maturity, subphase 5.2): the analytics
-  // dashboard. Five top-level sections now — still a plain top nav, but
-  // this is roughly where the 3.5-era comment above expected a heavier
-  // layout shell might start to be worth it.
+  // Past roughly five top-level sections, a heavier layout shell (sidebar)
+  // may become worth it over this plain top nav.
   { path: "/analytics", label: "Analytics" },
-  // EDIT (Phase 5 — platform maturity, subphase 5.3): admin account
-  // management. `superAdminOnly: true` — filtered out of the rendered nav
+  // Admin account management. `superAdminOnly: true` — filtered out of the rendered nav
   // below for an ordinary (non-super) admin session, since every route
   // behind this link 403s for them anyway (AdminAccountsController is
   // @RequireSuperAdmin()-gated end to end, unlike every other admin

@@ -4,39 +4,31 @@ import {
   ALL_ORG_REQUEST_STATUSES,
   OPEN_ORG_REQUEST_STATUSES,
 } from './org-requests.service';
-// EDIT (Phase 7 — subphase 7.2/7.3 cleanup): OrgLimitRequestsService now
-// exists and exports this same list — imported from there instead of the
-// local duplicate this file carried since 7.1b (see that duplicate's own
-// now-resolved comment, below where it used to sit).
+// Imported from OrgLimitRequestsService, which owns this list, so the
+// queue's status filter can't drift from the table it reads.
 import { ALL_LIMIT_REQUEST_STATUSES } from './org-limit-requests.service';
 
-// ─── Unified admin review queue (Phase 7 — Member Limit Increase Requests,
-// subphase 7.1b) ─────────────────────────────────────────────────────────────
-// EDIT (subphase 7.1b): new service. Backs `GET /admin/review-queue` — see
-// post-approval-org-setup-plan.md's 7.1b section and dbschema.sql's own
-// `admin_review_queue` view comment (7e) for the full reasoning: org_requests
-// and org_member_limit_requests stay separate tables, this is just a
-// read-only union of the two for the admin queue UI.
+// ─── Unified admin review queue ─────────────────────────────────────────────
+// Backs `GET /admin/review-queue` — see dbschema.sql's `admin_review_queue`
+// view comment for the full reasoning: org_requests and
+// org_member_limit_requests stay separate tables, this is just a read-only
+// union of the two for the admin queue UI.
 //
 // Deliberately a service of its own rather than a new method on
 // OrgRequestsService: this queue isn't really "about" org_requests any more
 // than it's "about" org_member_limit_requests — it's about neither table
 // specifically, just the view over both — so bolting it onto either table's
 // own service would misplace it the same way merging the tables themselves
-// would have (per the plan's own reasoning against that). 7.2's
-// OrgLimitRequestsService, once it exists, is not a dependency here: nothing
-// below needs to write to either table, only read the view.
+// would have. It also has no dependency on OrgLimitRequestsService: nothing
+// below writes to either table, it only reads the view.
 //
-// $queryRaw rather than a Prisma model for `admin_review_queue`: Prisma views
-// support requires the `views` preview feature, which isn't enabled in
-// schema.prisma today (only `partialIndexes` is — see that file's own
-// generator block) and turning it on can't be verified against
-// `prisma generate`/`prisma validate` in this sandbox (the standing
-// `binaries.prisma.sh` egress gap PROGRESS.md already documents for every
-// other Prisma-touching subphase). Same reasoning findClosestOrgNameMatch()
-// (org-requests.service.ts) already uses for pg_trgm's similarity() — reach
-// for raw SQL when there's no Prisma-level equivalent, rather than change
-// generator config this session can't confirm still builds.
+// $queryRaw rather than a Prisma model for `admin_review_queue`: Prisma
+// view support requires the `views` preview feature, which isn't enabled in
+// schema.prisma (only `partialIndexes` is), and enabling it changes
+// generator behaviour for the whole client. Same reasoning
+// findClosestOrgNameMatch() (org-requests.service.ts) uses for pg_trgm's
+// similarity() — reach for raw SQL when there's no Prisma-level
+// equivalent, rather than change generator config for one read query.
 
 export type AdminReviewQueueRequestType =
   | 'ORG_CREATION'
@@ -59,7 +51,7 @@ export class AdminReviewQueueService {
   constructor(private prisma: PrismaService) {}
 
   /**
-   * The unified queue (7.1b/7.4's queue-with-badges view). Same
+   * The unified queue (the queue-with-badges view). Same
    * default/filter/paging shape as OrgRequestsService.list() — open requests
    * only by default (an admin opening the queue wants work to do, not a full
    * history), ordered oldest-first within a status, capped page size — so

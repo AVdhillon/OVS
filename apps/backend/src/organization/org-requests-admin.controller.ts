@@ -17,24 +17,20 @@ import { SiteAdminGuard } from '../auth/guards/site-admin.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtUser } from '../common/decorators/current-user.decorator';
 
-// ─── Org request admin routes (Phase 3 — admin portal core) ──────────────────
-// EDIT (Phase 3 — admin portal core, subphase 3.1): new controller.
-//
-// Wiring only, as the plan calls for — every route here is a thin
-// pass-through to OrgRequestsService: submit() (2.3) has its own route in
-// 4.1 on the requester-facing side, and approve()/reject()/requestInfo()
-// (2.4/2.5) plus the new list()/getDetail() read methods (added in this
-// subphase, alongside this controller, since Phase 2 was write-path-only)
-// are wired up here.
+// ─── Org request admin routes ───────────────────────────────────────────────
+// Wiring only — every route here is a thin pass-through to
+// OrgRequestsService: approve()/reject()/requestInfo() plus the
+// list()/getDetail() read methods. submit() has its own route on the
+// requester-facing OrgController.
 //
 // Every route is gated by SiteAdminGuard only — no @RequireSuperAdmin().
 // Reviewing org requests is ordinary site-admin work, not the elevated
-// tier Phase 5.3's admin-account-management endpoints (inviting/
-// deactivating other admins) will require.
+// tier the admin-account-management endpoints (inviting/deactivating other
+// admins) require.
 //
-// Route prefix is 'admin/org-requests', a new top-level prefix rather than
-// nesting under OrgController's existing 'org' routes: this is the admin
-// app's surface (served from its own origin — 1.3's ADMIN_ALLOWED_ORIGINS —
+// Route prefix is 'admin/org-requests', a separate top-level prefix rather
+// than nesting under OrgController's 'org' routes: this is the admin
+// app's surface (served from its own origin — ADMIN_ALLOWED_ORIGINS —
 // and calling in with the ovp_admin_token/ovp_admin_csrf cookie pair, not
 // ovp_token/ovp_csrf), and OrgController is gated by JwtAuthGuard for
 // UNIFIED/ORG sessions specifically, not SITEADMIN ones.
@@ -45,7 +41,7 @@ export class OrgRequestsAdminController {
 
   /**
    * GET /admin/org-requests
-   * The review queue (3.5's request-queue page). Defaults to open requests
+   * The review queue (the request-queue page). Defaults to open requests
    * only; see OrgRequestsService.list() for the default/filter/paging
    * behaviour. ?status= accepts a comma-separated list, e.g.
    * "PENDING,NEEDS_INFO" (already the default) or "APPROVED,REJECTED" for a
@@ -71,7 +67,7 @@ export class OrgRequestsAdminController {
 
   /**
    * GET /admin/org-requests/pending-setup/stuck
-   * EDIT (Phase 6 — post-approval org setup, subphase 6.6): the
+   * The
    * stuck-request admin view — requests sitting in APPROVED_PENDING_SETUP
    * for longer than ?min_hours= (defaults to 24), oldest-approved-first.
    * See OrgRequestsService.listStuckPendingSetup().
@@ -91,7 +87,7 @@ export class OrgRequestsAdminController {
 
   /**
    * GET /admin/org-requests/:requestId
-   * Request detail (3.5's detail page): the request, requester contact
+   * Request detail (the detail page): the request, requester contact
    * info, reviewing admin, and the full admin_audit_log trail. See
    * OrgRequestsService.getDetail().
    */
@@ -102,16 +98,13 @@ export class OrgRequestsAdminController {
 
   /**
    * POST /admin/org-requests/:requestId/approve
-   * EDIT (Phase 6 — post-approval org finalization, subphase 6.2): no
-   * longer creates the organization — moves the request to
+   * Does not create the organization — moves the request to
    * APPROVED_PENDING_SETUP and records the admin-set member cap. See
-   * OrgRequestsService.approve() for why (2.4's doc comment above this one
-   * described the pre-6.2 behaviour). Body is now an ApproveOrgRequestDto
-   * (just `member_limit`) — this route did take no body before this
-   * subphase; there is still no free-text reason field here (the request
+   * OrgRequestsService.approve() for why. Body is an ApproveOrgRequestDto
+   * (just `member_limit`); there is no free-text reason field (the request
    * row itself is the justification, per admin_audit_log's own
    * chk_admin_audit_reason_required — approve isn't in that CHECK's
-   * required-reason list), only the new numeric field.
+   * required-reason list).
    */
   @Post(':requestId/approve')
   approve(
@@ -131,7 +124,7 @@ export class OrgRequestsAdminController {
    * Terminal, no organization created. Body is a ReviewOrgRequestDto — see
    * that file for why `reason` (requester-facing) and `internal_note`
    * (audit-log-only) are separate fields. See OrgRequestsService.reject()
-   * (2.5).
+   *.
    */
   @Post(':requestId/reject')
   reject(
@@ -149,8 +142,8 @@ export class OrgRequestsAdminController {
   /**
    * POST /admin/org-requests/:requestId/request-info
    * Non-terminal — the request goes back to NEEDS_INFO for the requester to
-   * edit and resubmit (4.7). Same ReviewOrgRequestDto body as reject(). See
-   * OrgRequestsService.requestInfo() (2.5).
+   * edit and resubmit. Same ReviewOrgRequestDto body as reject(). See
+   * OrgRequestsService.requestInfo().
    */
   @Post(':requestId/request-info')
   requestInfo(
@@ -167,7 +160,7 @@ export class OrgRequestsAdminController {
 
   /**
    * POST /admin/org-requests/:requestId/revoke-approval
-   * EDIT (Phase 6 — post-approval org setup, subphase 6.6): reverses an
+   * Reverses an
    * APPROVED_PENDING_SETUP request back to REJECTED when the requester
    * never completes finalizeSetup(). Not reachable from any other status —
    * see OrgRequestsService.revokeApproval(). Same ReviewOrgRequestDto body

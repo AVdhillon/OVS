@@ -8,46 +8,38 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { OrgLifecycleReasonDto } from './dto/org-lifecycle.dto';
 
-// ─── Organization lifecycle (Phase 3 — admin portal core) ─────────────────
-// EDIT (Phase 3 — admin portal core, subphase 3.2): new service.
-//
-// `organization.status` (added in 2.1) has three values — ACTIVE, SUSPENDED,
-// ARCHIVED — described in the master schema's own comment on the column:
-// SUSPENDED is reversible (a site admin can reinstate), ARCHIVED is
-// terminal. `is_active` is a GENERATED column derived from `status`
+// ─── Organization lifecycle ─────────────────────────────────────────────────
+// `organization.status` has three values — ACTIVE, SUSPENDED, ARCHIVED —
+// described in the master schema's comment on the column: SUSPENDED is
+// reversible (a site admin can reinstate), ARCHIVED is terminal.
+// `is_active` is a GENERATED column derived from `status`
 // (`status = 'ACTIVE'`), so every method below writes `status` only — never
-// `is_active` directly, which Postgres rejects outright (see 2.1's note,
-// and org-creation.utilities.ts's `createOrganizationCore()`, which made
-// the same fix for org creation).
+// `is_active` directly, which Postgres rejects outright (the same applies
+// to org-creation.utilities.ts's `createOrganizationCore()`).
 //
-// This subphase is service-only, per the plan's own file list — no
-// controller routes are wired here. 3.3 builds the admin org-directory
-// controller/endpoint these three methods are expected to be called from
-// (alongside 3.6's suspend/reinstate detail-page UI), so the service is
-// registered + exported from OrgModule now so that controller can inject
-// it without a second provider instance, mirroring 2.3's own note that an
-// unregistered provider is uninjectable.
+// Service-only: the routes that call these methods live in
+// org-admin.controller.ts. The service is registered and exported from
+// OrgModule so that controller can inject it without a second provider
+// instance.
 //
-// Locking shape is copied directly from OrgRequestsService's
-// approve()/reject()/requestInfo() (2.4/2.5): a fast, unlocked pre-check for
-// a friendly 404/409 (does NOT close the race), then — inside a
-// transaction — `SELECT ... FOR UPDATE` on the organization row itself
-// before the UPDATE, so two admins racing to suspend/reinstate/archive the
-// same org serialize against each other instead of one silently
-// clobbering the other's write. organization.orgid is the table's own PK
-// (VARCHAR, not BIGSERIAL like org_requests.request_id), but the shape is
-// otherwise identical.
+// Locking shape matches OrgRequestsService's approve()/reject()/
+// requestInfo(): a fast, unlocked pre-check for a friendly 404/409 (does
+// NOT close the race), then — inside a transaction — `SELECT ... FOR
+// UPDATE` on the organization row itself before the UPDATE, so two admins
+// racing to suspend/reinstate/archive the same org serialize against each
+// other instead of one silently clobbering the other's write.
+// organization.orgid is the table's own PK (VARCHAR, not BIGSERIAL like
+// org_requests.request_id), but the shape is otherwise identical.
 //
-// requireActiveSiteAdmin() below is a straight copy of
-// OrgRequestsService's private method of the same name, not a shared
-// import — there is no shared "admin utilities" module anywhere in this
-// codebase yet (auth.service.ts's own two site_admins lookups are inline,
-// not extracted either), so introducing one here would be a wider
-// refactor than this subphase asks for. Same defense-in-depth reasoning
-// as approve()'s: SiteAdminGuard only checks site_admins.is_active at
-// login time, and suspending/archiving an organization is exactly the
-// kind of adverse, irreversible-or-hard-to-reverse action worth re-
-// checking for, the same way approve() does before creating one.
+// requireActiveSiteAdmin() below is a copy of OrgRequestsService's private
+// method of the same name rather than a shared import — there is no shared
+// "admin utilities" module in this codebase (auth.service.ts's own two
+// site_admins lookups are inline too), and extracting one would be a wider
+// refactor than these services warrant. Same defense-in-depth reasoning as
+// approve()'s: SiteAdminGuard only checks site_admins.is_active at login
+// time, and suspending/archiving an organization is exactly the kind of
+// adverse, irreversible-or-hard-to-reverse action worth re-checking for,
+// the same way approve() does before it commits an org.
 
 type OrgStatus = 'ACTIVE' | 'SUSPENDED' | 'ARCHIVED';
 

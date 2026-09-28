@@ -42,12 +42,9 @@ const EMPTY_FORM: AddFormState = {
 
 // ─── Wallet Entry Card ────────────────────────────────────────────────────────
 
-// EDIT (tenant portal intuitiveness, item 3): Org ID + UID used to be shown
-// three times on this card — once in CardTitle/CardDescription, then again
-// as labeled rows in the body. Kept the labeled rows (clearest for someone
-// scanning several cards) as the single source of truth, and replaced the
-// title/description pairing with just the "Organization" badge context —
-// nothing left up top that only repeats the body below it.
+// Org ID and UID appear only as labeled rows in the body, which is the
+// clearest layout for someone scanning several cards. The header shows just
+// the "Organization" badge so nothing up top repeats the body below it.
 function WalletCard({ entry }: { entry: WalletIdentity }) {
   return (
     <Card className="transition-shadow hover:shadow-md border-violet-200">
@@ -98,7 +95,7 @@ function AddIdentityDialog({
   const [form, setForm] = useState<AddFormState>(EMPTY_FORM);
   const [otpOpen, setOtpOpen] = useState(false);
   const [otpSentAt, setOtpSentAt] = useState<number | null>(null);
-  // FIX: contact an OTP is currently pending for — see handleRequestOtp
+  // Contact an OTP is currently pending for — see handleRequestOtp
   // below.
   const [otpContact, setOtpContact] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -124,7 +121,7 @@ function AddIdentityDialog({
   const handleRequestOtp = async () => {
     const contact = form.contact.trim();
 
-    // FIX: an OTP is already pending for this same contact — reopen the OTP
+    // An OTP is already pending for this same contact — reopen the OTP
     // dialog instead of requesting a new one. Without this, accidentally
     // clicking outside the OTP dialog (which closes it, and also re-opens
     // this form dialog via `open && !otpOpen`) and then clicking "Send OTP"

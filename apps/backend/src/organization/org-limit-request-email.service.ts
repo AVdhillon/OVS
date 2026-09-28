@@ -1,8 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import sgMail from '@sendgrid/mail';
 
-// ─── Member-limit-request lifecycle emails (Phase 7 — Member Limit Increase
-// Requests, subphase 7.5) ──────────────────────────────────────────────────
+// ─── Member-limit-request lifecycle emails  ──────────────────────────────────────────────────
 //
 // The four notifications an org_member_limit_requests row's lifecycle
 // produces: the requesting organizer hears back at submission, and again at
@@ -16,11 +15,8 @@ import sgMail from '@sendgrid/mail';
 // caller who just made it).
 //
 // Deliberately its OWN file/service rather than new methods added to
-// OrgRequestEmailService — the plan's own 7.5 text offers both options
-// ("Extend org-request-email.service.ts's pattern (or a sibling service, if
-// keeping the 'org that already exists' emails structurally separate is
-// preferred)"), and this codebase has already answered that question for
-// every other layer of these two request kinds: org-limit-requests.service.ts
+// OrgRequestEmailService, following how every other layer of these two
+// request kinds is already split: org-limit-requests.service.ts
 // is its own class rather than new methods on OrgRequestsService, and
 // org_member_limit_requests is its own table rather than new columns on
 // org_requests — precisely because org_requests is about an org that
@@ -32,7 +28,7 @@ import sgMail from '@sendgrid/mail';
 // re-merged.
 //
 // No reference_code equivalent here: unlike org_requests,
-// org_member_limit_requests (7.1, dbschema.sql) has no reference_code
+// org_member_limit_requests (dbschema.sql) has no reference_code
 // column — request_id (a bigint) is the only identifier the row carries, so
 // that's what these messages surface instead.
 @Injectable()
@@ -160,7 +156,7 @@ export class OrgLimitRequestEmailService {
    * OrgRequestEmailService.dispatch()'s own comment). Deliberate, logged
    * no-op rather than an error: the underlying submit()/approve()/reject()/
    * requestInfo() action has already succeeded either way, and the org's
-   * own "status of any open request" dashboard view (7.4) shows the same
+   * own "status of any open request" dashboard view shows the same
    * status without needing email at all.
    */
   private async dispatch(

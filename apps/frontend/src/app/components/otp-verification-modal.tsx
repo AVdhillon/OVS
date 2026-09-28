@@ -16,7 +16,7 @@ interface OTPVerificationModalProps {
   onVerify: (otp: string) => Promise<void>;
   onResend: () => Promise<void>;
   contact: string;
-  // FIX: epoch ms when OTP was dispatched — lets the modal resume the cooldown
+  // Epoch ms when OTP was dispatched — lets the modal resume the cooldown
   //      correctly when reopened, instead of always restarting from 30s.
   sentAt?: number | null;
 }
@@ -66,7 +66,7 @@ export function OTPVerificationModal({
 
   useEffect(() => {
     if (open) {
-      // FIX: seed from real elapsed time so reopening the modal resumes the
+      // Seed from real elapsed time so reopening the modal resumes the
       //      countdown from where it left off, not from 30s again.
       startCooldownFrom(getRemainingCooldown(sentAt));
     } else {
@@ -103,7 +103,7 @@ export function OTPVerificationModal({
     setIsResending(true);
     try {
       await onResend();
-      // FIX: parent updates sentAt after resend, which triggers the useEffect
+      // Parent updates sentAt after resend, which triggers the useEffect
       //      above to re-seed. We don't call startCooldownFrom here directly
       //      to avoid a race; the sentAt dep handles it.
       setOtp("");

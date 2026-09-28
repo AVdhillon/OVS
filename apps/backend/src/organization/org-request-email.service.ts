@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import sgMail from '@sendgrid/mail';
 
-// ─── Org request transactional emails (Phase 4 — cutover, subphase 4.5) ───────
+// ─── Org request transactional emails  ───────
 //
 // The four notifications an org_requests row's lifecycle produces: the
 // requester hears back at submission, and again at whichever of the three
@@ -66,7 +66,7 @@ export class OrgRequestEmailService {
    * NEEDS_INFO — sent from requestInfo(). Surfaces review_note (the
    * requester-facing text an admin wrote) directly — this is the one
    * message of the four where the requester is expected to act (edit and
-   * resubmit via 4.7's "My requests" view), so the question itself has to
+   * resubmit via the "My requests" view), so the question itself has to
    * be in the email, not just a status change notice.
    */
   async sendNeedsInfo(
@@ -92,14 +92,13 @@ export class OrgRequestEmailService {
   }
 
   /**
-   * APPROVED — sent from finalizeSetup() (6.3), after the organization row
+   * APPROVED — sent from finalizeSetup(), after the organization row
    * (and the requester's own OWNER membership in it) already exist.
    * Includes the orgid since that's the first time it exists to tell them.
    *
-   * EDIT (Phase 6 — subphase 6.2): no longer sent from approve() — see
-   * sendApprovedPendingSetup() below, which now fires at that point in the
-   * flow instead. This method's call site moves to 6.3, once there's an
-   * orgid to report.
+   * Not sent from approve() — see sendApprovedPendingSetup() below, which
+   * fires at that point in the flow instead, because no orgid exists yet to
+   * report.
    */
   async sendApproved(
     to: string | null,
@@ -121,10 +120,9 @@ export class OrgRequestEmailService {
   }
 
   /**
-   * APPROVED_PENDING_SETUP — EDIT (Phase 6 — post-approval org
-   * finalization, subphase 6.2): sent from approve() now that a site admin
-   * signing off no longer means the organization exists yet — it just means
-   * the requester can now finish setup (6.3: choosing an orgid, confirming
+   * APPROVED_PENDING_SETUP — Sent from approve(). A site admin
+   * signing off does not mean the organization exists yet — it just means
+   * the requester can now finish setup (choosing an orgid, confirming
    * the org contact email, and supplying their own uid). Unlike
    * sendApproved() there is no orgid or member role to report yet, so this
    * is a call-to-action email rather than a "you're in" one — the
@@ -178,11 +176,10 @@ export class OrgRequestEmailService {
   }
 
   /**
-   * APPROVED_PENDING_SETUP -> REJECTED — EDIT (Phase 6 — post-approval org
-   * setup, subphase 6.6): sent from revokeApproval(), the admin action for
+   * APPROVED_PENDING_SETUP -> REJECTED — Sent from revokeApproval(), the admin action for
    * a request that was approved but never finalized (see
-   * OrgRequestsService.revokeApproval() and the "Open decisions" answer in
-   * the plan: a manual revoke action, no auto-expiry). Distinct wording
+   * OrgRequestsService.revokeApproval() and its own comment on why revoking is a
+   * manual action with no auto-expiry). Distinct wording
    * from sendRejected() — this requester DID get approved and is losing an
    * approval they already had, not being turned down on first review — but
    * it lands in the same terminal REJECTED status, so the requester's next
@@ -221,7 +218,7 @@ export class OrgRequestEmailService {
    * so this is a deliberate, logged no-op rather than an error: the
    * underlying org-request action has already succeeded either way, and a
    * requester who only gave a mobile number simply won't get this specific
-   * notification — 4.7's "My requests" view is where they'd see the same
+   * notification — the "My requests" view is where they'd see the same
    * status without needing email at all.
    */
   private async dispatch(

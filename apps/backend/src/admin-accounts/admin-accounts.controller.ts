@@ -15,23 +15,21 @@ import { RequireSuperAdmin } from '../common/decorators/require-super-admin.deco
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtUser } from '../common/decorators/current-user.decorator';
 
-// ─── Admin account management routes (Phase 5 — platform maturity, 5.3) ────
-// EDIT: new controller. Prefix 'admin/admins' — a sibling of 3.1's
-// 'admin/org-requests', 3.3's 'admin/organizations', 5.1's 'admin/audit',
-// and 5.2's 'admin/analytics'.
+// ─── Admin account management routes ───────────────────────────────────────
+// Prefix 'admin/admins' — a sibling of 'admin/org-requests',
+// 'admin/organizations', 'admin/audit', and 'admin/analytics'.
 //
 // Unlike every one of those, this one is gated by
 // `@UseGuards(SiteAdminGuard) @RequireSuperAdmin()` on the whole
-// controller, not plain `@UseGuards(SiteAdminGuard)` — the plan names this
-// subphase "Admin account management (SUPER_ADMIN)" explicitly, and
-// managing who else can act as a site admin (including who else can become
+// controller, not plain `@UseGuards(SiteAdminGuard)` — managing who else
+// can act as a site admin (including who else can become
 // a super admin) is exactly the elevated-tier action
-// require-super-admin.decorator.ts's own header comment calls out this
-// subphase as the intended user of. This includes the read routes
-// (list/getDetail): unlike 3.1/3.3/5.1/5.2's read-only reasoning ("viewing
-// isn't the elevated action, only acting is"), the admin roster itself
-// (who exists, who's a super admin, who's inactive) is part of what this
-// subphase reserves to super admins only, not just the invite/deactivate
+// require-super-admin.decorator.ts's own header comment describes. This
+// includes the read routes
+// (list/getDetail): unlike the other admin surfaces' read-only reasoning
+// ("viewing isn't the elevated action, only acting is"), the admin roster
+// itself (who exists, who's a super admin, who's inactive) is reserved to
+// super admins only here, not just the invite/deactivate
 // actions on it.
 @UseGuards(SiteAdminGuard)
 @RequireSuperAdmin()
@@ -64,7 +62,7 @@ export class AdminAccountsController {
    * GET /admin/admins/:adminId
    * One admin account plus its own ADMIN_INVITED/ADMIN_DEACTIVATED history.
    * See AdminAccountsService.getDetail(). admin_id is a VARCHAR PK, not a
-   * BIGSERIAL — no numeric-parse guard is needed here the way 3.1's
+   * BIGSERIAL — no numeric-parse guard is needed here the way org-requests-admin.controller.ts's
    * parseRequestId() needs one for org_requests.request_id; an unknown
    * value simply 404s via findUnique() returning null.
    */

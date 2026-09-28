@@ -3,7 +3,7 @@ import { AdminLoginPage } from "./pages/admin-login-page";
 import { AdminDashboardPage } from "./pages/admin-dashboard-page";
 import { AdminRequestQueuePage } from "./pages/admin-request-queue-page";
 import { AdminRequestDetailPage } from "./pages/admin-request-detail-page";
-// EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.4): the
+// The
 // member-limit-request review screen — a separate component/route from
 // AdminRequestDetailPage, per that page's own header comment.
 import { AdminMemberLimitDetailPage } from "./pages/admin-member-limit-detail-page";
@@ -15,7 +15,7 @@ import { AdminAnalyticsPage } from "./pages/admin-analytics-page";
 import { AdminAccountsPage } from "./pages/admin-accounts-page";
 import { useAdminContext } from "./context/admin-context";
 
-// EDIT (Phase 1 — auth model consolidation, subphase 1.10): mirrors
+// Mirrors
 // app/routes.tsx's PublicRoute/ProtectedRoute pattern, keyed off the admin
 // session (GET /auth/admin-profile via admin-context.tsx) instead of the
 // regular UNIFIED/ORG session.
@@ -56,7 +56,7 @@ export const adminRouter = createBrowserRouter(
       element: <ProtectedRoute />,
       children: [{ index: true, element: <AdminDashboardPage /> }],
     },
-    // EDIT (Phase 3 — admin portal core, subphase 3.5): request-queue +
+    // Request-queue +
     // request-detail pages, both gated behind the same admin-session
     // ProtectedRoute the dashboard already uses.
     {
@@ -64,7 +64,7 @@ export const adminRouter = createBrowserRouter(
       element: <ProtectedRoute />,
       children: [
         { index: true, element: <AdminRequestQueuePage /> },
-        // EDIT (Phase 6 — post-approval org setup, subphase 6.6): the
+        // The
         // stuck-in-setup admin view. A static segment, so React Router's
         // own route ranking (static beats dynamic regardless of
         // declaration order) keeps it from ever being swallowed by
@@ -76,7 +76,7 @@ export const adminRouter = createBrowserRouter(
         { path: ":requestId", element: <AdminRequestDetailPage /> },
       ],
     },
-    // EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.4): its own
+    // Its own
     // top-level path, not nested under /requests/:requestId — the unified
     // queue (AdminRequestQueuePage) already tells the two request kinds
     // apart by request_type before it ever navigates, and a shared
@@ -89,7 +89,7 @@ export const adminRouter = createBrowserRouter(
       element: <ProtectedRoute />,
       children: [{ path: ":requestId", element: <AdminMemberLimitDetailPage /> }],
     },
-    // EDIT (Phase 3 — admin portal core, subphase 3.6): org-directory +
+    // Org-directory +
     // org-detail pages, same ProtectedRoute gating as /requests above.
     {
       path: "/organizations",
@@ -99,7 +99,7 @@ export const adminRouter = createBrowserRouter(
         { path: ":orgid", element: <AdminOrgDetailPage /> },
       ],
     },
-    // EDIT (Phase 5 — platform maturity, subphase 5.1): the audit-log viewer.
+    // The audit-log viewer.
     // A single route, not an index/detail pair like the two above — the page
     // keeps its filter and its per-org scope in the query string instead
     // (see its own header comment), so /audit?target_type=ORGANIZATION&
@@ -109,17 +109,17 @@ export const adminRouter = createBrowserRouter(
       element: <ProtectedRoute />,
       children: [{ index: true, element: <AdminAuditLogPage /> }],
     },
-    // EDIT (Phase 5 — platform maturity, subphase 5.2): the platform
+    // The platform
     // analytics dashboard. Single route with no parameters — the page keeps
     // its metric/interval selection in local state rather than the URL,
-    // unlike 5.1's audit viewer: a chart selection isn't something anyone
+    // unlike the audit viewer: a chart selection isn't something anyone
     // pastes into a ticket the way a filtered audit view is.
     {
       path: "/analytics",
       element: <ProtectedRoute />,
       children: [{ index: true, element: <AdminAnalyticsPage /> }],
     },
-    // EDIT (Phase 5 — platform maturity, subphase 5.3): admin account
+    // Admin account
     // management. Same ProtectedRoute (any signed-in admin) as every route
     // above — the super-admin restriction is enforced by the page itself
     // (a notice card for a non-super session, per its own header comment)
@@ -133,7 +133,7 @@ export const adminRouter = createBrowserRouter(
     },
   ],
   {
-    // FIX: every route above is written relative to "/" — but this app is
+    // Every route above is written relative to "/" — but this app is
     // reached at /admin on the same origin as the main app (see
     // vercel.json's /admin + /admin/(.*) rewrite to admin.html, and
     // vite.config.ts's adminHtmlDevFallback plugin for the dev-server
@@ -141,11 +141,10 @@ export const adminRouter = createBrowserRouter(
     // "/admin" (or "/admin/<something>"), never bare "/". Without this
     // basename, createBrowserRouter matches routes against
     // window.location.pathname exactly, and the very first load
-    // (pathname "/admin") matched nothing above and fell into the default
-    // "No routes matched" error boundary — this is that fix. Unlike the
-    // dev/prod split this used to need when the plan called for a separate
-    // admin subdomain, /admin is the real path in both environments now,
-    // so this is a plain constant, not import.meta.env.DEV-conditional.
+    // (pathname "/admin") matched nothing and fell into the default
+    // "No routes matched" error boundary. /admin is the real path in both
+    // dev and production, so this is a plain constant, not
+    // import.meta.env.DEV-conditional.
     basename: "/admin",
   },
 );

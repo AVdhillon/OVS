@@ -10,51 +10,46 @@ import { PrismaService } from '../prisma/prisma.service';
 import { InviteAdminDto } from './dto/invite-admin.dto';
 import { DeactivateAdminDto } from './dto/deactivate-admin.dto';
 
-// ─── Admin account management (Phase 5 — platform maturity, subphase 5.3) ──
-// EDIT: new service.
-//
-// SUPER_ADMIN-only, per the plan's own subphase title. Enforced primarily
-// at the controller level (@UseGuards(SiteAdminGuard) @RequireSuperAdmin()
-// on every route in AdminAccountsController) — but every write method here
-// also re-checks the *acting* admin's current is_active/is_super_admin
-// state via requireActiveSuperAdmin() below, the same defense-in-depth
-// duplication every write-path method since OrgRequestsService.approve()
-// (2.4) has carried: SiteAdminGuard/SiteAdminJwtStrategy only verify
-// site_admins state at *login* time (the JWT payload's is_super_admin is
-// baked in then, per auth.service.ts's siteAdminLogin(), subphase 1.2), so
-// a token issued before an admin was demoted or deactivated stays usable
-// for the rest of that session. Inviting or deactivating other admin
-// accounts is exactly the kind of action worth the extra query for — same
-// reasoning OrgLifecycleService/OrgRequestsService already gave for
-// organization-level actions.
+// ─── Admin account management ───────────────────────────────────────────────
+// SUPER_ADMIN-only. Enforced primarily at the controller level
+// (@UseGuards(SiteAdminGuard) @RequireSuperAdmin() on every route in
+// AdminAccountsController) — but every write method here also re-checks the
+// *acting* admin's current is_active/is_super_admin state via
+// requireActiveSuperAdmin() below. This defense-in-depth duplication exists
+// because SiteAdminGuard/SiteAdminJwtStrategy only verify site_admins state
+// at *login* time (the JWT payload's is_super_admin is baked in then, per
+// auth.service.ts's siteAdminLogin()), so a token issued before an admin
+// was demoted or deactivated stays usable for the rest of that session.
+// Inviting or deactivating other admin accounts is exactly the kind of
+// action worth the extra query for — the same reasoning
+// OrgLifecycleService/OrgRequestsService give for organization-level
+// actions.
 //
 // Two admin_audit_log actions, both already present in
-// chk_admin_audit_action and chk_admin_audit_target_type ('SITE_ADMIN')
-// since subphase 2.1 anticipated this subphase by name in its own schema
-// comment — no schema change is needed for 5.3 at all. ADMIN_INVITED has an
-// optional reason (chk_admin_audit_reason_required does not list it, same
-// as ORG_REINSTATED); ADMIN_DEACTIVATED requires one (same list as
+// chk_admin_audit_action and chk_admin_audit_target_type ('SITE_ADMIN') —
+// no schema change needed here. ADMIN_INVITED has an optional reason
+// (chk_admin_audit_reason_required does not list it, same as
+// ORG_REINSTATED); ADMIN_DEACTIVATED requires one (same list as
 // ORG_SUSPENDED/ORG_ARCHIVED).
 //
 // No password field anywhere in this file — see InviteAdminDto's own
 // header comment for why: admin login has always been OTP-to-email
-// (auth.service.ts's resolveSiteAdminOtpIdentifier(), subphase 1.2), so
-// inviteAdmin() only has to create the site_admins row; the invited person
-// signs in through the existing admin-login flow immediately afterward,
-// with no separate acceptance step or token.
+// (auth.service.ts's resolveSiteAdminOtpIdentifier()), so inviteAdmin()
+// only has to create the site_admins row; the invited person signs in
+// through the existing admin-login flow immediately afterward, with no
+// separate acceptance step or token.
 //
-// Locking shape mirrors OrgLifecycleService (3.2) exactly: a fast, unlocked
+// Locking shape mirrors OrgLifecycleService exactly: a fast, unlocked
 // pre-check for a friendly 404/409 (does not close a race on its own), then
 // a `SELECT ... FOR UPDATE` inside the transaction before the write, so two
 // concurrent actions on the same admin_id (e.g. two super admins racing to
 // deactivate the same account) serialize instead of one silently
 // clobbering the other.
 //
-// listAdmins()/getDetail() are a required deviation, the same class of gap
-// 3.1/3.3/4.7 each already flagged and filled in their own subphase: the
-// plan's file scope for 5.3 names only invite/deactivate, but a page that
-// lets a super admin *choose* who to deactivate needs somewhere to read the
-// roster from first, and nothing else in this codebase exposes one.
+// listAdmins()/getDetail() exist for the same reason similar read endpoints
+// exist elsewhere: a page that lets a super admin *choose* who to
+// deactivate needs somewhere to read the roster from first, and nothing
+// else in this codebase exposes one.
 
 /**
  * Deliberately excludes 0/O/1/I from the generation alphabet — reduces
@@ -116,9 +111,9 @@ export class AdminAccountsService {
   ) {
     const page =
       options.page && options.page > 0 ? Math.floor(options.page) : 1;
-    // Same cap/reasoning as every other admin list endpoint since 3.1: this
-    // is admin tooling, not a public export, but still capped so a caller
-    // can't force one very expensive page.
+    // Same cap/reasoning as every other admin list endpoint in this
+    // codebase: this is admin tooling, not a public export, but still
+    // capped so a caller can't force one very expensive page.
     const pageSize =
       options.pageSize && options.pageSize > 0
         ? Math.min(Math.floor(options.pageSize), 100)
@@ -261,9 +256,8 @@ export class AdminAccountsService {
 
   /**
    * ACTIVE -> deactivated (is_active = FALSE). No path back in this file —
-   * chk_admin_audit_action has no ADMIN_REACTIVATED entry, matching the
-   * plan's own "invite/deactivate" scope for this subphase; reactivating a
-   * deactivated admin is not something 5.3 builds.
+   * chk_admin_audit_action has no ADMIN_REACTIVATED entry; reactivating a
+   * deactivated admin is intentionally out of scope here.
    *
    * Deliberately has no separate "you can't deactivate yourself" check.
    * This route is @RequireSuperAdmin()-gated end to end, so actingAdminId
@@ -384,14 +378,13 @@ export class AdminAccountsService {
   // ─── Helpers ────────────────────────────────────────────────────────────
 
   /**
-   * Same defense-in-depth check every write-path method since
-   * OrgRequestsService.approve() (2.4) has carried — see this file's own
-   * header comment — but also re-verifies is_super_admin, not just
-   * is_active: every route this service is reached from is already behind
-   * @RequireSuperAdmin(), but that decorator reads the JWT payload set at
-   * login (subphase 1.3), not the current database row, so a
-   * demoted-mid-session admin's still-valid token wouldn't otherwise be
-   * caught until it expires.
+   * Same defense-in-depth check every write-path method in this codebase
+   * carries (see this file's own header comment) — but also re-verifies
+   * is_super_admin, not just is_active: every route this service is
+   * reached from is already behind @RequireSuperAdmin(), but that
+   * decorator reads the JWT payload set at login, not the current
+   * database row, so a demoted-mid-session admin's still-valid token
+   * wouldn't otherwise be caught until it expires.
    */
   private async requireActiveSuperAdmin(adminId: string) {
     const admin = await this.prisma.site_admins.findUnique({

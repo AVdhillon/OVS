@@ -10,37 +10,32 @@ import { FinalizeOrgRequestDto } from './dto/finalize-org-request.dto';
 import { AddMembersDto } from './dto/add-members.dto';
 
 // ─── Integration: submit → approve → finalize → org exists → member limit
-// enforced (Phase 6, subphase 6.7) ──────────────────────────────────────────
+// enforced ─────────────────────────────────────────────────────────────────
 //
-// post-approval-org-setup-plan.md's 6.7 section calls for exactly this: a
-// full submit → approve → finalize → org-exists → member-limit-enforced run.
+// A full submit → approve → finalize → org-exists → member-limit-enforced
+// run.
 //
 // What this test IS: the real OrgRequestsService/OrgService code for
 // submit(), approve(), finalizeSetup() and addMembers() run end to end
 // against a small in-memory fake standing in for PrismaService — including
 // the real runWithUniqueOrgId()/createOrganizationCore() helpers underneath
-// finalizeSetup(), unmocked. It genuinely exercises the sequencing this
-// phase introduced: an org_requests row that can't skip
+// finalizeSetup(), unmocked. It genuinely exercises the sequencing: an org_requests row that can't skip
 // APPROVED_PENDING_SETUP, an organization row that doesn't exist until
 // finalizeSetup() creates it with the admin-set member_limit baked in at
 // INSERT time, and addMembers()'s own running-counter pre-check refusing an
 // add once that limit is reached.
 //
 // What this test is NOT: a substitute for running this against a real
-// Postgres instance. `trg_check_member_limit` (dbschema.sql, 6.4) is a DB
+// Postgres instance. `trg_check_member_limit` (dbschema.sql) is a DB
 // trigger — there is no SQL engine here to execute it — so this test can
 // only prove the *service-level* pre-check in addMembers() (org.service.ts)
 // refuses the over-limit add. The DB trigger is the actual backstop for a
-// concurrent request racing past that pre-check (see 6.4's own notes on the
-// division of labor); it needs its own verification against a live database
-// with dbschema.sql loaded, which this sandbox cannot run (no network path
-// to provision one here — see PROGRESS.md's 6.3/6.4 notes on the same
-// limitation for `npx prisma generate`).
+// concurrent request racing past that pre-check ; it needs its own verification against a live database with
+// dbschema.sql loaded, which a unit-test environment cannot provide.
 //
-// OTP verification (org-email domain ownership, 4.3) and outbound email
-// (org-request-email.service.ts, 4.5) are stubbed rather than faked in
-// full — they're side flows this phase doesn't touch, already exercised by
-// submit()'s and approve()'s own areas of the codebase.
+// OTP verification (org-email domain ownership) and outbound email
+// (org-request-email.service.ts) are stubbed rather than faked in full —
+// they're side flows this test doesn't target.
 
 describe('org request lifecycle -> member limit enforcement (integration)', () => {
   let orgRequestsService: OrgRequestsService;
@@ -107,7 +102,7 @@ describe('org request lifecycle -> member limit enforcement (integration)', () =
     );
     expect(approved.status).toBe('APPROVED_PENDING_SETUP');
     expect(db.org_requests.get(requestId)?.admin_set_member_limit).toBe(2);
-    // No organization exists yet — that's the whole point of 6.2's split.
+    // No organization exists yet — that's the whole point of the split.
     expect(db.organization.size).toBe(0);
 
     // ── 3. finalizeSetup() — the requester actually creates the org ────

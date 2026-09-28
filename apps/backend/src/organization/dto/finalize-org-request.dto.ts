@@ -11,10 +11,10 @@ import {
 import { Type } from 'class-transformer';
 
 // ─── Finalize Org Request DTO ──────────────────────────────────────────────
-// EDIT (Phase 6 — post-approval org finalization, subphase 6.3): input for
+// Input for
 // OrgRequestsService.finalizeSetup() / POST /org/request/:requestId/finalize.
 //
-// This is the requester's half of the flow approve() (6.2) started: an
+// This is the requester's half of the flow approve() started: an
 // admin has already signed off and set a member cap
 // (org_requests.admin_set_member_limit), and status is
 // 'APPROVED_PENDING_SETUP'. Nothing here is inferred from the original
@@ -25,8 +25,7 @@ import { Type } from 'class-transformer';
 // contact email, and their own member uid.
 
 /**
- * Mirrors the plan's `{ mode: 'preferred', orgid } | { mode: 'generate' }`
- * shape, maps directly onto orgid.utilities.ts's `OrgIdSpec.preferredOrgId`
+ * Models `{ mode: 'preferred', orgid } | { mode: 'generate' }`; maps directly onto orgid.utilities.ts's `OrgIdSpec.preferredOrgId`
  * (mode 'preferred') vs. leaving it unset for a fully generated ID (mode
  * 'generate'). A discriminated `mode` field rather than a bare optional
  * `orgid` (the way RegisterOrgDto's `preferred_orgid` works) so the
@@ -55,7 +54,7 @@ export class FinalizeOrgRequestDto {
 
   /**
    * Required even when org_requests.org_email was already supplied and
-   * OTP-verified at submission (4.3) — real-world time may have passed
+   * OTP-verified at submission — real-world time may have passed
    * between submission and approval, so this is the requester's chance to
    * confirm or update it. finalizeSetup() compares this against the
    * request's stored org_email and only re-requires the domain-ownership
@@ -86,9 +85,8 @@ export class FinalizeOrgRequestDto {
    * (or in finalizeSetup()) against org_members, since the org this uid is
    * being inserted into does not exist yet, so there is structurally no
    * prior org_members row for it to collide with. See the "Owner uid"
-   * header comment near the top of org-requests.service.ts for the fuller
-   * history of why this is requester-chosen here rather than
-   * server-generated the way it was before 6.2.
+   * header comment near the top of org-requests.service.ts for why this is requester-chosen
+   * rather than server-generated.
    */
   @IsString()
   @IsNotEmpty()

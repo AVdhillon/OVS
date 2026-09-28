@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AddCandidateDto } from './dto/add-candidate.dto';
-// FIX: removed local JwtUser interface (had pid?: number — wrong; JWT stores it as string).
+// Removed local JwtUser interface (had pid?: number — wrong; JWT stores it as string).
 //      Import canonical JwtUser from the decorator instead.
 import type { JwtUser } from '../common/decorators/current-user.decorator';
 import { EventsService } from './events.service';
@@ -15,7 +15,7 @@ import { EventsService } from './events.service';
 export class CandidatesService {
   constructor(
     private prisma: PrismaService,
-    // FIX: inject EventsService to reuse resolveOrgIdentities for UNIFIED sessions
+    // Inject EventsService to reuse resolveOrgIdentities for UNIFIED sessions
     //      rather than duplicating or mishandling the logic.
     private eventsService: EventsService,
   ) {}
@@ -108,15 +108,11 @@ export class CandidatesService {
    *   1. The event exists and has not yet started.
    *   2. The calling user is an organizer in the event's org.
    *
-   * FIX: the previous implementation had a broken UNIFIED session path:
-   *   - actingUid was set to null for non-ORG sessions
-   *   - the ORG ownership check was silently skipped
-   *   - the organizer role lookup then used event.created_by_uid as the uid,
-   *     meaning any UNIFIED session passed as long as the creator had a role
-   *
-   * New approach: use EventsService.resolveOrgIdentities to get all (orgid, uid)
-   * pairs the caller can act as, then check organizer role for any match on
-   * the event's org. This handles both ORG and UNIFIED sessions correctly.
+   * Uses EventsService.resolveOrgIdentities to get every (orgid, uid) pair
+   * the caller can act as, then checks for an organizer role on any match in
+   * the event's org. This handles both ORG and UNIFIED sessions. Falling back
+   * to event.created_by_uid for non-ORG sessions would be wrong: any UNIFIED
+   * session would pass as long as the event's creator held a role.
    */
   private async assertOrganizerAndNotStarted(user: JwtUser, eventId: number) {
     const event = await this.prisma.events.findFirst({

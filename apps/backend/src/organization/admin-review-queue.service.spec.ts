@@ -3,7 +3,7 @@ import { BadRequestException } from '@nestjs/common';
 import { AdminReviewQueueService } from './admin-review-queue.service';
 import { PrismaService } from '../prisma/prisma.service';
 
-// ─── AdminReviewQueueService unit tests (Phase 7, subphase 7.1b) ──────────
+// ─── AdminReviewQueueService unit tests ──────────────────────────
 //
 // Scope: this is a thin read layer over the admin_review_queue view (a raw
 // SQL view, no Prisma model — see the service's own header comment), so

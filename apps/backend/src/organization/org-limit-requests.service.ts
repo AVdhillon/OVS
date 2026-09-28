@@ -7,51 +7,42 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-// EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.2): submit()'s
+// Submit()'s
 // organizer check reuses OrgService.assertOrganizerAccess() rather than
 // reimplementing it — it's the exact same "does this uid hold an
 // is_organizer=true role_roles row in this org" check
-// trg_check_limit_request_organizer (7.1, dbschema.sql) already backstops at
+// trg_check_limit_request_organizer (dbschema.sql) already backstops at
 // the DB level. This is the friendly 4xx in front of that trigger's raw
 // exception, same "friendly guard in front of a DB-level backstop" pattern
-// the plan calls for on 6.4's member-add paths.
+// used on the member-add paths.
 import { OrgService } from './org.service';
-// EDIT (Phase 7 — subphase 7.5): the four submitted/approved/rejected/
+// The four submitted/approved/rejected/
 // needs-info notifications for this table's lifecycle — see that file's own
 // header comment for why it's a sibling service to OrgRequestEmailService
 // rather than new methods added to it.
 import { OrgLimitRequestEmailService } from './org-limit-request-email.service';
 
-// ─── Member limit increase requests (Phase 7 — subphase 7.2) ────────────────
-// EDIT (Phase 7 — subphase 7.2): new service, structurally parallel to
-// OrgRequestsService (org-requests.service.ts) but deliberately its own
-// class/file rather than a method added to that one — see this plan's own
-// Phase 7 intro (post-approval-org-setup-plan.md) for why the two request
-// kinds (org creation vs. an existing org's member cap) stay separate all
-// the way down: different FK shape (pid vs. (orgid, uid)), different
-// approval side effect (org creation + finalizeSetup vs. a single-column
-// UPDATE on organization), different actor (a unified account with no org
-// yet vs. an existing org's own organizer).
+// ─── Member limit increase requests ─────────────────────────────────────────
+// Structurally parallel to OrgRequestsService (org-requests.service.ts) but
+// deliberately its own class/file rather than a method added to that one.
+// The two request kinds (org creation vs. an existing org's member cap)
+// stay separate all the way down: different FK shape (pid vs. (orgid, uid)),
+// different approval side effect (org creation + finalizeSetup vs. a
+// single-column UPDATE on organization), different actor (a unified account
+// with no org yet vs. an existing org's own organizer).
 //
-// Scope note: submit()/approve()/reject()/requestInfo() below are 7.2's
-// "Backend service" entry, unchanged since that subphase. list()/
-// getDetail()/listForOrg() further down were added in 7.3 ("API surface")
-// to back that subphase's new routes — 7.2 deliberately left them out (the
-// plan's own 7.2 text names only the four write methods), same as
-// OrgRequestsService's own history (2.3/2.4/2.5 shipped the write methods;
-// 3.1 added list()/getDetail() once an admin controller needed them). The
-// org_member_limit_requests table, its triggers, and the admin_review_queue
-// view are already in place (7.1/7.1b, verified directly against
-// dbschema.sql before writing this file — see the method comments below for
-// exactly what each constraint/trigger already guarantees vs. what this
-// service adds in front of it). Notifications (7.5) are wired into submit()/
-// approve()/reject()/requestInfo() via OrgLimitRequestEmailService — see
+// submit()/approve()/reject()/requestInfo() are the write paths;
+// list()/getDetail()/listForOrg() are the read side backing the admin queue
+// and the organizer's own history. The org_member_limit_requests table, its
+// triggers, and the admin_review_queue view already enforce the core
+// invariants in the database — see the method comments below for exactly
+// what each constraint/trigger guarantees vs. what this service adds in
+// front of it. Notifications are sent via OrgLimitRequestEmailService — see
 // that file's own header comment for why it's a sibling service rather than
 // new methods on OrgRequestEmailService.
 //
-// Cooldown: the plan's own "Open decisions" #3 is already answered — no
-// cooldown between successive limit-increase requests for the same org
-// (post-approval-org-setup-plan.md). unique_open_limit_request (one open
+// Cooldown: there is deliberately no cooldown between successive
+// limit-increase requests for the same org. unique_open_limit_request (one open
 // request per org at a time) is the only submission gate; there is no
 // SUBMIT_COOLDOWN_MS-equivalent constant in this file, and none should be
 // added unless that decision is reversed.
@@ -59,7 +50,7 @@ import { OrgLimitRequestEmailService } from './org-limit-request-email.service';
 /** Statuses in which a member-limit request is still awaiting a decision. */
 export const OPEN_LIMIT_REQUEST_STATUSES = ['PENDING', 'NEEDS_INFO'] as const;
 
-/** Mirrors org_member_limit_requests.chk_limit_request_status (7.1, dbschema.sql). */
+/** Mirrors org_member_limit_requests.chk_limit_request_status (dbschema.sql). */
 export type OrgLimitRequestStatus =
   | 'PENDING'
   | 'NEEDS_INFO'
@@ -68,10 +59,10 @@ export type OrgLimitRequestStatus =
 
 /**
  * Every status org_member_limit_requests.status can hold. Exported for
- * 7.1b's AdminReviewQueueService, which today defines its own local
+ * AdminReviewQueueService, which today defines its own local
  * ALL_LIMIT_REQUEST_STATUSES because this service didn't exist yet when it
  * was written (see that file's own comment flagging exactly this gap) —
- * whoever wires 7.3's admin routes should have AdminReviewQueueService
+ * whoever wires the admin routes should have AdminReviewQueueService
  * import this constant instead of keeping its local copy, to avoid the two
  * lists silently drifting apart.
  */
@@ -87,14 +78,14 @@ export class OrgLimitRequestsService {
   constructor(
     private prisma: PrismaService,
     private orgService: OrgService,
-    // EDIT (Phase 7 — subphase 7.5): wired in alongside orgService above,
+    // Wired in alongside orgService above,
     // same "inject the dispatch-mechanics service, decide when to call it
     // here" split OrgRequestsService/OrgRequestEmailService already use.
     private emailService: OrgLimitRequestEmailService,
   ) {}
 
   // ─── Submit a member-limit increase request ────────────────────────────────
-  // EDIT (Phase 7 — subphase 7.2): organizer-only (enforced here as a
+  // Organizer-only (enforced here as a
   // friendly pre-check, and again at the DB level by
   // trg_check_limit_request_organizer — see that trigger's own comment in
   // dbschema.sql for why it's not *only* a service-layer check), one open
@@ -112,8 +103,8 @@ export class OrgLimitRequestsService {
     // Friendly guard in front of trg_check_limit_request_organizer's raw
     // exception. Does not, by itself, prove `uid` is a *current, non-deleted*
     // member — assertOrganizerAccess() only checks member_roles, same as
-    // every other caller of it in org.service.ts today; not something this
-    // subphase should tighten unilaterally.
+    // every other caller of it in org.service.ts; tightening it here alone
+    // would make this route behave differently from the rest.
     await this.orgService.assertOrganizerAccess(orgid, uid);
 
     const org = await this.prisma.organization.findUnique({
@@ -147,7 +138,7 @@ export class OrgLimitRequestsService {
     // Cheap pre-check for an existing open request on this org. Same
     // two-layer shape as OrgRequestsService.submit()'s own
     // findOpenRequestByName() pre-check: this does NOT close the race —
-    // unique_open_limit_request (7.1) is what actually prevents the
+    // unique_open_limit_request is what actually prevents the
     // duplicate — it just produces a useful message instead of a bare 409
     // when there's no race to lose.
     const existing = await this.findOpenRequestForOrg(orgid);
@@ -185,7 +176,7 @@ export class OrgLimitRequestsService {
         },
       });
 
-      // EDIT (Phase 7 — subphase 7.5): fire the "request received"
+      // Fire the "request received"
       // notification now that the row genuinely exists — after the create
       // succeeds, not speculatively inside the try's happy path before
       // that, same "never email for a row that turned out not to exist"
@@ -226,12 +217,12 @@ export class OrgLimitRequestsService {
   }
 
   // ─── Edit and resubmit a NEEDS_INFO request ───────────────────────────────
-  // EDIT: the organizer-facing counterpart to requestInfo(). The table's own
-  // status comment (dbschema.sql, 7.1) already documents the intent —
+  // The organizer-facing counterpart to requestInfo(). The table's own
+  // status comment (dbschema.sql) documents the intent —
   // "NEEDS_INFO -- admin asked a question; organizer can edit and
-  // resubmit" — but 7.2/7.3 never actually shipped a write path for it,
-  // leaving the org with no way off a NEEDS_INFO row short of waiting for
-  // an admin to approve/reject it outright. Only NEEDS_INFO is editable:
+  // resubmit". Without this path the org would have no way off a
+  // NEEDS_INFO row short of waiting for an admin to approve/reject it
+  // outright. Only NEEDS_INFO is editable:
   // PENDING is already awaiting a first look (editing it would race an
   // admin mid-review), APPROVED/REJECTED are terminal. On success the row
   // goes back to PENDING — same shape as a fresh submit() — so it re-enters
@@ -354,7 +345,7 @@ export class OrgLimitRequestsService {
   }
 
   // ─── Approve a pending/needs-info request ────────────────────────────────
-  // EDIT (Phase 7 — subphase 7.2): the one outcome with a real side effect —
+  // The one outcome with a real side effect —
   // organization.member_limit is raised to requested_limit in the same
   // transaction that closes the request out. Lock-then-write shape mirrors
   // OrgRequestsService.approve()/reject()/requestInfo() exactly: SELECT ...
@@ -453,7 +444,7 @@ export class OrgLimitRequestsService {
       return updated;
     });
 
-    // EDIT (Phase 7 — subphase 7.5): sent after the transaction commits —
+    // Sent after the transaction commits —
     // same "don't email for something that got rolled back" reasoning as
     // every notification call site in org-requests.service.ts. Requester
     // email/org name aren't columns on org_member_limit_requests itself, so
@@ -488,7 +479,7 @@ export class OrgLimitRequestsService {
   }
 
   // ─── Reject a pending/needs-info request ─────────────────────────────────
-  // EDIT (Phase 7 — subphase 7.2): terminal, adverse outcome, no
+  // Terminal, adverse outcome, no
   // organization.member_limit change. Same shape as
   // OrgRequestsService.reject().
   async reject(requestId: bigint, adminId: string, reason: string) {
@@ -566,7 +557,7 @@ export class OrgLimitRequestsService {
       return updated;
     });
 
-    // EDIT (Phase 7 — subphase 7.5): sent after the transaction commits,
+    // Sent after the transaction commits,
     // same reasoning as approve()'s own call site above.
     const [requester, org] = await Promise.all([
       this.prisma.org_members.findUnique({
@@ -594,20 +585,17 @@ export class OrgLimitRequestsService {
   }
 
   // ─── Send a request back for more information ────────────────────────────
-  // EDIT (Phase 7 — subphase 7.2): non-terminal — mirrors
+  // Non-terminal — mirrors
   // OrgRequestsService.requestInfo() exactly. Writes
   // 'MEMBER_LIMIT_INCREASE_INFO_REQUESTED' to admin_audit_log — see this
   // file's accompanying dbschema.sql note (chk_admin_audit_action /
-  // chk_admin_audit_reason_required) for why that value had to be added: 7.1
-  // added APPROVED/REJECTED for this table but not an INFO_REQUESTED
-  // counterpart, even though org_member_limit_requests.chk_limit_request_
-  // status (7.1) already includes NEEDS_INFO as a reachable status and
+  // chk_admin_audit_reason_required) for why that value exists: the audit
+  // enum needs an INFO_REQUESTED value specific to this table, even though org_member_limit_requests.chk_limit_request_
+  // status already includes NEEDS_INFO as a reachable status and
   // chk_limit_request_needs_info_note already requires review_note for it —
-  // the table-level support for this outcome was already there, only the
-  // admin_audit_log enum value was missing. Flagging rather than silently
-  // working around it (e.g. by reusing ORG_REQUEST_INFO_REQUESTED, which
-  // would misattribute the action to the wrong table), same convention
-  // 7.1/7.1b's own sessions used for gaps they found.
+  // the table already supports this outcome. Reusing
+  // ORG_REQUEST_INFO_REQUESTED instead would misattribute the action to the
+  // wrong table in the audit log.
   async requestInfo(requestId: bigint, adminId: string, reason: string) {
     await this.requireActiveSiteAdmin(adminId);
 
@@ -680,7 +668,7 @@ export class OrgLimitRequestsService {
       return updated;
     });
 
-    // EDIT (Phase 7 — subphase 7.5): sent after the transaction commits,
+    // Sent after the transaction commits,
     // same reasoning as approve()/reject()'s own call sites above.
     const [requester, org] = await Promise.all([
       this.prisma.org_members.findUnique({
@@ -707,14 +695,11 @@ export class OrgLimitRequestsService {
     };
   }
 
-  // ─── Admin review queue + detail (subphase 7.3) ──────────────────────────
-  // EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.3): read-side
-  // methods 7.2 deliberately left out of scope (see this file's own header
-  // comment) — the plan's "7.2 — Backend service" entry names only
-  // submit/approve/reject/requestInfo. 7.3's admin routes
-  // (member-limit-requests-admin.controller.ts) need a queue and a detail
-  // view, same as OrgRequestsService.list()/getDetail() (3.1) do for
-  // org_requests — mirrored here rather than reinvented.
+  // ─── Admin review queue + detail ─────────────────────────────────────────
+  // Read-side methods for the admin routes
+  // (member-limit-requests-admin.controller.ts), which need a queue and a
+  // detail view — same as OrgRequestsService.list()/getDetail() do for
+  // org_requests, mirrored here rather than reinvented.
 
   /**
    * The admin review queue for this table specifically. Defaults to open
@@ -722,7 +707,7 @@ export class OrgLimitRequestsService {
    * status — matches idx_limit_requests_status's (status, created_at) shape
    * exactly, same reasoning as OrgRequestsService.list()'s own doc comment.
    *
-   * Distinct from AdminReviewQueueService.list() (7.1b), which reads BOTH
+   * Distinct from AdminReviewQueueService.list(), which reads BOTH
    * request tables through the unified admin_review_queue view for the
    * combined queue UI — that view only carries the columns both tables
    * share (status/created_at/reviewed_by_admin_id/reviewed_at), not
@@ -780,7 +765,7 @@ export class OrgLimitRequestsService {
    * queries-not-a-Prisma-include shape as
    * OrgRequestsService.getDetail() — see that method's own comment for why
    * (the real Prisma-generated relation field names for these FKs aren't
-   * knowable in this sandbox without a working `prisma generate`).
+   * knowable without a `prisma db pull` regen).
    */
   async getDetail(requestId: bigint) {
     const request = await this.prisma.org_member_limit_requests.findUnique({
@@ -826,7 +811,7 @@ export class OrgLimitRequestsService {
   }
 
   /**
-   * An org's own request history, newest first — 7.4's org-admin-dashboard
+   * An org's own request history, newest first — the org-admin-dashboard
    * "status of any open request" view reads from this. Matches
    * idx_limit_requests_orgid's (orgid, created_at DESC) shape exactly, so
    * this is an index-only lookup for any one org, not a scan.
@@ -873,7 +858,7 @@ export class OrgLimitRequestsService {
 
   /**
    * Validates+normalises list()'s optional status filter. Same shape as
-   * OrgRequestsService.resolveStatusFilter() (3.1): empty/omitted defaults
+   * OrgRequestsService.resolveStatusFilter(): empty/omitted defaults
    * to the open statuses, an explicit filter is upper-cased and checked
    * against the full status set so a typo produces a clean
    * BadRequestException instead of a silently-empty page.
@@ -897,14 +882,12 @@ export class OrgLimitRequestsService {
    * reject()/requestInfo()'s shared note validation. Unlike
    * OrgRequestsService.resolveReviewNotes(), this returns a single string
    * used for both the requester-facing review_note and the internal
-   * admin_audit_log.reason — the plan's own 7.2 text describes reject()/
-   * requestInfo() as "same shape as the existing org_requests equivalents"
-   * but does not carry over ReviewOrgRequestDto's separate
-   * reason/internal_note split; that split is a DTO-level decision (7.3),
-   * not something implied by the service signatures the plan gives for 7.2
-   * (`reject(requestId, adminId, reason)`). If 7.3 wants the same
-   * public/internal split org_requests has, this method's signature — and
-   * this helper — will need to grow a second parameter then, not now.
+   * admin_audit_log.reason. It deliberately does not carry over
+   * ReviewOrgRequestDto's separate reason/internal_note split; that split is
+   * a DTO-level decision (`reject(requestId, adminId, reason)` takes one
+   * string). If the same public/internal split org_requests has is ever
+   * wanted here, this method's signature — and this helper — will need to
+   * grow a second parameter together.
    */
   private resolveReviewNote(reason: string): string {
     const trimmed = reason?.trim() ?? '';

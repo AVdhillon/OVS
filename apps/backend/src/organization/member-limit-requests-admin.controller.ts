@@ -14,20 +14,18 @@ import { SiteAdminGuard } from '../auth/guards/site-admin.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtUser } from '../common/decorators/current-user.decorator';
 
-// ─── Member limit request admin routes (Phase 7 — Member Limit Increase
-// Requests, subphase 7.3) ──────────────────────────────────────────────────
-// EDIT (subphase 7.3): new controller — the admin-facing counterpart to
-// org.controller.ts's submitLimitRequest()/listLimitRequestsForOrg() routes.
-// A separate controller from OrgRequestsAdminController rather than new
-// routes bolted onto it, per the plan's own 7.3 text ("new controller keeps
-// the 'requests about orgs that don't exist yet' vs. 'requests about
-// existing orgs' split clean") — same reasoning
+// ─── Member limit request admin routes  ──────────────────────────────────────────────────
+// The admin-facing counterpart to org.controller.ts's
+// submitLimitRequest()/listLimitRequestsForOrg() routes. A separate
+// controller from OrgRequestsAdminController rather than new routes bolted
+// onto it, which keeps the 'requests about orgs that don't exist yet' vs.
+// 'requests about existing orgs' split clean — same reasoning
 // org-requests.service.ts/org-limit-requests.service.ts already used to stay
 // two services instead of one.
 //
 // Route prefix is 'admin/member-limit-requests', a sibling top-level prefix
 // to 'admin/org-requests' rather than nested under it — same flat-prefix-
-// per-request-kind convention, and it mirrors 7.1b's own
+// per-request-kind convention, and it mirrors the own
 // 'admin/review-queue' prefix choice for the unified queue view.
 //
 // SiteAdminGuard only, no elevated tier — reviewing a member-limit request
@@ -44,7 +42,7 @@ export class MemberLimitRequestsAdminController {
    * OrgLimitRequestsService.list() for default/filter/paging behaviour.
    * ?status= accepts a comma-separated list, same convention as
    * OrgRequestsAdminController.list(). For the *combined* queue (both
-   * org_requests and org_member_limit_requests together), see 7.1b's
+   * org_requests and org_member_limit_requests together), see
    * GET /admin/review-queue instead — that view is what the queue-landing
    * UI reads from; this route is for drilling into this table alone, or for
    * a UI that never adopts the unified view.
@@ -117,12 +115,10 @@ export class MemberLimitRequestsAdminController {
 
   /**
    * POST /admin/member-limit-requests/:requestId/needs-info
-   * EDIT (subphase 7.3): route segment is 'needs-info', matching the plan's
-   * own literal 7.3 text ("[/:id/approve|reject|needs-info]") — note this
-   * diverges from OrgRequestsAdminController's equivalent route, which is
-   * named 'request-info'. Flagging the inconsistency rather than silently
-   * picking one: kept as the plan wrote it for this controller instead of
-   * forcing consistency with the other one unasked. Non-terminal — the
+   * Route segment is 'needs-info' — note this diverges from
+   * OrgRequestsAdminController's equivalent route, which is named
+   * 'request-info'. Kept as-is rather than renamed, since clients already
+   * call each route by its current name. Non-terminal — the
    * request goes back to NEEDS_INFO for the organizer to address. Same
    * ReviewLimitRequestDto body as reject(). See
    * OrgLimitRequestsService.requestInfo().

@@ -4,14 +4,14 @@ import path from 'path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 
-// FIX: dev-only companion to routes.tsx's basename fix. Client-side
+// Dev-only companion to routes.tsx's basename setting. Client-side
 // navigation within the admin app (clicking a <Link>) never hits this —
 // react-router just updates history in the browser. This only matters for
 // a hard refresh or a manually-typed URL under /admin or /admin/* (e.g.
 // /admin/dashboard): that's a real HTTP request to Vite's dev server, and
 // without this, Vite has no file at that path and returns a genuine 404
 // (as opposed to the React Router "No routes matched" error the basename
-// fix addresses). Mirrors what vercel.json's /admin + /admin/(.*) rewrite
+// setting prevents). Mirrors what vercel.json's /admin + /admin/(.*) rewrite
 // does in production — same rule, same admin.html target, just expressed
 // as Vite dev-server middleware here instead of a host-level rewrite.
 function adminHtmlDevFallback(): Plugin {
@@ -56,17 +56,14 @@ export default defineConfig({
   // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
   assetsInclude: ['**/*.svg', '**/*.csv'],
 
-  // EDIT (Phase 1 — auth model consolidation, subphase 1.10): second build
-  // entry for the standalone admin app (admin.html -> src/admin/main.tsx).
-  // Without an explicit rollupOptions.input, `vite build` only emits
-  // index.html's entry — this doesn't affect `vite dev`, which serves any
-  // HTML file at its own path (e.g. /admin.html) with no config needed, but
-  // a production build would silently drop the admin app entirely without
-  // this.
+  // Second build entry for the standalone admin app (admin.html ->
+  // src/admin/main.tsx). Without an explicit rollupOptions.input, `vite build`
+  // only emits index.html's entry — this doesn't affect `vite dev`, which
+  // serves any HTML file at its own path (e.g. /admin.html) with no config
+  // needed, but a production build would silently drop the admin app entirely.
   //
-  // EDIT (post-deploy fix): the two apps are one static build output,
-  // deployed to the SAME origin, not separate subdomains as 1.3's original
-  // comment here assumed — /admin and everything under /admin/* is
+  // The two apps are one static build output deployed to the SAME origin
+  // (not separate subdomains): /admin and everything under /admin/* is
   // rewritten to this admin.html entry at the host level (see vercel.json),
   // same idea as the bare "/" -> index.html mapping every static host does
   // by default. See routes.tsx's basename and this file's

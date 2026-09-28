@@ -12,17 +12,17 @@ import {
 import { Type } from 'class-transformer';
 
 // ─── Submit Org Request DTO ───────────────────────────────────────────────────
-// EDIT (Phase 2 — org request staging, subphase 2.3): the input side of
+// The input side of
 // OrgRequestsService.submit().
 //
 // This is deliberately NOT a slimmed-down RegisterOrgDto. Registering an org
 // and *asking* for one are different acts with different inputs:
 //   - No preferred_orgid / org_prefix / org_suffix. The requester doesn't
 //     pick the ID — no org exists yet, and the orgid is allocated by a site
-//     admin's approval (2.4) via runWithUniqueOrgId(), not by the requester.
+//     admin's approval via runWithUniqueOrgId(), not by the requester.
 //   - No caller_uid / caller_identifier. Those bind the caller as the first
 //     member of an org that's being created right now; at submission time
-//     there's nothing to be a member of. They belong to 2.4's approve().
+//     there's nothing to be a member of. They belong to approve().
 //   - No participants / participants_csv. Seeding a member list before
 //     anyone has agreed the org should exist would mean carrying (and
 //     having to re-validate) a potentially large roster through the whole
@@ -38,16 +38,16 @@ export class SubmitOrgRequestDto {
    * Contact address for the organization itself (not the requester — the
    * requester is identified by their session's pid).
    *
-   * Optional here, but note it's the field subphase 4.2's free-email-domain
-   * signal and 4.3's domain-ownership OTP check both key off, so a request
-   * submitted without one will score weaker once those land.
+   * Optional here, but note it's the field the free-email-domain signal
+   * and the domain-ownership OTP check both key off, so a request
+   * submitted without one carries weaker verification evidence.
    */
   @IsOptional()
   @IsEmail()
   org_email?: string;
 
   /**
-   * EDIT (Phase 4 — cutover, subphase 4.3): code from the OTP sent to
+   * Code from the OTP sent to
    * org_email via POST /org/request/send-domain-otp, proving the requester
    * controls that address before submit() will create a row referencing it.
    *
@@ -65,9 +65,9 @@ export class SubmitOrgRequestDto {
   org_email_otp?: string;
 
   /**
-   * Rough size the requester expects the org to be. Used by 4.2 as a
+   * Rough size the requester expects the org to be. Used as a
    * verification signal (compared against the requester's account age), and
-   * shown to the reviewing admin in 3.5's request detail page.
+   * shown to the reviewing admin in the request detail page.
    *
    * Upper bound is a sanity cap on obvious junk, not a real limit.
    */

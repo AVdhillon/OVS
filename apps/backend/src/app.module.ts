@@ -9,17 +9,15 @@ import { RedisModule } from './redis/redis.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { OrgModule } from './organization/org.module';
-// EDIT (Phase 5 — platform maturity, subphase 5.1): the admin audit-log
-// viewer. Its own module rather than another controller inside OrgModule —
+// The admin audit-log viewer. Its own module rather than another controller inside OrgModule —
 // its subject is the platform's audit record (admin actions on requests,
-// organizations, and from 5.3 on site admins themselves), not an
+// organizations, and site admins themselves), not an
 // organization. See audit.service.ts's header comment.
 import { AuditModule } from './audit/audit.module';
-// EDIT (Phase 5 — platform maturity, subphase 5.2): the platform analytics
-// dashboard. Its own module beside AuditModule rather than inside it — see
+// The platform analytics dashboard. Its own module beside AuditModule rather than inside it — see
 // analytics.service.ts's header for why the two are kept apart.
 import { AnalyticsModule } from './analytics/analytics.module';
-// EDIT (Phase 5 — platform maturity, subphase 5.3): admin account
+// Admin account
 // management (invite/deactivate other site admins, SUPER_ADMIN-only). Its
 // own module beside AuditModule/AnalyticsModule rather than inside either —
 // see admin-accounts.module.ts's header for why.
@@ -39,8 +37,7 @@ import { CsrfGuard } from './common/guards/csrf.guard';
     IdentityModule,
     ScheduleModule.forRoot(),
     ConfigModule.forRoot({ isGlobal: true }),
-    // Global request-rate limiting (fraud-heuristic-implementation-plan.md,
-    // Module A). Applies a moderate app-wide default; the login/OTP
+    // Global request-rate limiting. Applies a moderate app-wide default; the login/OTP
     // endpoints in auth.controller.ts override this with tighter
     // route-specific limits via @Throttle(), since those are the
     // brute-force/credential-stuffing surface this module targets.
@@ -67,12 +64,10 @@ import { CsrfGuard } from './common/guards/csrf.guard';
   controllers: [AppController],
   providers: [
     AppService,
-    // Global double-submit CSRF check (plan-httponly-cookie-jwt.md, Finding
-    // #2, step 6) — see CsrfGuard for why this is registered app-wide
+    // Global double-submit CSRF check — see CsrfGuard for why this is registered app-wide
     // rather than per-controller.
     { provide: APP_GUARD, useClass: CsrfGuard },
-    // Global rate-limit guard (fraud-heuristic-implementation-plan.md,
-    // Module A). Registered app-wide so every route is throttled by
+    // Global rate-limit guard. Registered app-wide so every route is throttled by
     // default; auth.controller.ts narrows the limit further on the
     // login/OTP endpoints specifically.
     { provide: APP_GUARD, useClass: ThrottlerGuard },

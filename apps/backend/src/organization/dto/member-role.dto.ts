@@ -1,6 +1,5 @@
 // organization/dto/member-role.dto.ts
-// New DTOs required by addMemberRole and moveMemberRole endpoints.
-// These routes exist in the frontend (api.tsx) but were absent from the backend.
+// DTOs for the addMemberRole and moveMemberRole endpoints.
 
 import { IsBoolean, IsNumber, IsNotEmpty, IsOptional } from 'class-validator';
 

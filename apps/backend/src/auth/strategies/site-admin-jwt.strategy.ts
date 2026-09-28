@@ -1,7 +1,6 @@
 // src/auth/strategies/site-admin-jwt.strategy.ts
 //
-// EDIT (Phase 1 — auth model consolidation, subphase 1.3): new. The admin
-// app's counterpart to jwt.strategy.ts. Registered under a distinct
+// The admin app's counterpart to jwt.strategy.ts. Registered under a distinct
 // passport strategy name ('site-admin-jwt', not the default 'jwt') so the
 // two coexist — a route guards with either AuthGuard('jwt') (regular
 // UNIFIED/ORG sessions) or SiteAdminGuard (which wraps this strategy), and

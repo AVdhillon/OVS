@@ -18,7 +18,7 @@ async function bootstrap() {
 
   // Swagger config
   if (process.env.NODE_ENV !== 'production') {
-    // EDIT (JWT-in-cookie migration): the API no longer accepts a bearer
+    // The API no longer accepts a bearer
     // token — auth is via the httpOnly `ovp_token` cookie set on login, so
     // advertising a Bearer "Authorize" button here would be misleading.
     // Swagger has no first-class "httpOnly cookie" scheme to document, and
@@ -75,13 +75,12 @@ async function bootstrap() {
     throw new Error('ALLOWED_ORIGINS must be set in production');
   }
 
-  // EDIT (Phase 1 — auth model consolidation, subphase 1.3): the standalone
-  // admin app (skeleton lands in subphase 1.10) is served from its own
-  // origin — e.g. https://admin.example.com — separate from the regular
-  // frontend's origin(s) above. Kept as its own env var rather than just
-  // appended into ALLOWED_ORIGINS so the two lists can be configured and
+  // The standalone admin app is served from its own origin — e.g.
+  // https://admin.example.com — separate from the regular frontend's
+  // origin(s) above. Kept as its own env var rather than just appended
+  // into ALLOWED_ORIGINS so the two lists can be configured and
   // audited independently: the admin origin fronts SiteAdminGuard-protected
-  // routes (subphase 1.3) and is a materially higher-trust surface than the
+  // routes and is a materially higher-trust surface than the
   // regular ALLOWED_ORIGINS list, worth being able to reason about on its
   // own rather than buried in a combined comma-separated value.
   const adminAllowedOrigins =

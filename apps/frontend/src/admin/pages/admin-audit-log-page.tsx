@@ -44,31 +44,29 @@ import {
   X,
 } from "lucide-react";
 
-// EDIT (Phase 5 — platform maturity, subphase 5.1): new. The plan's own
-// description is "surface admin_audit_log (intent) with drill-down into
-// audit_logs (row diffs) for a given org", and this is the one admin page
-// that subphase calls for. It reads all three of AuditAdminController's
-// routes:
+// Admin audit page: surfaces admin_audit_log (what an admin intended to do)
+// with drill-down into audit_logs (the row-level diffs) for a given org.
+// It reads all three of AuditAdminController's routes:
 //
 //   * GET /admin/audit                          -> the feed (the table)
 //   * GET /admin/audit/:adminLogId              -> expanding a feed row
 //   * GET /admin/audit/organizations/:orgid     -> the org panel
 //
-// **URL-driven rather than tab-driven**, unlike 3.5's request queue and
-// 3.6's org directory (both of which keep their filter in local state). Two
+// **URL-driven rather than tab-driven**, unlike the request queue and
+// the org directory (both of which keep their filter in local state). Two
 // reasons: an auditor's whole workflow is "here is the thing I was looking
 // at" — a filtered audit view needs to be a link someone can paste into a
-// ticket — and it lets 3.6's org-detail page deep-link straight here
-// (?target_type=ORGANIZATION&target_id=ABC1234) instead of this subphase
-// having to add a second page for the per-org view.
+// ticket — and it lets the org-detail page deep-link straight here
+// (?target_type=ORGANIZATION&target_id=ABC1234) without needing a separate
+// page for the per-org view.
 //
 // When the filter is scoped to one organization, the page additionally
 // renders that org's full row-diff history from the third route. That is
 // deliberately *not* the same data as expanding a feed row: a feed row's
 // drill-down shows the rows moved by one admin action, while the org panel
 // shows every audited change to the org including ones no admin caused
-// (a member joining, an event being created). Both halves matter — the
-// plan's pairing is intent *with* drill-down, not intent *instead of* it.
+// (a member joining, an event being created). Both halves matter: the
+// page pairs intent *with* drill-down, not intent *instead of* it.
 
 const PAGE_SIZE = 25;
 const ORG_CHANGES_PAGE_SIZE = 25;
@@ -82,7 +80,7 @@ const ACTION_LABEL: Record<AdminAction, string> = {
   ORG_ARCHIVED: "Org archived",
   ADMIN_INVITED: "Admin invited",
   ADMIN_DEACTIVATED: "Admin deactivated",
-  // EDIT: labels for the three member-limit-request actions — same
+  // Labels for the three member-limit-request actions — same
   // "verb-first, plain English" convention as the org-request trio above.
   MEMBER_LIMIT_INCREASE_APPROVED: "Limit increase approved",
   MEMBER_LIMIT_INCREASE_REJECTED: "Limit increase rejected",
@@ -101,7 +99,7 @@ const ACTION_CLASS: Record<AdminAction, string> = {
   ORG_ARCHIVED: "bg-red-50 text-red-700 border-red-200",
   ADMIN_INVITED: "bg-sky-50 text-sky-700 border-sky-200",
   ADMIN_DEACTIVATED: "bg-red-50 text-red-700 border-red-200",
-  // EDIT: same colour role as their org-request counterparts above —
+  // Same colour role as their org-request counterparts above —
   // approved is green, rejected is red, needs-info is amber.
   MEMBER_LIMIT_INCREASE_APPROVED: "bg-emerald-50 text-emerald-700 border-emerald-200",
   MEMBER_LIMIT_INCREASE_REJECTED: "bg-red-50 text-red-700 border-red-200",
@@ -125,7 +123,7 @@ function actionClass(action: string) {
   );
 }
 
-// EDIT: the Target column used to show target_type verbatim
+// The Target column used to show target_type verbatim
 // ("ORGANIZATION", "MEMBER_LIMIT_REQUEST", ...) next to a bare id — readable
 // enough once you know the schema, but not something an auditor should have
 // to decode. This gives each type a plain-English label + icon, and, where
@@ -464,7 +462,8 @@ export function AdminAuditLogPage() {
   }, [loadOrgChanges]);
 
   // Every filter change resets to page 1 — page 3 of one filter isn't page 3
-  // of another. Same reasoning 3.5/3.6 apply on tab and search changes.
+  // of another. The other admin list pages reset the same way on tab and
+  // search changes.
   const applyFilters = (next: {
     admin_id?: string;
     target_type?: string;
@@ -553,7 +552,7 @@ export function AdminAuditLogPage() {
                       "ORG_REQUEST",
                       "ORGANIZATION",
                       "SITE_ADMIN",
-                      // EDIT: this filter's own button group predates Phase
+                      // This filter's own button group predates Phase
                       // 7 the same way ACTION_LABEL/ACTION_CLASS did above —
                       // chk_admin_audit_target_type already accepts
                       // MEMBER_LIMIT_REQUEST, this group just never grew a

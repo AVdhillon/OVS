@@ -3,28 +3,22 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 // ─── Org ID allocation ────────────────────────────────────────────────────────
-// EDIT (Phase 2 — org request staging, subphase 2.2): extracted wholesale out
-// of org.service.ts's registerOrg(), where orgid generation, the cheap
-// pre-check, and the TOCTOU retry-around-the-transaction loop were three
-// separate stretches of code interleaved with participant parsing and the
-// org-creation transaction body itself.
+// Orgid generation, the cheap pre-check, and the TOCTOU retry-around-the-
+// transaction loop, kept in one place so every code path that creates an
+// organization (direct registration and request finalization) shares a
+// single implementation. Duplicating the retry loop into a second service
+// would mean two copies of a race-condition fix, which silently diverge.
 //
-// Why extract it now: subphase 2.4's OrgRequestsService.approve() has to
-// create an organization too, from an approved org_requests row, and needs
-// exactly this behaviour — a unique orgid, allocated safely against concurrent
-// creation. Copying the retry loop into a second service would mean two
-// implementations of a race-condition fix (finding #8), which is the kind of
-// thing that silently diverges. registerOrg() and approve() now share one.
-//
-// Behaviour is deliberately unchanged from registerOrg()'s original, with one
-// bug fix called out under deriveOrgIdPrefix() below.
+// The pre-check gives a fast, friendly error; the retry loop is what
+// actually guarantees uniqueness under concurrent creation, since a
+// check-then-insert alone leaves a window between the two.
 
 /** The format enforced by organization.chk_orgid_format in the schema. */
 export const ORG_ID_FORMAT = /^[A-Z]{3}[0-9]{4}$/;
 
 /**
  * What the caller knows about the orgid they want. All fields beyond orgName
- * are optional, which is what lets 2.4's approve() use this: an approved
+ * are optional, which is what lets approve() use this: an approved
  * org_requests row carries a name and nothing else, so it simply passes
  * `{ orgName }` and takes a fully generated ID.
  */
@@ -41,9 +35,9 @@ export interface OrgIdSpec {
 /**
  * Derives the 3-letter prefix from an org name.
  *
- * FIX (found while extracting, subphase 2.2): the original inline version was
- * `orgName.replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase()` with no
- * floor on the result. RegisterOrgDto only requires org_name to be 2–100
+ * The prefix is padded with random letters when the name yields fewer than
+ * three, because a plain `orgName.replace(/[^A-Za-z]/g, '').slice(0, 3)`
+ * has no floor on the result. RegisterOrgDto only requires org_name to be 2–100
  * characters — it does not require letters — so a name like "42", "2024",
  * or one written in a non-Latin script strips down to fewer than 3 letters
  * and yields a malformed ID ("1234" instead of "ABC1234"). That violates
@@ -51,11 +45,11 @@ export interface OrgIdSpec {
  * check-constraint violation escaping as a 500 rather than anything the
  * caller could act on.
  *
- * This mattered little while registerOrg() was the only caller (org names
- * are usually Latin words), but 2.4's approve() derives the prefix from a
- * user-submitted org_requests.org_name with no org_prefix field available
- * to override it, so the unhappy path becomes reachable. Short/absent
- * letter runs are padded out with random letters instead.
+ * This matters most for request-created orgs, where the prefix is derived
+ * from a user-submitted org_requests.org_name with no org_prefix field
+ * available to override it, so names without enough Latin letters are a
+ * realistic input. Short/absent letter runs are padded out with random
+ * letters instead of producing a malformed ID.
  */
 export function deriveOrgIdPrefix(orgName: string): string {
   const letters = orgName.replace(/[^A-Za-z]/g, '').toUpperCase();
@@ -87,7 +81,7 @@ export function generateOrgId(
   return `${p}${s}`;
 }
 
-// FIX (finding #8): identifies a Prisma unique-constraint violation on
+// Identifies a Prisma unique-constraint violation on
 // organization.orgid specifically (as opposed to org_email or any other
 // unique field that create() could also collide on), so the TOCTOU retry
 // below only fires for the collision it's actually meant to handle.
@@ -107,7 +101,7 @@ export function isOrgIdUniqueConflict(err: unknown): boolean {  if (!(err instan
 /**
  * Picks the orgid to attempt first.
  *
- * FIX (finding #8): this stays as a cheap pre-check to reject an
+ * This stays as a cheap pre-check to reject an
  * obviously-taken preferred_orgid, or to steer the generator away from an
  * obvious collision, without paying for a transaction. It does NOT by itself
  * close the race — see runWithUniqueOrgId() below, which is what actually
@@ -154,7 +148,7 @@ export async function resolveInitialOrgId(
  * actual creation attempt (registerOrg()/finalizeSetup()), reused here only
  * for the query it already runs.
  *
- * EDIT (Phase 6 — post-approval org finalization, subphase 6.5): extracted
+ * Extracted
  * so GET /org/orgid-available (org.controller.ts) can offer a live-typing
  * availability check in the finalize-setup wizard without going through
  * resolveInitialOrgId()'s "trim/uppercase a preferred_orgid, or generate one
@@ -180,7 +174,7 @@ export async function isOrgIdAvailable(
  * Allocates a unique orgid and runs `body` inside a transaction with it,
  * retrying the whole transaction on an orgid collision.
  *
- * FIX (finding #8 — TOCTOU race): the findUnique() checks in
+ * The findUnique() checks in
  * resolveInitialOrgId() only reduce the *probability* of a collision, they
  * don't prevent one. Two concurrent registrations can both pass the check for
  * the same orgid before either has inserted it, then race to insert inside

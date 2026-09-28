@@ -54,18 +54,17 @@ export class AuthService {
           'orgid and uid are required for ORG login',
         );
       }
-      // EDIT (Phase 3 — admin portal core, subphase 3.4): gate ORG login on
+      // Gate ORG login on
       // organization.status. A member of a SUSPENDED/ARCHIVED org (Phase
-      // 3.2's suspend()/archive()) must not be able to sign in as that org
+      // suspend()/archive()) must not be able to sign in as that org
       // — a live session is exactly what "suspended" is meant to prevent.
       // Checked here (before the OTP is ever sent) rather than only in
       // login()'s switch, since sendLoginOtp() also calls
       // resolveOtpIdentifier() and shouldn't hand out an OTP for a login
       // that login() would reject anyway. Queried as its own lookup rather
       // than a Prisma `include` on org_members — same reasoning as
-      // OrgRequestsService/OrgDirectoryService (Phase 2/3.3): the real
-      // relation field name isn't knowable without the outstanding
-      // `prisma db pull` regen (flagged since subphase 1.1).
+      // OrgRequestsService/OrgDirectoryService: the real relation field
+      // name isn't knowable without an outstanding `prisma db pull` regen.
       const org = await this.prisma.organization.findUnique({
         where: { orgid: dto.orgid },
         select: { status: true },
@@ -93,9 +92,8 @@ export class AuthService {
   }
 
   // ─── Resolve OTP identifier for SITEADMIN logins ──────────────────────────
-  // EDIT (Phase 1 — auth model consolidation, subphase 1.2): new, mirrors
-  // the ORG branch above but against site_admins (added in subphase 1.1)
-  // instead of org_members. Kept as its own method (SiteAdminLoginDto is a
+  // Mirrors the ORG branch above but against site_admins instead of
+  // org_members. Kept as its own method (SiteAdminLoginDto is a
   // separate class from LoginDto — see login.dto.ts) rather than folded
   // into resolveOtpIdentifier() above, so that method's exhaustiveness over
   // LoginDto's `type` union isn't disturbed by a third identity shape it
@@ -129,9 +127,7 @@ export class AuthService {
   }
 
   // ─── Send OTP for SITEADMIN login ──────────────────────────────────────────
-  // EDIT (Phase 1 — auth model consolidation, subphase 1.2): new. Endpoint
-  // wiring on the admin subdomain is subphase 1.3 — this method is what it
-  // will call.
+  // Called by the admin-subdomain login endpoint.
   async sendSiteAdminLoginOtp(dto: SiteAdminLoginDto) {
     const identifier = await this.resolveSiteAdminOtpIdentifier(dto);
     return this.otpService.sendOtp(identifier);
@@ -150,7 +146,7 @@ export class AuthService {
     await this.otpService.verifyOtp(otpIdentifier, dto.otp);
 
     // Step 3: Build JWT payload per identity type.
-    // FIX (finding #10): was sequential `if` blocks (each independently
+    // Was sequential `if` blocks (each independently
     // testing dto.type), which TypeScript can't exhaustiveness-check and
     // which silently falls through to an empty payload `{}` if dto.type
     // is ever something unexpected. resolveOtpIdentifier() above already
@@ -241,11 +237,10 @@ export class AuthService {
   }
 
   // ─── SITEADMIN Login ────────────────────────────────────────────────────────
-  // EDIT (Phase 1 — auth model consolidation, subphase 1.2): new. Mirrors
-  // login()'s ORG branch, but issues a SITEADMIN session against
+  // Mirrors login()'s ORG branch, but issues a SITEADMIN session against
   // site_admins instead of org_members/uaccount:
   //   - payload carries `admin_id` (not `pid`/`orgid`/`uid`) plus
-  //     `is_super_admin`, so @RequireSuperAdmin() (subphase 1.3) can read
+  //     `is_super_admin`, so @RequireSuperAdmin()  can read
   //     the elevated-tier flag straight off the JWT without a DB round trip
   //     on every guarded request.
   //   - Deliberately a SEPARATE method rather than a third case folded into
@@ -256,9 +251,9 @@ export class AuthService {
   //     separate means a future change to login()'s switch can't
   //     accidentally regress admin auth or vice versa.
   //   - Cookie name/domain split (`ovp_admin_token`/`ovp_admin_csrf`, admin
-  //     subdomain CORS) and the controller route itself are subphase 1.3 —
-  //     this method only returns the signed token, same contract as
-  //     login() above, for that controller to wrap in a cookie.
+  //     subdomain CORS) and the controller route itself are handled
+  //     separately — this method only returns the signed token, same
+  //     contract as login() above, for that controller to wrap in a cookie.
   async siteAdminLogin(dto: SiteAdminLoginDto, req: Request) {
     // Step 1: Resolve the canonical OTP identifier for admin login.
     const otpIdentifier = await this.resolveSiteAdminOtpIdentifier(dto);

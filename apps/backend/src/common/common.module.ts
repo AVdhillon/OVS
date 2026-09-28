@@ -14,13 +14,13 @@ import { OrgModule } from '../organization/org.module';
  * so RolesGuard can use OrgService.resolveCallerUid — the same
  * pid-anchored resolver OrgService's own methods use.
  *
- * NOTE: ScopeGuard/@RequireScope() were removed here (access-control
- * remediation Phase 3) — they were unused dead code that resolved
- * orgid/uid straight from req.params/req.body without verifying the
- * caller actually owned that uid (same class of bug fixed in Phase 2
- * for events). If scope-based route guarding is needed again, rebuild
- * it on top of OrgService.resolveCallerUid() the way RolesGuard is,
- * not by trusting client-supplied uid directly.
+ * NOTE: ScopeGuard/@RequireScope() were deliberately removed — they were
+ * unused dead code that resolved orgid/uid straight from req.params/
+ * req.body without verifying the caller actually owned that uid (the same
+ * class of IDOR bug fixed elsewhere for events). If scope-based route
+ * guarding is needed again, rebuild it on top of
+ * OrgService.resolveCallerUid() the way RolesGuard is, not by trusting
+ * client-supplied uid directly.
  */
 @Global()
 @Module({

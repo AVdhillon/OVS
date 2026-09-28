@@ -1,12 +1,12 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
-// ─── Platform analytics (Phase 5 — platform maturity, subphase 5.2) ────────
-// EDIT: new service. The plan's description is "orgs-by-status over time,
-// active/completed events, ballots cast — counts only, never anything
-// vote-identifying". Read-only aggregation; it writes nothing, ever.
+// ─── Platform analytics ─────────────────────────────────────────────────────
+// Orgs-by-status over time, active/completed events, ballots cast — counts
+// only, never anything vote-identifying. Read-only aggregation; it writes
+// nothing, ever.
 //
-// **New module, alongside 5.1's src/audit/ rather than inside it.** Both are
+// **Its own module, alongside src/audit/ rather than inside it.** Both are
 // platform-level admin surfaces, but they answer different questions and
 // share no code: the audit viewer reads two append-only log tables and its
 // whole value is per-row fidelity, while this reads the live domain tables
@@ -18,8 +18,8 @@ import { PrismaService } from '../prisma/prisma.service';
 // audit log would be counting admin actions, not platform activity.
 //
 // ── Privacy: what this service may and may not count ──────────────────────
-// The plan's "counts only, never anything vote-identifying" is enforced
-// structurally, not by convention:
+// "Counts only, never anything vote-identifying" is enforced structurally,
+// not by convention:
 //
 //   * The ballots series selects `count(*)` and `date_trunc(…, voted_at)`
 //     and nothing else. It never reads, groups by, or filters on event_id,
@@ -67,7 +67,7 @@ const STATUS_METRICS: readonly AnalyticsMetric[] = [
 const DEFAULT_WINDOW_MONTHS = 12;
 // A day-bucketed series over a long window is the one shape here that can
 // return an unbounded number of points. Capped for the same reason every
-// list endpoint since 3.1 clamps page_size: admin tooling, but a caller
+// admin list endpoint clamps page_size: admin tooling, but a caller
 // still shouldn't be able to ask for one enormous response.
 const MAX_BUCKETS = 400;
 
@@ -169,7 +169,7 @@ export class AnalyticsService {
    * during that period — `organization` stores only current state, so an
    * org suspended last week appears as SUSPENDED in the month it was
    * registered. A true status-as-of-then series is reconstructible, but
-   * only by replaying `audit_logs` row diffs (5.1's territory), which is a
+   * only by replaying `audit_logs` row diffs (the territory), which is a
    * far heavier query than a dashboard should run per page load. Called out
    * here and surfaced in the page's own copy rather than left for someone
    * to misread the chart.
@@ -374,7 +374,7 @@ export class AnalyticsService {
   /**
    * Defaults to the last DEFAULT_WINDOW_MONTHS. A bounded default is not
    * cosmetic: it is what keeps the ballots series a bitmap index scan over
-   * idx_vote_ballots_voted_at (added in this subphase) instead of a full
+   * idx_vote_ballots_voted_at instead of a full
    * scan of the largest table in the system.
    */
   private resolveRange(from?: string, to?: string) {

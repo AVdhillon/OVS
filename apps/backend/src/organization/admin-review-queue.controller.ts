@@ -2,8 +2,8 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { AdminReviewQueueService } from './admin-review-queue.service';
 import { SiteAdminGuard } from '../auth/guards/site-admin.guard';
 
-// ─── Unified admin review queue (Phase 7 — subphase 7.1b) ─────────────────
-// EDIT (subphase 7.1b): new controller. A separate top-level
+// ─── Unified admin review queue  ─────────────────
+// Uses a separate top-level
 // 'admin/review-queue' prefix, not a route nested under
 // OrgRequestsAdminController's 'admin/org-requests' — this queue is a view
 // over both org_requests AND org_member_limit_requests, so nesting it under
@@ -18,12 +18,12 @@ export class AdminReviewQueueController {
 
   /**
    * GET /admin/review-queue
-   * The merged queue (7.4's queue-with-badges list): every open org-creation
+   * The merged queue (the queue-with-badges list): every open org-creation
    * request (org_requests) and every open member-limit-increase request
    * (org_member_limit_requests) in one page of results, each row tagged
    * with `request_type` so the frontend knows which detail/approve/reject
-   * screen a click-through should land on (7.1b's own plan text — the two
-   * review screens stay separate components; only this list is unified).
+   * screen a click-through should land on (the two review screens stay
+   * separate components; only this list is unified).
    * Defaults to open requests only; see
    * AdminReviewQueueService.list()/resolveStatusFilter() for the
    * default/filter/paging behaviour. ?status= and ?request_type= each accept

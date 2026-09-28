@@ -6,7 +6,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { OtpService } from '../otp/otp.service'; // FIX: inject OtpService instead of duplicating logic
+import { OtpService } from '../otp/otp.service'; // Reuses OtpService rather than duplicating OTP logic
 import { UpdateUserDto } from './dto/update-user.dto';
 import { RegisterDto } from './dto/register.dto';
 
@@ -33,7 +33,7 @@ export class UsersService {
 
   constructor(
     private prisma: PrismaService,
-    private otpService: OtpService, // FIX: injected — OtpModule must be imported in UsersModule
+    private otpService: OtpService, // Provided via OtpModule, which UsersModule must import
   ) {}
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -147,7 +147,7 @@ export class UsersService {
           'Email OTP is required when changing email',
         );
       }
-      // FIX: delegate to OtpService instead of calling private verifyOtp helper
+      // Delegate to OtpService instead of calling private verifyOtp helper
       await this.otpService.verifyOtp(
         dto.email.trim().toLowerCase(),
         dto.email_otp,
@@ -277,7 +277,7 @@ export class UsersService {
     const isThin =
       conflict[otherField] === null &&
       conflict._count.identity_wallet === 0 &&
-      conflict._count.org_members === 0; // FIX: was user_org
+      conflict._count.org_members === 0;
 
     if (!isThin) {
       return { action: 'blocked', conflictPid: conflict.pid.toString() };
@@ -301,9 +301,9 @@ export class UsersService {
    *   user_sessions   — deactivated (stale tokens are useless after merge)
    *   org_requests    — pid column: re-pointed to targetPid before deletion
    *
-   * FIX: removed the former "step 3" which operated on a non-existent user_org
-   *      table. The schema stores the pid↔org link directly on org_members.pid,
-   *      which is already re-pointed in step 2 below.
+   * There is no separate user↔org link table: the schema stores the
+   * pid↔org link directly on org_members.pid, which is re-pointed in step 2
+   * below.
    */
   private async mergeAccounts(sourcePid: bigint, targetPid: bigint) {
     await this.prisma.$transaction(async (tx) => {
@@ -340,7 +340,7 @@ export class UsersService {
       });
 
       // ── 2b. Re-point org_requests rows that have pid = sourcePid ─────────
-      //    EDIT (Phase 2 — subphase 2.3): org_requests.pid is ON DELETE
+      //    org_requests.pid is ON DELETE
       //    RESTRICT, deliberately — an org request is an accountability
       //    record for a decision a human made about a real account, so it
       //    must not silently become anonymous or disappear. That means the
@@ -352,7 +352,7 @@ export class UsersService {
       //
       //    Re-pointing (rather than deleting) is the right call: the merged
       //    account is the same person, and their request history should
-      //    follow them into it — including into 4.7's "My requests" view.
+      //    follow them into it — including into the "My requests" view.
       await tx.org_requests.updateMany({
         where: { pid: sourcePid },
         data: { pid: targetPid },

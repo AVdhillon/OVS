@@ -11,7 +11,7 @@ import { map } from 'rxjs/operators';
 
 function replaceBigInt(value: unknown): unknown {
   if (typeof value === 'bigint') return value.toString();
-  // FIX: a Date has no enumerable own properties, so without this check it
+  // A Date has no enumerable own properties, so without this check it
   // fell through to the generic object branch below — Object.entries(date)
   // is always [], so every created_at/updated_at/reviewed_at field in every
   // response was being silently rewritten to {} before serialization. The

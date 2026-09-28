@@ -54,7 +54,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 }
 
 // ─── ORG session view ─────────────────────────────────────────────────────────
-// EDIT (Account tab, ORG sessions): an ORG session has no `user` — that's a
+// An ORG session has no `user` — that's a
 // UNIFIED-only object (see app-context.tsx) — so this page used to fall
 // straight through to `if (!user) return null;` below and render nothing
 // at all for an ORG session. This is the org-scoped counterpart: read-only
@@ -289,7 +289,7 @@ export function ManageAccountView() {
   };
 
   // ── Guard ─────────────────────────────────────────────────────────────────
-  // EDIT (Account tab, ORG sessions): branch to the org-scoped read-only
+  // Branch to the org-scoped read-only
   // view above before the UNIFIED-only `!user` bailout — an ORG session
   // never has `user` populated (see app-context.tsx), so without this the
   // page rendered nothing at all for that session type.

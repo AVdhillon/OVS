@@ -26,7 +26,7 @@ export class UsersController {
   }
 
   // PATCH /users/me
-  // FIX: was using @Req() + manual (req.user as any).pid cast;
+  // Was using @Req() + manual (req.user as any).pid cast;
   //      now uses @CurrentUser() consistently, same as getProfile above.
   @UseGuards(JwtAuthGuard)
   @Patch('me')

@@ -5,27 +5,23 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
-// ─── Audit viewer (Phase 5 — platform maturity, subphase 5.1) ──────────────
-// EDIT: new service. The plan's own description of this subphase is
-// "surface admin_audit_log (intent) with drill-down into audit_logs (row
-// diffs) for a given org", and the master schema's admin_audit_log header
-// comment states the same pairing from the other side: admin_audit_log
-// answers "SA0001 suspended ABC1234 on Tuesday for reason X", audit_logs
-// answers "here is every column that moved as a result". This service is
-// the read side of exactly that pairing — it writes nothing, ever.
+// ─── Audit viewer ───────────────────────────────────────────────────────────
+// admin_audit_log records intent ("SA0001 suspended ABC1234 on Tuesday for
+// reason X"); audit_logs records the row-level diffs that resulted from it
+// ("here is every column that moved"). This service is the read side of
+// that pairing — it writes nothing, ever.
 //
-// **New module, not added to OrgModule.** Every prior admin surface (3.1's
-// org-request queue, 3.3's org directory) lives in the organization module
-// because its subject is an organization. This one's subject is the
-// platform's own audit record: admin_audit_log spans ORG_REQUEST,
-// ORGANIZATION and SITE_ADMIN targets (the last of which 5.3 will start
-// writing), and audit_logs spans events/org_members/member_roles/
-// organization/org_requests/vote_ballots. Putting it in OrgModule would
-// mean 5.3's admin-account actions get audited by a service that lives in
-// the org domain. It is deliberately a leaf: PrismaModule only, no other
-// domain service injected.
+// Deliberately its own module, not folded into OrgModule. Every other admin
+// surface (the org-request queue, the org directory) lives in the
+// organization module because its subject is an organization. This
+// service's subject is the platform's own audit record: admin_audit_log
+// spans ORG_REQUEST, ORGANIZATION and SITE_ADMIN targets, and audit_logs
+// spans events/org_members/member_roles/organization/org_requests/
+// vote_ballots. Putting it in OrgModule would mean admin-account actions
+// get audited by a service that lives in the org domain. It is deliberately
+// a leaf: PrismaModule only, no other domain service injected.
 //
-// ── Two findings from reading the schema, both load-bearing here ──────────
+// ── Two schema facts that both shape this service ──────────
 //
 // 1. **audit_logs.record_id is not a key.** audit_trigger_function() sets
 //    it to `NEW::TEXT` — the *entire row* rendered as a Postgres tuple
@@ -33,13 +29,13 @@ import { PrismaService } from '../prisma/prisma.service';
 //    not the row's primary key. So there is no way to look a row's history
 //    up by record_id. The usable key lives inside `changed_data`, which is
 //    `to_jsonb(NEW)` — hence the `changed_data->>'orgid'` predicate in
-//    listOrgChanges() below, and the matching expression index 5.1 added to
-//    the master schema. Verified against a live Postgres instance, not
+//    listOrgChanges() below, backed by a matching expression index in the
+//    master schema. Verified against a live Postgres instance, not
 //    inferred from the trigger source alone.
 //
 // 2. **Transaction timestamp is the correlation key.** Postgres'
-//    CURRENT_TIMESTAMP is transaction-*start* time, and 2.4/2.5/3.2 all
-//    write their admin_audit_log line inside the same transaction as the
+//    CURRENT_TIMESTAMP is transaction-*start* time, and every admin action
+//    writes its admin_audit_log line inside the same transaction as the
 //    change it describes (the schema comment calls that out explicitly:
 //    "never best-effort, never after the fact"). Both columns default to
 //    CURRENT_TIMESTAMP, so for a given admin action the two tables carry a
@@ -60,7 +56,7 @@ import { PrismaService } from '../prisma/prisma.service';
 // ── Privacy ───────────────────────────────────────────────────────────────
 // audit_logs has a trigger on `vote_ballots`. Those rows carry voter_hash,
 // ip_address and device_fingerprint, and surfacing them in an admin-facing
-// row-diff viewer would undo the anonymity the schema's own finding-#1 fix
+// row-diff viewer would undo the anonymity the schema's split-table ballot design
 // was written to establish. Two independent guards, not one:
 //   * getAdminActionDetail() excludes table_name = 'vote_ballots' outright.
 //   * listOrgChanges() cannot reach them structurally — vote_ballots has no
@@ -70,10 +66,10 @@ import { PrismaService } from '../prisma/prisma.service';
 // every payload this service returns, so a future audit trigger on a table
 // holding one of those keys can't leak it through a code path nobody
 // revisited. What is deliberately *not* redacted: org_members contact
-// fields. An admin already sees requester contact details on 3.1's
+// fields. An admin already sees requester contact details on the
 // request-detail page, so this isn't a new exposure class, and redacting
-// them would gut the viewer's usefulness — flagged here as a decision, not
-// an oversight, in case a later privacy pass wants to revisit it.
+// them would gut the viewer's usefulness — flagged here as a deliberate
+// decision in case a later privacy pass wants to revisit it.
 
 /** Mirrors admin_audit_log's chk_admin_audit_action in the master schema. */
 export const ALL_ADMIN_ACTIONS = [
@@ -149,7 +145,7 @@ export class AuditService {
    * Ordering and each filter shape match an index the schema already
    * carries: idx_admin_audit_created (unfiltered feed),
    * idx_admin_audit_admin (admin_id + created_at DESC — "what has this
-   * admin been doing", which is also what 5.3 will want), and
+   * admin been doing"), and
    * idx_admin_audit_target (target_type + target_id + created_at DESC —
    * the per-org and per-request history).
    */
@@ -200,7 +196,8 @@ export class AuditService {
     };
 
     // Batched into one $transaction so `total` and the page it describes
-    // are read consistently — same shape 3.1/3.3 use for their own lists.
+    // are read consistently — the same shape every other paginated admin
+    // list in this codebase uses.
     const [total, entries] = await this.prisma.$transaction([
       this.prisma.admin_audit_log.count({ where }),
       this.prisma.admin_audit_log.findMany({
@@ -216,15 +213,15 @@ export class AuditService {
 
   /**
    * One admin_audit_log entry plus the row diffs written in the same
-   * transaction — the drill-down half of the plan's "intent, with
-   * drill-down into row diffs" pairing.
+   * transaction — the drill-down half of the "intent, with
+   * drill-down into row diffs" pairing described in the header.
    *
    * The actor is attached as a separate site_admins query rather than a
    * Prisma `include`. The relation exists in schema.prisma
-   * (admin_audit_log.site_admins), but this codebase has fetched these
-   * separately since 3.1 for consistency with the methods written while
-   * that regen was still outstanding; there's no behavioural difference at
-   * one row.
+   * (admin_audit_log.site_admins), but this codebase fetches it separately
+   * for consistency with the rest of the admin surface, which predates the
+   * `prisma db pull` regen that would make the relation name reliable;
+   * there's no behavioural difference at one row.
    *
    * Scoped to the transaction, not to the target, and that is deliberate:
    * approving a request writes an ORG_REQUEST-targeted log line while the
@@ -270,9 +267,8 @@ export class AuditService {
   }
 
   /**
-   * Every audited row change for one organization — the "for a given org"
-   * drill-down the plan names, and the view an admin lands on from 3.6's
-   * org-detail page.
+   * Every audited row change for one organization — the drill-down view
+   * an admin lands on from the org-detail page.
    *
    * Keyed on `changed_data->>'orgid'` rather than on record_id (see the
    * header note on why record_id is unusable), which covers all four
@@ -336,7 +332,7 @@ export class AuditService {
       // union type above reflects what the driver actually hands back,
       // verified rather than assumed. Number() here rather than leaving it
       // for BigIntInterceptor, so `total` is a number on the wire like
-      // every other paginated admin response (3.1/3.3 get theirs from
+      // every other paginated admin response (which get theirs from
       // Prisma .count(), which already returns a number).
       total: Number(countRows[0]?.total ?? 0),
       page,

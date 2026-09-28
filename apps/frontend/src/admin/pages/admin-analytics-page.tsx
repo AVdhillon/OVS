@@ -28,18 +28,15 @@ import {
 } from "../lib/admin-api";
 import { BarChart3 } from "lucide-react";
 
-// EDIT (Phase 5 — platform maturity, subphase 5.2): new. The plan's brief
-// for this subphase is "orgs-by-status over time, active/completed events,
-// ballots cast — counts only, never anything vote-identifying", and this is
-// the one admin page it calls for. Reads both of
+// Platform analytics: orgs-by-status over time, active/completed events and
+// ballots cast — counts only, never anything vote-identifying. Reads both of
 // AnalyticsAdminController's routes: /admin/analytics/summary for the
 // headline cards and /admin/analytics/series for the chart.
 //
 // Charting uses the repo's existing shadcn `ui/chart.tsx` wrapper over
 // recharts (both already in package.json) rather than adding a dependency
-// or hand-rolling SVG. That wrapper was checked in but had no consumer
-// anywhere in the app until now — worth knowing it's load-bearing from
-// here on, so a future "remove unused components" pass doesn't delete it.
+// or hand-rolling SVG. This page is the wrapper's only consumer, so an
+// "remove unused components" cleanup must not delete it.
 //
 // **Nothing on this page can be filtered to an organization or an event.**
 // There is no orgid control here and the backend exposes no parameter for
@@ -90,7 +87,7 @@ const INTERVALS: Array<{ key: AnalyticsInterval; label: string }> = [
   { key: "month", label: "Monthly" },
 ];
 
-// Status colours reuse the palette 3.6's org pages already established
+// Status colours reuse the palette the org pages already established
 // (emerald = healthy/approved, amber = paused/needs attention, slate =
 // retired, red = refused/cancelled) so a status means the same thing
 // wherever an admin sees it.

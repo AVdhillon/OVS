@@ -34,7 +34,7 @@ const DialogClose = React.forwardRef<
 ));
 DialogClose.displayName = DialogPrimitive.Close.displayName;
 
-// EDIT: was a plain function component. Radix's DialogPortal wraps this in
+// Was a plain function component. Radix's DialogPortal wraps this in
 // Presence/Slot internals that attempt to attach a ref to whatever element
 // was passed in (to track open/close animation state) — on React 18 (no
 // ref-as-prop support), a non-forwardRef function component can't receive
@@ -57,7 +57,7 @@ const DialogOverlay = React.forwardRef<
 ));
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 
-// EDIT: same reasoning as DialogOverlay above — DialogPrimitive.Content
+// Same reasoning as DialogOverlay above — DialogPrimitive.Content
 // itself already forwardRefs, but this local wrapper around it didn't, so
 // anything trying to ref *this* component (e.g. focus/measurement logic
 // inside Radix's Portal) hit the same warning.

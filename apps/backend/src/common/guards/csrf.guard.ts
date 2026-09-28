@@ -3,7 +3,7 @@ import { Request } from 'express';
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
-// EDIT (Phase 1 — auth model consolidation, subphase 1.3): generalized from
+// Generalized from
 // a single hardcoded cookie pair to a list, so the same guard covers both
 // the regular user session (`ovp_token`/`ovp_csrf`) and the new admin
 // session (`ovp_admin_token`/`ovp_admin_csrf`, set by the SITEADMIN-backed
@@ -15,7 +15,7 @@ const SESSION_COOKIE_PAIRS: Array<{ token: string; csrf: string }> = [
 ];
 
 /**
- * Double-submit CSRF check (plan-httponly-cookie-jwt.md, Finding #2, step 6).
+ * Double-submit CSRF check for cookie-authenticated requests.
  *
  * Switching the JWT from a bearer header to an httpOnly cookie removes the
  * XSS-exfiltration risk on the token, but reintroduces CSRF: the browser

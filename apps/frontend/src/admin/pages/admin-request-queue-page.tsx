@@ -34,42 +34,38 @@ import {
 import { ChevronLeft, ChevronRight, Inbox, Clock } from "lucide-react";
 import { Link } from "react-router";
 
-// EDIT (Phase 3 — admin portal core, subphase 3.5): new. Reads
-// GET /admin/org-requests (3.1) — a review queue, not a public list, so it
+// Reads GET /admin/org-requests — a review queue, not a public list, so it
 // defaults to the same open-only view the backend itself defaults to
 // (PENDING + NEEDS_INFO) rather than re-deciding that here; the "Open"
 // tab passes no `status` param at all for exactly that reason (see
 // STATUS_TABS below), so the frontend's idea of "open" can never drift
 // from the backend's.
 //
-// EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.4): rewritten
-// to read GET /admin/review-queue (7.1b) instead of GET /admin/org-requests
-// alone, per the plan's own 7.4 text — both request kinds now show up here
+// Reads GET /admin/review-queue rather than GET /admin/org-requests
+// alone, so both request kinds show up here
 // with a `request_type` badge, and clicking a row routes to whichever
 // detail screen matches its type. The two review screens themselves stay
 // separate components (AdminRequestDetailPage for ORG_CREATION,
 // AdminMemberLimitDetailPage for MEMBER_LIMIT_INCREASE) — only this list is
-// merged, exactly as 7.1b's own plan text specifies.
+// merged, by design.
 //
-// Trade-off worth flagging: admin_review_queue (7.1b, dbschema.sql) is
+// Trade-off worth flagging: admin_review_queue (dbschema.sql) is
 // deliberately narrow — only the columns both source tables share (id,
 // request_type, status, created_at, reviewed_by_admin_id, reviewed_at). That
 // means this table can no longer show org_name/reference_code/
-// expected_member_count the way the pre-7.4 org-requests-only version of
-// this page did; those live on the detail screen a row's click-through
-// lands on, not the list. Not a regression introduced here — it's the
-// direct consequence of 7.1b's own "read-only union of shared columns only"
+// expected_member_count; those live on the detail screen a row's click-through
+// lands on, not the list. This is a direct consequence of the
+// "read-only union of shared columns only"
 // design, chosen specifically so the two source tables didn't have to grow
 // always-half-null columns to satisfy this list (see admin_review_queue's
 // own comment in dbschema.sql).
 const PAGE_SIZE = 25;
 
-// EDIT (Phase 6 — post-approval org setup, subphase 6.6): added a
-// "Pending setup" tab for APPROVED_PENDING_SETUP — the queue's own default
+// The "Pending setup" tab covers APPROVED_PENDING_SETUP. The queue's default
 // "Open" tab deliberately mirrors the backend's open-only default
 // (PENDING + NEEDS_INFO) rather than redefining "open" to include it (see
 // this file's own comment on that), so it needs its own tab instead of
-// folding into "Open". "All" grew to match.
+// folding into "Open"; "All" includes it as well.
 //
 // APPROVED_PENDING_SETUP is an org_requests-only status (org_member_limit_
 // requests' chk_limit_request_status never includes it) — selecting the
@@ -207,8 +203,8 @@ export function AdminRequestQueuePage() {
 
   const handleRowClick = (row: AdminReviewQueueRow) => {
     // request_type is what tells us which detail screen owns this id — the
-    // two review screens stay separate components (7.1b/7.4's own plan
-    // text), this is only the routing decision between them.
+    // two review screens stay separate components (they are not merged),
+    // this is only the routing decision between them.
     if (row.request_type === "MEMBER_LIMIT_INCREASE") {
       navigate(`/member-limit-requests/${row.id}`);
     } else {
@@ -230,7 +226,7 @@ export function AdminRequestQueuePage() {
               requests.
             </p>
           </div>
-          {/* EDIT (Phase 6 — subphase 6.6): the stuck-request admin view is
+          {/* The stuck-request admin view is
               its own page (age-threshold filter, not just a status filter —
               see AdminStuckRequestsPage), so it's a link out rather than a
               sixth tab here. Org-creation only — member-limit requests have

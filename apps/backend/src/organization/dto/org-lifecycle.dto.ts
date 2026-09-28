@@ -1,7 +1,7 @@
 import { IsString, IsOptional, Length } from 'class-validator';
 
 // ─── Org Lifecycle Action DTO ─────────────────────────────────────────────
-// EDIT (Phase 3 — admin portal core, subphase 3.2): input for
+// Input for
 // OrgLifecycleService.suspend() / reinstate() / archive().
 //
 // Unlike ReviewOrgRequestDto (org_requests), an organization row has no

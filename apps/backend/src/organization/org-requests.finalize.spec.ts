@@ -14,9 +14,9 @@ import { OrgRequestEmailService } from './org-request-email.service';
 import { FinalizeOrgRequestDto } from './dto/finalize-org-request.dto';
 import * as orgCreation from './org-creation.utilities';
 
-// ─── finalizeSetup() unit tests (Phase 6, subphase 6.7) ────────────────────
+// ─── finalizeSetup() unit tests ────────────────────────────────────────────
 //
-// Scope, per post-approval-org-setup-plan.md's 6.7 section:
+// Scope:
 //   - preferred-orgid conflict
 //   - generated-orgid path
 //   - uid format validation
@@ -426,7 +426,7 @@ describe('OrgRequestsService.finalizeSetup()', () => {
     });
   });
 
-  // ── Pre-checks unrelated to the 6.7 list, kept for coverage of the guard
+  // ── Pre-checks beyond the main scenarios above, kept for coverage of the guard
   // rails finalizeSetup() itself adds before ever reaching the transaction.
   describe('outer pre-checks', () => {
     it('reports not-found for a request belonging to a different pid, same as a nonexistent one', async () => {

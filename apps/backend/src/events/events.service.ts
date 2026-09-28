@@ -8,7 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { OrgService } from '../organization/org.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
-// FIX: import canonical JwtUser instead of redefining locally with wrong pid type.
+// Import canonical JwtUser instead of redefining locally with wrong pid type.
 //      JWT payload stores pid as string (auth.service: payload = { pid: user.pid.toString() }).
 //      The local interface had pid?: number which is incorrect.
 import type { JwtUser } from '../common/decorators/current-user.decorator';
@@ -145,11 +145,10 @@ export class EventsService {
 
     //await this.assertEventVisible(user, event);
 
-    // FIX (finding #5): previously only checked `user.type === 'ORG'`, so
-    // has_voted always evaluated to false for UNIFIED sessions — even when
-    // that account had actually voted via a linked org identity, since
-    // UNIFIED JWTs carry a pid, not a uid. resolveViewerUidInOrg (already
-    // used by assertEventVisible below) resolves the correct uid for both
+    // Checking `user.type === 'ORG'` alone would make has_voted always false
+    // for UNIFIED sessions — even when that account had voted via a linked org
+    // identity — because UNIFIED JWTs carry a pid, not a uid.
+    // resolveViewerUidInOrg (also used by assertEventVisible below) resolves the correct uid for both
     // session types: it returns the ORG session's own uid directly, or hops
     // pid -> org_members -> uid for UNIFIED sessions via resolveOrgIdentities.
     let has_voted = false;
@@ -187,7 +186,7 @@ export class EventsService {
   // CREATE EVENT
   // ─────────────────────────────────────────────────────────────────────────
   async createEvent(user: JwtUser, dto: CreateEventDto) {
-    // FIX: validate scope flag mutual exclusion before hitting the DB constraint
+    // Validate scope flag mutual exclusion before hitting the DB constraint
     if (dto.scope_only && dto.visible_upward) {
       throw new BadRequestException(
         'scope_only and visible_upward cannot both be true',
@@ -197,21 +196,20 @@ export class EventsService {
       throw new BadRequestException('start_time cannot be in the past');
     }
 
-    // EDIT (Phase 3 — admin portal core, subphase 3.4): gate event creation
-    // on organization.status. A SUSPENDED/ARCHIVED org (Phase 3.2's
-    // suspend()/archive()) shouldn't be able to spin up new events while
-    // disabled — checked first, before any org-scoped identity/role
-    // queries below, so a caller in a disabled org fails fast rather than
-    // paying for those lookups. Queried as its own lookup rather than a
-    // Prisma `include`, for the same "unknown real relation field name
-    // without the outstanding prisma db pull regen" reason as
-    // auth.service.ts's ORG-branch check above and Phase 2/3.3's services.
+    // Gate event creation on organization.status. A SUSPENDED/ARCHIVED org
+    // shouldn't be able to spin up new events while disabled — checked
+    // first, before any org-scoped identity/role queries below, so a
+    // caller in a disabled org fails fast rather than paying for those
+    // lookups. Queried as its own lookup rather than a Prisma `include`,
+    // for the same "unknown real relation field name without the
+    // outstanding prisma db pull regen" reason as auth.service.ts's
+    // ORG-branch check above and the organization services.
     // NOTE: this is an application-layer check only — the DB trigger
     // check_event_creator() (schema) does not itself verify
-    // organization.status, and this subphase's file list only covers
-    // createEvent() here, not a schema edit. Flagged, not fixed: a direct
-    // DB write (script/migration/future code path) that bypasses this
-    // service could still insert an event for a disabled org.
+    // organization.status; this covers createEvent() here, not a schema
+    // edit. Flagged, not fixed: a direct DB write (script/migration/future
+    // code path) that bypasses this service could still insert an event
+    // for a disabled org.
     const org = await this.prisma.organization.findUnique({
       where: { orgid: dto.orgid },
       select: { status: true },
@@ -220,7 +218,7 @@ export class EventsService {
       throw new ForbiddenException('This organization is not currently active');
     }
 
-    // FIX (Phase 2b): the old assertOrgIdentity() was a no-op for UNIFIED
+    // The old assertOrgIdentity() was a no-op for UNIFIED
     // sessions, so dto.orgid/dto.uid were trusted verbatim from the request
     // body. The member_roles check below only confirms *some* member holds
     // that uid+organizer role in that org — it does NOT confirm the caller
@@ -240,7 +238,7 @@ export class EventsService {
       );
     }
 
-    // FIX (finding #4, events.service.ts half): member_roles' PK is
+    // member_roles' PK is
     // (orgid, uid, scope_id), so a member can legitimately hold the
     // organizer role at more than one scope. The old code did
     // member_roles.findFirst({ is_organizer: true }) and evaluated scope
@@ -254,7 +252,7 @@ export class EventsService {
     const organizerRoles = await this.prisma.member_roles.findMany({
       where: { orgid: dto.orgid, uid: dto.uid, is_organizer: true },
       select: { scope_id: true },
-      // FIX: this ordering is now load-bearing, not just tidiness — the
+      // This ordering is now load-bearing, not just tidiness — the
       // default-scope resolution just below picks organizerRoles[0] as
       // "the organizer's first scope" when the caller doesn't supply one,
       // so this query needs a real, deterministic order rather than
@@ -308,7 +306,7 @@ export class EventsService {
         end_time: end,
         show_live_results: dto.show_live_results ?? false,
         visibility_upward: dto.visible_upward ?? false,
-        // FIX: scope_only was silently dropped — now passed through from DTO
+        // scope_only is passed through from the DTO
         scope_only: dto.scope_only ?? false,
         status: 'ACTIVE',
       },
@@ -347,7 +345,7 @@ export class EventsService {
     await this.assertCallerOwnsEvent(user, event);
     this.assertEventNotStarted(event);
 
-    // FIX: validate mutual exclusion. Resolve effective values (dto may only
+    // Validate mutual exclusion. Resolve effective values (dto may only
     //      supply one of the two) against the existing event state.
     const effectiveScopeOnly =
       dto.scope_only !== undefined
@@ -382,7 +380,7 @@ export class EventsService {
         ...(dto.visible_upward !== undefined && {
           visibility_upward: dto.visible_upward,
         }),
-        // FIX: scope_only was never passed through in updates
+        // scope_only must be passed through on updates too
         ...(dto.scope_only !== undefined && { scope_only: dto.scope_only }),
       },
     });
@@ -457,13 +455,11 @@ export class EventsService {
   async getParticipants(user: JwtUser, eventId: number) {
     const event = await this.getEventOrThrow(eventId);
 
-    // FIX (Phase 2b): previously hard-blocked any non-ORG session type
-    // (`user.type !== 'ORG'`), so UNIFIED-session organizers could never
-    // view participant lists for orgs they legitimately organize. Now
-    // resolves the caller's identity against the EVENT's actual orgid,
-    // using the same pattern as updateEvent/deleteEvent (Phase 2a) —
-    // instead of trusting `user.orgid` (which doesn't even exist on a
-    // UNIFIED session).
+    // Resolve the caller's identity against the EVENT's actual orgid (same
+    // pattern as updateEvent/deleteEvent) rather than trusting `user.orgid`,
+    // which doesn't exist on a UNIFIED session. Rejecting every non-ORG
+    // session type would lock UNIFIED-session organizers out of participant
+    // lists for orgs they legitimately organize.
     const orgid = event.orgid ?? '';
     const callerUid = await this.resolveCallerIdentityInOrg(user, orgid);
 
@@ -526,7 +522,7 @@ export class EventsService {
    * belongs to the caller rather than being trusted from the request body.
    *
    * Used by assertCallerOwnsEvent (update/delete), getParticipants, and
-   * createEvent, so the same cross-org IDOR fix from Phase 2a is applied
+   * createEvent, so the same cross-org IDOR fix is applied
    * consistently everywhere caller identity needs resolving.
    */
   private async resolveCallerIdentityInOrg(
@@ -545,13 +541,13 @@ export class EventsService {
   }
 
   /**
-   * FIX (cross-org IDOR, Phase 2a): verifies the caller's resolved
-   * org-identity for the EVENT's actual orgid matches the event's
-   * created_by_uid. For ORG sessions this is equivalent to the old check.
-   * For UNIFIED sessions this now actually resolves the caller's uid via
+   * Verifies the caller's resolved org-identity for the EVENT's actual
+   * orgid matches the event's created_by_uid — this closes a cross-org
+   * IDOR: for ORG sessions this is equivalent to a simple orgid check.
+   * For UNIFIED sessions this resolves the caller's uid via
    * pid → org_members (same pattern as RolesGuard/OrgService
-   * .resolveCallerUid), instead of the prior no-op that let any UNIFIED
-   * organizer mutate any org's events.
+   * .resolveCallerUid), rather than trusting a client-supplied uid, which
+   * would let any UNIFIED organizer mutate any org's events.
    */
   private async assertCallerOwnsEvent(user: JwtUser, event: PrismaEvent) {
     const orgid = event.orgid ?? '';
@@ -572,7 +568,7 @@ export class EventsService {
   }
 
   /**
-   * FIX (finding #4): accepts ALL of the organizer's is_organizer = true
+   * Accepts ALL of the organizer's is_organizer = true
    * scope_ids and succeeds if the target scope is a descendant (or self)
    * of ANY one of them — instead of the old single-scope-id version, which
    * only ever saw one arbitrarily chosen role row. Mirrors
@@ -595,17 +591,16 @@ export class EventsService {
   }
 
   private async assertEventVisible(user: JwtUser, event: any) {
-    // FIX: previously passed user.uid straight through, but uid is only
-    // ever populated on ORG-session JWTs. UNIFIED sessions carry a pid
-    // instead, so this always evaluated as uid=undefined for them —
-    // get_visible_events() then returns zero rows and every UNIFIED user
-    // gets falsely told an event (including ones they've already voted
-    // in) isn't visible to their account. Resolve the caller's real uid
-    // for this event's org first, same pattern as resolveOrgIdentities /
+    // Don't pass user.uid straight through: uid is only populated on
+    // ORG-session JWTs, and UNIFIED sessions carry a pid instead. With
+    // uid=undefined, visibility lookups return zero rows and every UNIFIED
+    // user is wrongly told an event (even one they've voted in) isn't
+    // visible to them. Resolve the caller's real uid for this event's org
+    // first, same pattern as resolveOrgIdentities /
     // resolveCallerIdentityInOrg used elsewhere in this file.
     const uid = await this.resolveViewerUidInOrg(user, event.orgid ?? '');
 
-    // FIX: get_visible_events() in the database is
+    // get_visible_events() in the database is
     // get_visible_events(p_orgid VARCHAR, p_scope INT) — it takes a
     // scope_id, not a uid. Calling it with (orgid::text, uid::text) has
     // no matching overload and throws Postgres 42883 / Prisma P2010
@@ -677,7 +672,7 @@ export class EventsService {
     }
 
     if (user.type === 'UNIFIED' && user.pid) {
-      // FIX: pid is string in JWT — BigInt() accepts string, but explicit cast
+      // Pid is string in JWT — BigInt() accepts string, but explicit cast
       //      makes the intent clear and guards against accidental number coercion.
       const links = await this.prisma.org_members.findMany({
         where: { pid: BigInt(user.pid) },

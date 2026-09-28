@@ -9,7 +9,7 @@ import { getJwtSecret } from '../../common/utils/jwt-secret.util';
 import * as express from 'express';
 
 // JWT now travels as an httpOnly cookie, not an Authorization header — see
-// plan-httponly-cookie-jwt.md, Finding #2. Cookie name must match the one
+// The JWT is read from an httpOnly cookie, not a bearer header. Cookie name must match the one
 // set/cleared in auth.controller.ts.
 const cookieExtractor = (req: express.Request): string | null =>
   req?.cookies?.['ovp_token'] ?? null;

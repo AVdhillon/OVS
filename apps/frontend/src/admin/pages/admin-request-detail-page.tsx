@@ -35,19 +35,16 @@ import {
 import { toast } from "sonner";
 import { ArrowLeft, Check, X, HelpCircle, Undo2 } from "lucide-react";
 
-// EDIT (Phase 3 — admin portal core, subphase 3.5): new. Reads
-// GET /admin/org-requests/:requestId (3.1) and wires all three review
-// outcomes to POST /admin/org-requests/:requestId/{approve,reject,
-// request-info} (also 3.1, calling 2.4/2.5's service methods).
+// Reads GET /admin/org-requests/:requestId and wires the review outcomes
+// to POST /admin/org-requests/:requestId/{approve,reject,request-info}.
 //
-// EDIT (Phase 6 — post-approval org setup, subphase 6.6): approve() now
-// takes a required `member_limit` (6.2) and only moves the request to
-// APPROVED_PENDING_SETUP rather than creating the organization — its
-// dialog gained a member-limit field, pre-filled from
-// expected_member_count, in place of the old plain confirm. A fourth
-// dialog, revoke-approval, was added for the new terminal action on an
-// APPROVED_PENDING_SETUP request that never got finalized. reject()/
-// requestInfo() are unchanged: they still share one dialog shape
+// approve() takes a required `member_limit` and only moves the request to
+// APPROVED_PENDING_SETUP rather than creating the organization; the
+// requester finishes setup themselves. Its dialog therefore carries a
+// member-limit field, pre-filled from expected_member_count. A fourth
+// dialog, revoke-approval, is the terminal action for an
+// APPROVED_PENDING_SETUP request that never got finalized. reject() and
+// requestInfo() share one dialog shape
 // collecting `reason` (requester-facing) and an optional `internal_note`
 // (audit-log-only, falls back to `reason` server-side) — mirrors
 // ReviewOrgRequestDto's own comment on why those two fields are separate.
@@ -119,10 +116,9 @@ export function AdminRequestDetailPage() {
   const [dialogMode, setDialogMode] = useState<DialogMode>(null);
   const [reason, setReason] = useState("");
   const [internalNote, setInternalNote] = useState("");
-  // EDIT (Phase 6 — subphase 6.6): approve()'s new required field. Seeded
-  // from expected_member_count when the approve dialog opens (see
-  // openApproveDialog() below) — "pre-filled ... as a starting suggestion,
-  // editable by the admin", per the plan.
+  // Required by approve(). Seeded from expected_member_count when the
+  // approve dialog opens (see openApproveDialog() below) as a starting
+  // suggestion; the admin can edit it before confirming.
   const [memberLimit, setMemberLimit] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -162,7 +158,7 @@ export function AdminRequestDetailPage() {
   };
 
   const openApproveDialog = () => {
-    // Starting suggestion only — editable, per the plan's own wording.
+    // Starting suggestion only; the admin can change it before confirming.
     setMemberLimit(
       detail?.expected_member_count ? String(detail.expected_member_count) : "",
     );
@@ -467,10 +463,10 @@ export function AdminRequestDetailPage() {
       </div>
 
       {/* ── Approve (member limit) ──────────────────────────────────────── */}
-      {/* EDIT (Phase 6 — subphase 6.6): no longer a plain confirm — approve()
-          (6.2) only moves the request to APPROVED_PENDING_SETUP and needs a
-          member limit to do it; the requester still has to complete setup
-          (6.5) before the organization actually exists. */}
+      {/* Not a plain confirm: approve() only moves the request to
+          APPROVED_PENDING_SETUP and needs a member limit to do it; the
+          requester still has to complete setup before the organization
+          actually exists. */}
       <Dialog
         open={dialogMode === "approve"}
         onOpenChange={(open) => !open && closeDialog()}
@@ -517,7 +513,7 @@ export function AdminRequestDetailPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Revoke approval (6.6) ───────────────────────────────────────── */}
+      {/* ── Revoke approval ───────────────────────────────────────── */}
       {/* Only reachable from APPROVED_PENDING_SETUP (isPendingSetup gates the
           button that opens this) — mirrors revokeApproval()'s own
           server-side status check. Shares the reject/needs-info dialog's

@@ -5,20 +5,20 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
-// ─── Org directory (Phase 3 — admin portal core, subphase 3.3) ────────────
-// EDIT: new service. The read-only counterpart to OrgLifecycleService
-// (3.2) — where that service changes `organization.status`, this one
+// ─── Org directory  ────────────
+// The read-only counterpart to OrgLifecycleService
+// — where that service changes `organization.status`, this one
 // answers "what does the current landscape of organizations look like,"
 // for the admin app's org-directory page (list()) and org-detail page
-// (getDetail(), 3.6's suspend/reinstate screen).
+// (getDetail(), the suspend/reinstate screen).
 //
 // Deliberately its own service rather than added to OrgService: OrgService
 // is scoped to org-member/organizer callers (assertOrganizerAccess() gates
 // almost everything in it) — nothing in this file needs, or should be
 // reachable with, an org-member's uid the way OrgService's methods are.
-// Same domain-separation reasoning 2.3's own module comment gives for
+// Same domain-separation reasoning OrgRequestsService's module comment gives for
 // OrgRequestsService vs. OrgService. Mirrors OrgRequestsService's own
-// list()/getDetail() shape (3.1) one-for-one: same pagination clamp, same
+// list()/getDetail() shape one-for-one: same pagination clamp, same
 // batched-$transaction count+findMany, same "attach the read-only extras a
 // detail page needs, as separate queries rather than an `include`" choice.
 //
@@ -61,7 +61,7 @@ export class OrgDirectoryService {
   constructor(private prisma: PrismaService) {}
 
   /**
-   * The admin org-directory (3.6's directory page). Unlike
+   * The admin org-directory (the directory page). Unlike
    * OrgRequestsService.list() — which defaults to *open* requests because
    * that's the review queue's whole point — this defaults to every
    * non-deleted organization regardless of status: a directory is a
@@ -131,7 +131,7 @@ export class OrgDirectoryService {
   }
 
   /**
-   * Org detail (3.6's suspend/reinstate screen): the org row, its counts,
+   * Org detail (the suspend/reinstate screen): the org row, its counts,
    * and the full admin_audit_log trail for it — every past
    * suspend/reinstate/archive on this org, same "whole history, not just
    * current state" reasoning as OrgRequestsService.getDetail()'s own
@@ -168,9 +168,8 @@ export class OrgDirectoryService {
    * blocked at the DB level by trg_prevent_nonempty_scope_delete, so every
    * row here is a real, currently-standing scope).
    * events: a status breakdown (ACTIVE/COMPLETED/CANCELLED, `is_deleted =
-   * FALSE`) via groupBy, not just a total — "event activity" in the plan's
-   * own phrasing for this subphase reads as more than one bare count, and
-   * an admin deciding whether to suspend/archive an org cares whether its
+   * FALSE`) via groupBy, not just a total — "event activity" is more useful as
+   * a breakdown than one bare count, since an admin deciding whether to suspend/archive an org cares whether its
    * events are still active vs. already wound down.
    */
   private async getCounts(orgid: string): Promise<OrgCounts> {

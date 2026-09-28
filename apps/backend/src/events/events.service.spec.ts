@@ -87,7 +87,7 @@ describe('EventsService', () => {
     expect(service).toBeDefined();
   });
 
-  describe('cross-org IDOR fix (Phase 2a)', () => {
+  describe('cross-org IDOR protection', () => {
     it('rejects UNIFIED organizer of org A updating an org B event', async () => {
       // Caller's pid only links to org A -> resolveCallerUid would resolve
       // to their org-A uid, which never matches org B's created_by_uid.
@@ -149,7 +149,7 @@ describe('EventsService', () => {
     });
   });
 
-  describe('getParticipants (Phase 2b)', () => {
+  describe('getParticipants ', () => {
     it('rejects UNIFIED organizer of org A viewing participants for an org B event (not a member of org B at all)', async () => {
       // Mirrors OrgService.resolveCallerUid's real behavior: a pid with no
       // org_members link to ORG_B throws Forbidden before any uid is resolved.
@@ -223,7 +223,7 @@ describe('EventsService', () => {
     });
   });
 
-  describe('createEvent (Phase 2b)', () => {
+  describe('createEvent ', () => {
     const baseDto = {
       orgid: 'ORG_B',
       uid: 'U_B1',
@@ -236,7 +236,7 @@ describe('EventsService', () => {
 
     it('rejects a UNIFIED caller supplying a uid that is not their own (impersonation attempt)', async () => {
       // Real OrgService.resolveCallerUid throws when requestedUid doesn't
-      // belong to the caller's pid -- this is the fix for the gap where the
+      // belong to the caller's pid -- this closes the gap where the
       // old no-op assertOrgIdentity() let any UNIFIED caller name any real
       // organizer's uid and pass the member_roles check as that person.
       orgService.resolveCallerUid.mockRejectedValue(
@@ -325,7 +325,7 @@ describe('EventsService', () => {
     });
   });
 
-  describe('createEvent multi-scope organizer roles (finding #4)', () => {
+  describe('createEvent multi-scope organizer roles', () => {
     const baseDto = {
       orgid: 'ORG_B',
       uid: 'U_B1',

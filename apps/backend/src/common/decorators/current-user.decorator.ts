@@ -3,7 +3,7 @@
 import { createParamDecorator, ExecutionContext } from '@nestjs/common';
 
 export interface JwtUser {
-  // FIX (finding #9): was typed `number`, but pid is always a string at
+  // Was typed `number`, but pid is always a string at
   // runtime. auth.service.ts encodes it into the JWT payload via
   // `user.pid.toString()` (BIGSERIAL pid -> string, to avoid precision
   // loss on values beyond Number.MAX_SAFE_INTEGER), and jwt.strategy.ts's
@@ -16,7 +16,7 @@ export interface JwtUser {
   orgid?: string; // ORG login
   uid?: string; // ORG login
   admin_id?: string; // SITEADMIN login
-  is_super_admin?: boolean; // SITEADMIN login — mirrors site_admins.is_super_admin; read by @RequireSuperAdmin() (subphase 1.3)
+  is_super_admin?: boolean; // SITEADMIN login — mirrors site_admins.is_super_admin; read by @RequireSuperAdmin() 
   session_id: string;
 }
 

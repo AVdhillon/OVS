@@ -23,8 +23,7 @@ import { AdminHeader } from "../components/admin-header";
 import { adminApi, type OrgListItem, type OrgStatus } from "../lib/admin-api";
 import { ChevronLeft, ChevronRight, Building2, Search } from "lucide-react";
 
-// EDIT (Phase 3 — admin portal core, subphase 3.6): new. Reads
-// GET /admin/organizations (3.3) — a landscape view, not a review queue, so
+// Reads GET /admin/organizations — a landscape view, not a review queue, so
 // unlike admin-request-queue-page.tsx's "Open" tab this page's "All" tab is
 // the one that sends no `status` param, mirroring OrgDirectoryService.list()'s
 // own default-shows-everything reasoning (see that method's comment) rather

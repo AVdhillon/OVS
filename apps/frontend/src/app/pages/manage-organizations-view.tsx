@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { api } from "../../lib/api";
 import type { MemberRole, OrgMemberWithRoles } from "../../lib/api";
-// EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.4): MemberLimitTab's own history type.
+// MemberLimitTab's own history type.
 import type { MemberLimitRequestRow } from "../../lib/api";
-// EDIT: brings in the requester's own org-request history so the "Request
+// Brings in the requester's own org-request history so the "Request
 // Org" flow can pre-check eligibility (cooldown, an already-open request
 // for the same name) instead of only finding out at submit time — see
 // SubmitOrgRequestModal's own comments below.
@@ -70,7 +70,7 @@ import {
 } from "../components/ui/popover";
 import { Textarea } from "../components/ui/textarea";
 import { Checkbox } from "../components/ui/checkbox";
-// EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.4): the
+// The
 // member-limit tab's usage bar.
 import { Progress } from "../components/ui/progress";
 import {
@@ -89,13 +89,13 @@ import {
   Loader2,
 } from "lucide-react";
 import React from "react";
-// EDIT (Phase 4 — cutover, subphase 4.6): the request-submit flow's optional
+// The request-submit flow's optional
 // org-email verification step reuses this generic OTP modal — same
 // component auth-page.tsx/identity-wallet-view.tsx already use for their
 // own send-then-verify flows, not a new one.
 import { OTPVerificationModal } from "../components/otp-verification-modal";
 
-// FIX: use OrgMemberWithRoles from api.tsx instead of redefining a local OrgMember.
+// Use OrgMemberWithRoles from api.tsx instead of redefining a local OrgMember.
 // This removes the stale local type and ensures the cast in fetchMembers is no longer needed.
 type OrgMember = OrgMemberWithRoles;
 
@@ -375,18 +375,15 @@ function ScopeTreeNode({
 }
 
 // ─── Submit Org Request Modal ──────────────────────────────────────────────────
-// EDIT (Phase 4 — cutover, subphase 4.6): replaces RegisterOrgModal.
-// Organization creation is no longer instant — this submits an org_requests
-// row (OrgRequestsService.submit(), 2.3, via POST /org/request, wired 4.1)
-// that a site admin reviews and decides on through the admin portal (3.1/
-// 3.5); approval is what actually creates the organization (2.4), not this
-// form. Accordingly this form no longer collects preferred_orgid/caller_uid/
-// caller_identifier/participants — SubmitOrgRequestDto has none of those
-// (see that DTO's own comment for why: there's nothing to be a member of,
-// or an orgid to pick, until a request is approved), so the "Initial
-// Participants" table/CSV UI and the orgid-suggestion helper are gone with
-// them, not just hidden.
-// EDIT: mirrors org-requests.service.ts's own constants (SUBMIT_COOLDOWN_MS,
+// Organization creation is not instant: this submits an org_requests row
+// (OrgRequestsService.submit(), via POST /org/request) that a site admin
+// reviews in the admin portal. Approval, followed by the requester's own
+// setup step, is what creates the organization. Accordingly this form does
+// not collect preferred_orgid/caller_uid/caller_identifier/participants —
+// SubmitOrgRequestDto has none of those (see that DTO's comment: there is
+// nothing to be a member of, and no orgid to pick, until a request is
+// approved).
+// Mirrors org-requests.service.ts's own constants (SUBMIT_COOLDOWN_MS,
 // MEMBER_COUNT_RISK_THRESHOLD, FREE_EMAIL_DOMAINS) so this form can warn the
 // requester about the same things the backend already silently checks,
 // instead of only surfacing them as a 429/toast after the fact or as a flag
@@ -437,13 +434,13 @@ function SubmitOrgRequestModal({
   open: boolean;
   onClose: () => void;
   onSuccess: () => void;
-  // EDIT: the requester's own request history, passed down from
+  // The requester's own request history, passed down from
   // ManageOrganizationsView (already fetched there for the cooldown check
   // that gates the "Request Org" button itself) — reused here for the
   // open-name duplicate warning below, so this one fetch covers both.
   myRequests: OrgRequestMine[];
 }) {
-  // EDIT: a short explainer screen before the form itself — "intro" is
+  // A short explainer screen before the form itself — "intro" is
   // shown first every time the dialog opens (reset in handleClose below),
   // "form" is the existing fields. Reframes clicking "Request Org" from an
   // instant form-fill into a deliberate two-step action without actually
@@ -456,7 +453,7 @@ function SubmitOrgRequestModal({
   const [sendingOtp, setSendingOtp] = useState(false);
   const [otpOpen, setOtpOpen] = useState(false);
   const [otpSentAt, setOtpSentAt] = useState<number | null>(null);
-  // FIX: org email a verification code is currently pending for — see
+  // Org email a verification code is currently pending for — see
   // handleSendOtp below.
   const [otpContact, setOtpContact] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -468,7 +465,7 @@ function SubmitOrgRequestModal({
     Number.isInteger(memberCountNum) &&
     memberCountNum > MEMBER_COUNT_RISK_THRESHOLD;
 
-  // EDIT: mirrors org-requests.service.ts's own findOpenRequestByName() —
+  // Mirrors org-requests.service.ts's own findOpenRequestByName() —
   // same case-insensitive match against this requester's currently-open
   // (PENDING/NEEDS_INFO) requests. Surfaced as the user types instead of
   // only as a 409 after they've filled in the whole form.
@@ -498,7 +495,7 @@ function SubmitOrgRequestModal({
   // or as the OTP modal's onVerify once a domain-ownership code has been
   // entered (mirrors identity-wallet-view.tsx's AddIdentityDialog: the OTP
   // modal's "verify" step IS the create call, not a separate step before it).
-  // FIX: the two guard clauses below used to `return toast.error(...)`
+  // The two guard clauses below used to `return toast.error(...)`
   // directly, which leaked toast.error's own return value (string | number,
   // a toast id) into handleSubmit's inferred return type — Promise<string |
   // number> instead of Promise<void>. identity-wallet-view.tsx's
@@ -520,7 +517,7 @@ function SubmitOrgRequestModal({
         return;
       }
     }
-    // EDIT: a superset of the backend's own member_count_risk_flag — that
+    // A superset of the backend's own member_count_risk_flag — that
     // flag also requires the account to be under a week old, which this
     // form has no way to know client-side (account age isn't part of the
     // session/user object). Asking for justification any time the count is
@@ -569,12 +566,12 @@ function SubmitOrgRequestModal({
   };
 
   // Step 1 (only reached when org_email is supplied): send the
-  // domain-ownership OTP (backend, 4.3) to org_email before the request can
+  // domain-ownership OTP (backend) to org_email before the request can
   // be submitted with it attached.
   const handleSendOtp = async () => {
     if (!orgName.trim()) return toast.error("Organization name is required");
     if (!isEmailValid) return toast.error("Enter a valid organization email");
-    // EDIT: same two checks handleSubmit() runs, moved up here too — this
+    // Same two checks handleSubmit() runs, moved up here too — this
     // path sends a verification email and only calls handleSubmit() once a
     // code comes back, so without this a duplicate-name or missing-
     // justification submission would waste an OTP round trip before
@@ -600,7 +597,7 @@ function SubmitOrgRequestModal({
 
     const email = orgEmail.trim();
 
-    // FIX: a code is already pending for this same email — reopen the OTP
+    // A code is already pending for this same email — reopen the OTP
     // dialog instead of requesting a new one. Without this, accidentally
     // clicking outside the OTP dialog (which closes it, and also re-opens
     // this form dialog via `open && !otpOpen`) and then clicking "Send
@@ -703,7 +700,7 @@ function SubmitOrgRequestModal({
                     onChange={(e) => setOrgName(e.target.value)}
                     autoFocus
                   />
-                  {/* EDIT: mirrors findOpenRequestByName() server-side — same
+                  {/* Mirrors findOpenRequestByName() server-side — same
                       case-insensitive match against this requester's own
                       currently-open requests, shown as they type instead of
                       only as a 409 after they submit. */}
@@ -737,7 +734,7 @@ function SubmitOrgRequestModal({
                     If provided, you'll verify a code sent here before the
                     request can be submitted.
                   </p>
-                  {/* EDIT: mirrors isFreeEmailDomain() server-side — same
+                  {/* Mirrors isFreeEmailDomain() server-side — same
                       list, surfaced as a tip instead of only as a flag the
                       requester never sees. */}
                   {isEmailValid && isFreeEmailDomain(orgEmail.trim()) && (
@@ -762,7 +759,7 @@ function SubmitOrgRequestModal({
                     onChange={(e) => setExpectedMemberCount(e.target.value)}
                     className="max-w-xs"
                   />
-                  {/* EDIT: mirrors member_count_risk_flag's own threshold
+                  {/* Mirrors member_count_risk_flag's own threshold
                       (MEMBER_COUNT_RISK_THRESHOLD) — the backend only fires
                       that flag in combination with a new account, which this
                       form can't check, so this tip fires on count alone. */}
@@ -1085,7 +1082,7 @@ function ManageAssignmentsDialog({
                       const saving = savingScopes.has(r.scope_id);
                       const isMoving = movingScope === r.scope_id;
 
-                      // FIX: fragments in a .map() must have an explicit key.
+                      // Fragments in a .map() must have an explicit key.
                       // Using React.Fragment instead of <> so the key prop can be set.
                       return (
                         <React.Fragment key={r.scope_id}>
@@ -3146,13 +3143,11 @@ function AddMembersDialog({
 }
 
 // ─── Manage Org Panel ─────────────────────────────────────────────────────────
-// ─── Member limit tab (Phase 7 — Member Limit Increase Requests, subphase
-// 7.4) ───────────────────────────────────────────────────────────────────────
-// EDIT (subphase 7.4): new. Backs ManageOrgPanel's "Member limit" tab —
-// "current limit + usage (member_count/member_limit), a 'Request increase'
-// action that opens 7.1's form, and status of any open request", per the
-// plan's own 7.4 text. Its own component rather than inlined into
-// ManageOrgPanel: the members/scope tabs above already make that function
+// ─── Member limit tab  ───────────────────────────────────────────────────────────────────────
+// Backs ManageOrgPanel's "Member limit" tab: current limit and usage
+// (member_count/member_limit), a "Request increase" action that opens the
+// form, and the status of any open request. Its own component rather than
+// inlined into ManageOrgPanel: the members/scope tabs above already make that function
 // long, and this tab's state (history list, submit-dialog form fields) has
 // nothing in common with either of theirs.
 function MemberLimitTab({ org }: { org: OrgSummary }) {
@@ -3163,7 +3158,7 @@ function MemberLimitTab({ org }: { org: OrgSummary }) {
   const [justification, setJustification] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  // EDIT: non-null while the dialog is editing an existing NEEDS_INFO row
+  // Non-null while the dialog is editing an existing NEEDS_INFO row
   // rather than starting a fresh request — set by openEditDialog(), cleared
   // by openDialog(). Drives both the dialog's copy and which api call
   // handleSubmit() makes.
@@ -3208,7 +3203,7 @@ function MemberLimitTab({ org }: { org: OrgSummary }) {
     setDialogOpen(true);
   };
 
-  // EDIT: opens the same dialog pre-filled from an existing NEEDS_INFO row
+  // Opens the same dialog pre-filled from an existing NEEDS_INFO row
   // instead of the org's current limit — handleSubmit() below routes to
   // resubmitLimitRequest() whenever editingRequestId is set.
   const openEditDialog = (r: MemberLimitRequestRow) => {
@@ -3273,7 +3268,7 @@ function MemberLimitTab({ org }: { org: OrgSummary }) {
               7.1) — disabling "Request increase" while one is PENDING
               avoids a guaranteed 409 round trip, same "friendly guard in
               front of a DB-level backstop" reasoning the backend itself
-              uses. EDIT: NEEDS_INFO isn't a dead end the way PENDING is —
+              uses. NEEDS_INFO isn't a dead end the way PENDING is —
               the org can edit and resend that exact row (resubmit()), so it
               gets its own action instead of just disabling this button. */}
           {openRequest?.status === "NEEDS_INFO" ? (
@@ -3447,7 +3442,7 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
   const fetchMembers = useCallback(async () => {
     setMembersLoading(true);
     try {
-      // FIX: api.getMembers now returns OrgMemberWithRoles[] directly — no cast needed.
+      // Api.getMembers now returns OrgMemberWithRoles[] directly — no cast needed.
       setMembers(await api.getMembers(org.orgid, org.uid, {}));
     } catch (e: any) {
       toast.error(e.message ?? "Failed to load members");
@@ -3456,7 +3451,7 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
     }
   }, [org.orgid, org.uid]);
 
-  // FIX: selectedScope was used inside fetchScopes but missing from its deps array,
+  // SelectedScope was used inside fetchScopes but missing from its deps array,
   // causing a stale closure where the scope panel wouldn't re-highlight after a refresh.
   // Using a functional setter avoids capturing the stale value at all.
   const fetchScopes = useCallback(async () => {
@@ -3466,7 +3461,7 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
       setScopeTree(data);
       const flat = flattenTree(data);
       setFlatScopes(flat);
-      // FIX: use functional update so we always compare against the latest selectedScope,
+      // Use functional update so we always compare against the latest selectedScope,
       // not the one captured when fetchScopes was last created.
       setSelectedScope((prev) =>
         prev ? (flat.find((s) => s.scope_id === prev.scope_id) ?? null) : null,
@@ -3483,9 +3478,8 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
     if (activeTab === "scope") fetchScopes();
   }, [activeTab, org.orgid, fetchMembers, fetchScopes]);
 
-  // FIX: added fetchScopes to the dependency array. The previous deps [activeTab] was
-  // incomplete — ESLint exhaustive-deps would flag this. flatScopes.length is no longer
-  // needed as a dep because fetchScopes is now stable (memoized by useCallback).
+  // fetchScopes must be in the dependency array (exhaustive-deps). It is
+  // memoized by useCallback, so listing it does not cause extra refetches.
   useEffect(() => {
     if (activeTab === "members") fetchScopes();
   }, [activeTab, fetchScopes]);
@@ -3669,7 +3663,7 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
         <TabsList>
           <TabsTrigger value="members">Members</TabsTrigger>
           <TabsTrigger value="scope">Scope Tree</TabsTrigger>
-          {/* EDIT (Phase 7 — subphase 7.4): current limit + usage, "Request
+          {/* Current limit + usage, "Request
               increase", and status of any open request — see
               MemberLimitTab's own header comment. */}
           <TabsTrigger value="limits">Member Limit</TabsTrigger>
@@ -4094,7 +4088,7 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
           )}
         </TabsContent>
 
-        {/* ── MEMBER LIMIT TAB (Phase 7 — subphase 7.4) ── */}
+        {/* ── MEMBER LIMIT TAB  ── */}
         <TabsContent value="limits" className="mt-4">
           <MemberLimitTab org={org} />
         </TabsContent>
@@ -4110,7 +4104,7 @@ export function ManageOrganizationsView() {
   const [loading, setLoading] = useState(true);
   const [selectedOrg, setSelectedOrg] = useState<OrgSummary | null>(null);
   const [registerOpen, setRegisterOpen] = useState(false);
-  // EDIT: this requester's own org-request history — fetched only for
+  // This requester's own org-request history — fetched only for
   // UNIFIED sessions (the only session type that can ever submit one), so
   // an ORG session doesn't pay for a fetch it has no use for. Drives the
   // "Request Org" button's own cooldown pre-check below, and is passed into
@@ -4150,7 +4144,7 @@ export function ManageOrganizationsView() {
     fetchOrgs();
   }, []);
 
-  // EDIT: separate effect/fetch from fetchOrgs() above — different
+  // Separate effect/fetch from fetchOrgs() above — different
   // endpoint, different session-type gate (isUnified only), and refetched
   // on its own after a successful submission (see fetchMyRequests passed as
   // part of onSuccess below) without needing to also redo the orgs fetch.
@@ -4170,7 +4164,7 @@ export function ManageOrganizationsView() {
     fetchMyRequests();
   }, [isUnified]);
 
-  // EDIT: mirrors org-requests.service.ts's own cooldown check
+  // Mirrors org-requests.service.ts's own cooldown check
   // (SUBMIT_COOLDOWN_MS from this file's own constants above) — same "look
   // at the single most recent row" shape, since listMyOrgRequests() already
   // comes back ordered newest-first.
@@ -4199,7 +4193,7 @@ export function ManageOrganizationsView() {
           </p>
         </div>
         {isUnified && (
-          // EDIT: demoted from a filled primary button to outline — this
+          // Demoted from a filled primary button to outline — this
           // one is shown on every visit regardless of whether the user
           // already organizes several orgs, so it shouldn't carry the same
           // visual weight as a true empty-state CTA (see the "Request your

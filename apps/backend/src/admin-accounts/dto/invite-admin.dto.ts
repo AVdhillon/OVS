@@ -9,11 +9,11 @@ import {
 } from 'class-validator';
 
 // ─── Invite Admin DTO ──────────────────────────────────────────────────────
-// EDIT (Phase 5 — platform maturity, subphase 5.3): input for
+// Input for
 // AdminAccountsService.inviteAdmin() / POST /admin/admins.
 //
 // There is no password field anywhere in this DTO, and deliberately so:
-// site_admins has never had one — admin login (subphases 1.2/1.3) is
+// site_admins has never had one — admin login is
 // OTP-to-email/mobile, exactly like every other identity in this codebase
 // (see auth.service.ts's resolveSiteAdminOtpIdentifier()). Inviting an
 // admin is therefore just creating the site_admins row; the invited person

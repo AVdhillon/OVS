@@ -11,7 +11,7 @@ import {
 import { CandidatesService } from './candidates.service';
 import { AddCandidateDto } from './dto/add-candidate.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
-// FIX: replaced @Req() + req.user cast with @CurrentUser() throughout
+// Replaced @Req() + req.user cast with @CurrentUser() throughout
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtUser } from '../common/decorators/current-user.decorator';
 

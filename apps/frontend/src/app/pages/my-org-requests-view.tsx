@@ -1,14 +1,12 @@
-// EDIT (Phase 4 — cutover, subphase 4.7): new page.
-//
 // Where a requester goes to see what happened to something they submitted
-// via SubmitOrgRequestModal (4.6) — PENDING/NEEDS_INFO/APPROVED/REJECTED —
+// via SubmitOrgRequestModal — PENDING/NEEDS_INFO/APPROVED/REJECTED —
 // and, for a NEEDS_INFO request specifically, to edit and resubmit it
-// in place (OrgRequestsService.resubmit(), same subphase). This is also
-// where a requester who got one of 4.5's transactional emails (a "needs
+// in place (OrgRequestsService.resubmit()). This is also
+// where a requester who got one of the transactional emails (a "needs
 // info" or "rejected" notice) would actually come to act on it or read the
 // admin's reason.
 //
-// Gated to isUnified only, matching 4.6's own SubmitOrgRequestModal gate
+// Gated to isUnified only, matching the SubmitOrgRequestModal gate
 // (`isUnified && <Button>…</Button>` in manage-organizations-view.tsx) —
 // submitting a request through this app's UI has only ever been offered to
 // UNIFIED sessions, so tracking those same requests follows the same gate
@@ -71,9 +69,8 @@ const STATUS_META: Record<
     icon: AlertCircle,
     className: "bg-amber-50 text-amber-700 border-amber-200",
   },
-  // EDIT (Phase 6 — post-approval org finalization, subphase 6.5): new
-  // status (6.1) between an admin's approve() and the requester's own
-  // finalizeSetup() (6.3) — approved, but the org doesn't exist yet.
+  // Intermediate status between an admin's approve() and the requester's own
+  // finalizeSetup() — approved, but the org doesn't exist yet.
   APPROVED_PENDING_SETUP: {
     label: "Action Needed: Set Up",
     icon: Settings2,
@@ -111,9 +108,9 @@ function formatDate(iso: string) {
 }
 
 // ─── Resubmit Dialog ─────────────────────────────────────────────────────────
-// EDIT (subphase 4.7): the edit-and-resubmit half of a NEEDS_INFO round
+// The edit-and-resubmit half of a NEEDS_INFO round
 // trip. Same field set and same send-then-verify-IS-resubmit OTP pattern as
-// 4.6's SubmitOrgRequestModal (OTPVerificationModal's onVerify calls the
+// SubmitOrgRequestModal (OTPVerificationModal's onVerify calls the
 // real resubmit directly, mirroring identity-wallet-view.tsx's
 // AddIdentityDialog) — see that modal's own comments for why. Prefilled
 // from the request being edited rather than starting blank.
@@ -133,7 +130,7 @@ function ResubmitOrgRequestDialog({
   const [sendingOtp, setSendingOtp] = useState(false);
   const [otpOpen, setOtpOpen] = useState(false);
   const [otpSentAt, setOtpSentAt] = useState<number | null>(null);
-  // FIX: org email a verification code is currently pending for — see
+  // Org email a verification code is currently pending for — see
   // handleSendOtp below.
   const [otpContact, setOtpContact] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -170,7 +167,7 @@ function ResubmitOrgRequestDialog({
 
   const handleSubmit = async (orgEmailOtp?: string) => {
     if (!request) return;
-    // FIX: `return toast.error(...)` leaks toast.error's own return value
+    // `return toast.error(...)` leaks toast.error's own return value
     // (string | number, a toast id) into handleSubmit's inferred return
     // type — Promise<string | number> instead of Promise<void>, which
     // OTPVerificationModal's onVerify prop (below) requires. Split each
@@ -215,7 +212,7 @@ function ResubmitOrgRequestDialog({
 
     const email = orgEmail.trim();
 
-    // FIX: a code is already pending for this same email — reopen the OTP
+    // A code is already pending for this same email — reopen the OTP
     // dialog instead of requesting a new one. Without this, accidentally
     // clicking outside the OTP dialog (which closes it, and also re-opens
     // this form dialog via `open && !otpOpen`) and then clicking "Send

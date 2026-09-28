@@ -25,10 +25,8 @@ import { adminApi, type OrgDetail, type OrgStatus } from "../lib/admin-api";
 import { toast } from "sonner";
 import { ArrowLeft, PauseCircle, PlayCircle, Archive } from "lucide-react";
 
-// EDIT (Phase 3 — admin portal core, subphase 3.6): new. Reads
-// GET /admin/organizations/:orgid (3.3) and wires all three lifecycle
-// actions to POST /admin/organizations/:orgid/{suspend,reinstate,archive}
-// (also 3.3, calling 3.2's OrgLifecycleService methods directly).
+// Reads GET /admin/organizations/:orgid and wires all three lifecycle
+// actions to POST /admin/organizations/:orgid/{suspend,reinstate,archive}.
 //
 // Same shared-dialog-shape idea as admin-request-detail-page.tsx's
 // reject/request-info pair, but here all three actions share one dialog
@@ -312,14 +310,11 @@ export function AdminOrgDetailPage() {
                 <CardDescription>
                   Every suspend/reinstate/archive action on this
                   organization, most recent first.{" "}
-                  {/* EDIT (Phase 5 — subphase 5.1): deep link into the new
-                      audit-log viewer, pre-scoped to this org. This card
-                      shows admin *intent* only; the viewer pairs it with
-                      the underlying row changes, including ones no admin
-                      caused. Comment-only scope note: this file wasn't in
-                      5.1's listed file set, but the viewer is unreachable
-                      from the place an admin would look for it without
-                      this one link. */}
+                  {/* Deep link into the audit-log viewer, pre-scoped to this
+                      org. This card shows admin *intent* only; the viewer
+                      pairs it with the underlying row changes, including
+                      ones no admin caused. Without this link the viewer is
+                      unreachable from the place an admin would look for it. */}
                   <Link
                     to={`/audit?target_type=ORGANIZATION&target_id=${encodeURIComponent(
                       detail.orgid,

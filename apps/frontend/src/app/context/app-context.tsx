@@ -61,11 +61,9 @@ export interface OrgSummary {
   is_active: boolean;
   created_at: string;
   uid: string; // caller's uid in this org
-  // EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.4): added so
-  // the org admin dashboard can show "current limit + usage" without a
-  // second round trip — see OrgService.getMyOrgs()'s own comment (7.4) for
-  // why these weren't already here (no app-facing endpoint exposed
-  // member_limit before this subphase).
+  // Returned with the org list so the org admin dashboard can show
+  // "current limit + usage" without a second round trip — see
+  // OrgService.getMyOrgs().
   member_limit: number;
   member_count: number;
 }
@@ -188,8 +186,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
   // On mount: the JWT lives in an httpOnly cookie now, so JS can't read or
   // decode it directly. Instead, ask the backend who the cookie belongs to
-  // — GET /auth/profile is guarded by AuthGuard('jwt') and returns exactly
-  // the payload + session_id this used to be decoded from locally. A 401
+  // — GET /auth/profile is guarded by AuthGuard('jwt') and returns the
+  // token payload plus session_id. A 401
   // here (no cookie, or an invalid/expired one) just means "not logged in".
   useEffect(() => {
     let cancelled = false;

@@ -1,14 +1,12 @@
-// EDIT (Phase 6 — post-approval org finalization, subphase 6.5): the
-// requester's half of the flow OrgRequestsService.finalizeSetup() (6.3)
+// The requester's half of the flow OrgRequestsService.finalizeSetup()
 // exists for on the backend. Triggered from MyOrgRequestsView's "Set up
 // your organization" CTA on an APPROVED_PENDING_SETUP row.
 //
-// Four steps, per the plan: org ID choice (with a live availability check
-// against GET /org/orgid-available, 6.5) → org contact email (pre-filled,
-// OTP-reverified only if changed) → owner uid → review, showing the
-// admin-set member limit read-only (not editable here — the plan's own
-// note is that this only changes later, via Phase 7's increase-request
-// flow, not through this wizard).
+// Four steps: org ID choice (with a live availability check against
+// GET /org/orgid-available) → org contact email (pre-filled, OTP-reverified
+// only if changed) → owner uid → review, showing the admin-set member limit
+// read-only. The limit is not editable here; it only changes later through
+// the member-limit increase request flow.
 //
 // The email step doesn't call a separate "verify" endpoint — there isn't
 // one anywhere in this codebase to call. Every OTP flow here
@@ -100,7 +98,7 @@ export function OrgSetupWizardDialog({ request, onClose, onSuccess }: Props) {
   }, [request]);
 
   // ── Step 0: live orgid availability check ──────────────────────────────────
-  // Debounced against GET /org/orgid-available (org.controller.ts, 6.5) — a
+  // Debounced against GET /org/orgid-available (org.controller.ts) — a
   // read-only, non-reserving check. finalizeSetup() itself still runs the
   // real, race-safe allocation at submission time (runWithUniqueOrgId), so a
   // "taken" flip between this check and Complete Setup is still possible and

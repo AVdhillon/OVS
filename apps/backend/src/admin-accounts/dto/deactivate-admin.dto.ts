@@ -1,7 +1,7 @@
 import { IsString, IsNotEmpty, Length } from 'class-validator';
 
 // ─── Deactivate Admin DTO ───────────────────────────────────────────────────
-// EDIT (Phase 5 — platform maturity, subphase 5.3): input for
+// Input for
 // AdminAccountsService.deactivateAdmin() /
 // POST /admin/admins/:adminId/deactivate.
 //

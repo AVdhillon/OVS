@@ -46,11 +46,9 @@ import {
   Shield,
 } from "lucide-react";
 
-// EDIT (Phase 5 — platform maturity, subphase 5.3): new. Reads/writes
-// AdminAccountsController's four routes (invite/deactivate/list/getDetail —
-// list/getDetail were a required deviation on the backend side, same class
-// of gap 3.1/3.3/4.7 each already flagged, since a page that lets a super
-// admin *choose* who to deactivate needs a roster to read from first).
+// Reads/writes AdminAccountsController's four routes (invite/deactivate/
+// list/getDetail). The two read routes exist because a page that lets a
+// super admin *choose* who to deactivate needs a roster to read from first.
 //
 // Gated client-side to super-admin sessions with a notice card, mirroring
 // my-org-requests-view.tsx's own non-UNIFIED notice pattern — but this is

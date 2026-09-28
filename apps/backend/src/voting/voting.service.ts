@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CastVoteDto } from './dto/cast-vote.dto';
-// FIX: removed local JwtUser interface (had pid?: number — wrong; JWT stores pid
+// Removed local JwtUser interface (had pid?: number — wrong; JWT stores pid
 //      as a string via user.pid.toString() in auth.service.ts).
 //      Import canonical JwtUser from the decorator instead.
 import type { JwtUser } from '../common/decorators/current-user.decorator';
@@ -83,12 +83,11 @@ export class VotingService {
       throw new ConflictException('You have already voted in this event');
     }
 
-    // Secondary "already voted" check used to live here as a read against
-    // the old `votes` table. votes no longer exists (finding #1 fix —
-    // vote_ballots carries no identity to query by), so the race-condition
-    // guard is now the atomic UPDATE ... WHERE has_voted = FALSE claim
-    // inside cast_ballot() itself (step 10 below) — that claim IS the final
-    // safety net now, in place of the old UNIQUE(event_id, orgid, uid).
+    // There is deliberately no read-based "already voted" re-check here:
+    // vote_ballots carries no voter identity to query by (that's what keeps
+    // ballots anonymous). The race-condition guard is the atomic
+    // UPDATE ... WHERE has_voted = FALSE claim inside cast_ballot() itself
+    // (step 10 below) — that claim is the final safety net.
 
     // ── 6. Validate candidate belongs to the event ───────────────────────
     const candidate = await this.prisma.candidates.findFirst({
@@ -101,7 +100,7 @@ export class VotingService {
     // ── 7 & 8. Check voter role + scope eligibility ────────────────────────
     // Mirrors the DB trigger check_vote_validity exactly.
     //
-    // FIX (multi-scope roles): member_roles PK is (orgid, uid, scope_id), so
+    // member_roles PK is (orgid, uid, scope_id), so
     // a voter can hold several role rows across different scopes (e.g.
     // is_voter = false at one scope, is_voter = true at another). The old
     // code did member_roles.findFirst({ is_voter: true }) and evaluated
@@ -137,35 +136,35 @@ export class VotingService {
       null;
 
     // ── 10. Cast the ballot ──────────────────────────────────────────────
-    // FIX (finding #1 — vote anonymization split-table design): the old
-    // `INSERT INTO votes (...)` wrote orgid/uid in cleartext into the same
-    // row as voter_hash, which meant anyone with DB read access (or a
-    // leaked backup, or the audit_votes snapshot) could see exactly who
-    // voted for what. `votes` and its identity-keyed triggers are retired.
+    // Ballots are written through the cast_ballot() database function, not
+    // a plain INSERT from application code. A single table holding
+    // orgid/uid next to the vote would let anyone with DB read access (or a
+    // leaked backup, or an audit snapshot) see exactly who voted for what,
+    // so identity and ballot live in separate tables with no link between
+    // them.
     //
-    // cast_ballot() is now the only code path permitted to write a ballot.
+    // cast_ballot() is the only code path permitted to write a ballot.
     // In one transaction it: re-validates candidate/voter-role/scope
     // eligibility, atomically claims event_participants.has_voted (the sole
-    // remaining identity <-> "has voted" intersection point, replacing the
-    // old UNIQUE(event_id, orgid, uid) safety net), computes voter_hash from
+    // identity <-> "has voted" intersection point, and the duplicate-vote
+    // safety net), computes voter_hash from
     // (event_id, uid, salt), and inserts the anonymous row into
     // vote_ballots — which has no orgid/uid column at all. AFTER INSERT
     // triggers on vote_ballots then handle what's left:
     //   trg_vote_count       — increments vote_results
     //   audit_vote_ballots   — snapshots the row (safe: no identity in it)
     //
-    // EDIT (Module B): the old trg_detect_vote_fraud (flat >4/>3
-    // global-threshold trigger) has been dropped — it's being replaced by
-    // Module C's self-baseline aggregation pipeline, not patched. Also as
-    // of Module B, the IP passed in below is truncated to subnet
-    // granularity inside cast_ballot() itself (truncate_ip_to_subnet())
-    // before it's ever written to vote_ballots — this file still passes
-    // the full-precision `ip` value in, but it never reaches disk at that
-    // precision.
+    // Fraud detection is not a per-vote trigger: a flat global threshold
+    // would misfire on legitimately busy events, so it runs as a separate
+    // aggregation pipeline that compares each event against its own
+    // baseline. The IP passed in below is truncated to subnet granularity
+    // inside cast_ballot() itself (truncate_ip_to_subnet()) before it's
+    // written to vote_ballots — this file passes the full-precision `ip`
+    // value in, but it never reaches disk at that precision.
     //
-    // The pre-flight checks above (steps 1-9) are unchanged and still what a
-    // caller sees first — cast_ballot()'s own guards are the DB-level
-    // last-resort, not the primary UX.
+    // The pre-flight checks above (steps 1-9) are what a caller sees first —
+    // cast_ballot()'s own guards are the DB-level last resort, not the
+    // primary UX.
     const SALT = process.env.VOTER_HASH_SALT!;
 
     const vote = await this.prisma.$transaction(async (tx) => {
@@ -231,13 +230,13 @@ export class VotingService {
    *   visibility_upward = TRUE (scope_only implicitly FALSE per DB constraint)
    *     → voter scope may be a descendant OR an ancestor of event scope_id.
    *
-   * FIX: the previous implementation only called get_scope_descendants(),
+   * The previous implementation only called get_scope_descendants(),
    *      which modelled only the default downward case and got the other two
    *      wrong — silently allowing ineligible descendants under scope_only,
    *      and silently rejecting eligible ancestors under visibility_upward.
    */
   /**
-   * FIX (multi-scope roles): accepts ALL of the voter's is_voter = true
+   * Accepts ALL of the voter's is_voter = true
    * scope_ids and succeeds if ANY one of them clears eligibility — instead
    * of the old single-scope-id version, which only ever saw one arbitrarily
    * chosen role row.

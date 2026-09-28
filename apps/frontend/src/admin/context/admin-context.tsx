@@ -7,13 +7,12 @@ import React, {
 } from "react";
 import { adminApi, type AdminProfile } from "../lib/admin-api";
 
-// EDIT (Phase 1 — auth model consolidation, subphase 1.10): minimal context
-// for the standalone admin app — deliberately much smaller than
-// app-context.tsx. There's no user/wallet/orgs/events state here because
-// none of that belongs to a SITEADMIN session; this just tracks whether
-// there's a valid admin session and who it belongs to. Org-request-queue
-// and org-directory state (Phase 3) will likely get their own
-// page-level/context state once those pages exist — not pre-built here.
+// Minimal context for the standalone admin app — deliberately much smaller
+// than app-context.tsx. There's no user/wallet/orgs/events state here
+// because none of that belongs to a SITEADMIN session; this just tracks
+// whether there's a valid admin session and who it belongs to. Org-request-
+// queue and org-directory state get their own page-level state as those
+// pages need it, rather than being pre-built here.
 
 interface AdminContextType {
   admin: AdminProfile | null;

@@ -6,13 +6,11 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-// EDIT (Phase 2 — subphase 2.2): orgid generation, the pre-check, and the
-// collision-retry loop now live in one shared helper so 2.4's
-// OrgRequestsService.approve() can create organizations the same way.
-// The `Prisma` namespace import that used to sit here went with them —
-// isOrgIdUniqueConflict() was its only consumer in this file.
+// Orgid generation, the pre-check, and the collision-retry loop live in
+// one shared helper so OrgRequestsService.finalizeSetup() creates
+// organizations the same way registerOrg() does.
 import { runWithUniqueOrgId, ORG_ID_FORMAT, isOrgIdAvailable } from './orgid.utilities';
-// EDIT (Phase 2 — subphase 2.4): the six-step org-creation transaction body
+// The six-step org-creation transaction body
 // itself now lives in org-creation.utilities.ts too, alongside orgid
 // allocation, so OrgRequestsService.approve() can run the same steps for a
 // different "owner" (the request's original submitter, not the caller).
@@ -106,12 +104,9 @@ export class OrgService {
     }
     const deduped = Array.from(seen.values());
 
-    // EDIT (Phase 2 — subphase 2.2): the orgid pre-check and the
-    // TOCTOU retry loop that used to be written out here (and again around
-    // the transaction below) are now runWithUniqueOrgId() in
-    // ./orgid.utilities. Behaviour is identical; the difference is that
-    // 2.4's approve() can call the same thing instead of reimplementing a
-    // race-condition fix.
+    // The orgid pre-check and TOCTOU retry loop are runWithUniqueOrgId() in
+    // ./orgid.utilities, shared with finalizeSetup() so the
+    // race-condition fix exists in exactly one place.
     const { orgid, result } = await runWithUniqueOrgId(
       this.prisma,
       {
@@ -120,17 +115,15 @@ export class OrgService {
         prefix: dto.org_prefix,
         suffix: dto.org_suffix,
       },
-      // EDIT (Phase 2 — subphase 2.4): the six INSERT steps that used to be
-      // written out inline here now live in createOrganizationCore()
-      // (org-creation.utilities.ts) — the same steps, same order, addressed
-      // by an "owner" (pid/uid/identifier) instead of always being this
-      // method's own caller. registerOrg()'s owner is the caller themself;
-      // approve()'s is the request's original submitter (see
-      // generateInitialOwnerUid() there for why that owner has no uid of
-      // their own to supply). set_config('app.current_uid', …) moved inside
-      // the shared function too — it was always keyed on the first
-      // member's uid being created, not specifically "the caller", so
-      // nothing about its meaning changes.
+      // The six INSERT steps live in createOrganizationCore()
+      // (org-creation.utilities.ts), shared by every creation path and
+      // addressed by an "owner" (pid/uid/identifier) rather than assuming
+      // the owner is this method's caller. registerOrg()'s owner is the
+      // caller themself; approve()'s is the request's original submitter
+      // (see generateInitialOwnerUid() there for why that owner has no uid
+      // of their own to supply). set_config('app.current_uid', …) is set
+      // inside the shared function because it is keyed on the first
+      // member's uid being created, not specifically "the caller".
       (tx, orgid) =>
         createOrganizationCore(tx, orgid, dto.org_name, {
           orgEmail: dto.org_email,
@@ -148,9 +141,9 @@ export class OrgService {
   }
 
   // ─── Org ID availability ────────────────────────────────────────────────────
-  // EDIT (Phase 6 — post-approval org finalization, subphase 6.5): backs
+  // Backs
   // GET /org/orgid-available (org.controller.ts) — the finalize-setup
-  // wizard's live-typing check (6.3's finalizeSetup() still does the real,
+  // wizard's live-typing check (finalizeSetup() still does the real,
   // race-safe allocation via runWithUniqueOrgId at actual submission time;
   // this is only ever the cheap, non-reserving pre-check for UI feedback).
   async checkOrgIdAvailable(rawOrgid: string) {
@@ -200,11 +193,9 @@ export class OrgService {
         org_email: true,
         is_active: true,
         created_at: true,
-        // EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.4):
-        // added so the organizer's own dashboard can show "current limit +
-        // usage" (post-approval-org-setup-plan.md, 7.4) without a second
-        // round trip. No app-facing endpoint exposed member_limit before
-        // this — org-directory.service.ts's equivalent (member_count too)
+        // Included so the organizer's own dashboard can show "current limit
+        // + usage" without a second round trip. org-directory.service.ts's
+        // equivalent (member_count too)
         // is the *site admin*'s org-detail view, a separate controller this
         // app has no access to.
         member_limit: true,
@@ -233,24 +224,21 @@ export class OrgService {
   }
 
   // ─── Get org for an ORG-session caller ───────────────────────────────────────
-  // BUGFIX: GET /org/mine (org.controller.ts::getMyOrgs) was calling
-  // getMyOrgs() above unconditionally, including for ORG sessions — passing
-  // BigInt(user.pid!). getMyOrgs()'s pid-based lookup exists for UNIFIED
-  // sessions, where a single unified account can be linked (via
+  // GET /org/mine (org.controller.ts::getMyOrgs) routes ORG sessions here
+  // instead of to getMyOrgs() above. getMyOrgs()'s pid-based lookup exists
+  // for UNIFIED sessions, where a single unified account can be linked (via
   // identity_wallet) to organizer roles across several different orgs. An
   // ORG session doesn't need that: it already knows exactly which
   // org_members row it is from its own JWT (orgid + uid), and
   // org_members.pid is legitimately NULL for a member who was never linked
   // to a unified account (chk_member_identity only requires pid OR mobile
-  // OR email) — which is exactly the case that made `BigInt(user.pid!)`
-  // throw "Cannot convert null to a BigInt" for that member.
+  // OR email) — so `BigInt(user.pid!)` would throw for such a member.
   //
   // This mirrors getMyOrgs()'s return shape (including member_count) so the
   // controller can hand back the same OrgSummary[] shape for either session
   // type — the frontend (manage-organizations-view.tsx::fetchOrgs) already
   // filters an ORG session's result down to session.orgid regardless, this
-  // just returns that one org (or []) directly instead of crashing before
-  // it gets the chance to filter.
+  // just returns that one org (or []) directly.
   async getMyOrgForOrgSession(orgid: string, uid: string) {
     const role = await this.prisma.member_roles.findFirst({
       where: { orgid, uid, is_organizer: true },
@@ -278,7 +266,7 @@ export class OrgService {
   }
 
   // ─── Get self info for an ORG-session caller (Account tab) ──────────────────
-  // EDIT (Account tab, ORG sessions): getMyOrgForOrgSession() above is
+  // GetMyOrgForOrgSession() above is
   // organizer-gated (it exists to drive the "manage this org" surfaces),
   // which leaves a *plain* ORG member — no organizer role anywhere — with
   // no way to see even their own org's name/contact. manage-account-view.tsx
@@ -312,10 +300,8 @@ export class OrgService {
   }
 
   // ─── Get members (scope-filtered for organizer) ─────────────────────────────
-  // BUGFIX: dropped the unused `pid: bigint` param — see org.controller.ts's
-  // getMembers() comment. It was never referenced in this method body (all
-  // scoping here runs off callerUid), so it was dead weight that just forced
-  // the controller to crash-cast a legitimately-nullable ORG-session pid.
+  // Takes no pid: all scoping runs off callerUid, and an ORG-session
+  // caller's pid is legitimately nullable (see org.controller.ts).
   async getMembers(
     orgid: string,
     callerUid: string,
@@ -388,8 +374,6 @@ export class OrgService {
   }
 
   // ─── Add members ────────────────────────────────────────────────────────────
-  // BUGFIX: dropped the unused `pid: bigint` param — see org.controller.ts's
-  // addMembers() comment.
   async addMembers(
     orgid: string,
     callerUid: string,
@@ -413,12 +397,12 @@ export class OrgService {
       );
     }
 
-    // EDIT (Phase 6 — subphase 6.4): friendly guard in front of the DB-level
+    // Friendly guard in front of the DB-level
     // backstop (trg_check_member_limit, dbschema.sql). Without this, a
     // roster import that runs past the cap partway through would surface the
     // trigger's raw Postgres exception text as this row's `error` field
     // instead of a clean message — same "friendly guard in front of a
-    // DB-level backstop" shape the plan asks for, tracked here as a running
+    // DB-level backstop" shape, tracked here as a running
     // in-memory counter rather than a fresh COUNT(*) query per row. This is
     // deliberately advisory, not authoritative: it's read outside any
     // transaction, so a concurrent request against the same org can still
@@ -570,8 +554,6 @@ export class OrgService {
 
   // ─── Update member role at a specific scope ──────────────────────────────────
   // scope_id in the DTO identifies which member_roles row to update.
-  // BUGFIX: dropped the unused `pid: bigint` param — see org.controller.ts's
-  // updateMember() comment.
   async updateMember(
     orgid: string,
     callerUid: string,
@@ -626,8 +608,6 @@ export class OrgService {
   }
 
   // ─── Soft-delete member ─────────────────────────────────────────────────────
-  // BUGFIX: dropped the unused `pid: bigint` param — see org.controller.ts's
-  // removeMember() comment.
   async removeMember(
     orgid: string,
     callerUid: string,
@@ -679,8 +659,6 @@ export class OrgService {
 
     return { message: `Member ${targetUid} removed from ${orgid}` };
   }
-  // BUGFIX: dropped the unused `pid: bigint` param — see org.controller.ts's
-  // addMemberRole() comment.
   async addMemberRole(
     orgid: string,
     callerUid: string,
@@ -734,8 +712,6 @@ export class OrgService {
 
   // ─── Remove one scope assignment from a member ───────────────────────────────
   // If this is the member's last assignment, soft-deletes org_members too.
-  // BUGFIX: dropped the unused `pid: bigint` param — see org.controller.ts's
-  // removeMemberRole() comment.
   async removeMemberRole(
     orgid: string,
     callerUid: string,
@@ -792,8 +768,6 @@ export class OrgService {
   }
 
   // ─── Atomically move one scope assignment to a different scope ───────────────
-  // BUGFIX: dropped the unused `pid: bigint` param — see org.controller.ts's
-  // moveMemberRole() comment.
   async moveMemberRole(
     orgid: string,
     callerUid: string,

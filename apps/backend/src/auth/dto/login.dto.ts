@@ -43,12 +43,11 @@ export class LoginDto {
 /**
  * Login DTO for the standalone admin app (SITEADMIN session type).
  *
- * EDIT (Phase 1 — auth model consolidation, subphase 1.2): new, backing the
- * `site_admins` table added in subphase 1.1. Deliberately a SEPARATE class
+ * Backing the `site_admins` table. Deliberately a SEPARATE class
  * from LoginDto rather than a third `type: 'SITEADMIN'` value on it:
  *   - Site-admin login has its own shape (admin_id — no identifier/orgid/uid
  *     ambiguity to validate against) and its own endpoint on the admin
- *     subdomain (wired in subphase 1.3), so there's no client that would
+ *     subdomain, so there's no client that would
  *     ever need to submit the two shapes interchangeably.
  *   - Keeping it separate means LoginDto's `type` union — and every switch
  *     over it in auth.service.ts — stays exhaustive over the two identities

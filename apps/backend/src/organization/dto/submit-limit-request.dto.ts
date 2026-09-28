@@ -2,7 +2,7 @@ import { IsInt, IsOptional, IsString, Length, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 // ─── Submit Member Limit Request DTO ───────────────────────────────────────
-// EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.3): the input
+// The input
 // side of OrgLimitRequestsService.submit(). `orgid` and `requested_by_uid`
 // are NOT fields here — same reasoning SubmitOrgRequestDto's own header
 // comment gives for leaving caller identity out of its body: `orgid` comes
@@ -12,7 +12,7 @@ import { Type } from 'class-transformer';
 // organizer-gated routes for the same pattern), never trusted from the body.
 //
 // No `current_limit` field either — submit() snapshots that itself from
-// organization.member_limit at call time (7.2's own header comment); asking
+// organization.member_limit at call time (see its own header comment); asking
 // the caller to supply it would just be a value they could get wrong or
 // spoof, for something the server already knows.
 export class SubmitLimitRequestDto {

@@ -14,42 +14,29 @@ import {
   ReviewOrgRequestDto,
   ApproveOrgRequestDto,
 } from './dto/review-org-request.dto';
-// EDIT (Phase 6 — subphase 6.3): finalizeSetup() below is the new caller —
-// approve() (6.2) stopped calling either of these; see that method's own
-// header comment for why the org-creation responsibility moved here.
+// finalizeSetup() (below) is the sole caller of these two helpers; approve()
+// only advances the request to APPROVED_PENDING_SETUP and does not create
+// the organization itself — see finalizeSetup()'s comment for why that
+// responsibility lives here instead.
 import { runWithUniqueOrgId } from './orgid.utilities';
 import { createOrganizationCore } from './org-creation.utilities';
 import { FinalizeOrgRequestDto } from './dto/finalize-org-request.dto';
 import { OtpService } from '../otp/otp.service';
-// EDIT (Phase 4 — cutover, subphase 4.5): the four org-request lifecycle
-// notifications — see org-request-email.service.ts's own header comment
-// for why this is a separate service rather than folded in here.
+// Org-request lifecycle notifications (submitted/approved/rejected/needs-info)
+// are sent from a dedicated service rather than inline here — see
+// org-request-email.service.ts for why that separation exists.
 import { OrgRequestEmailService } from './org-request-email.service';
 
-// ─── Org request staging (Phase 2) ────────────────────────────────────────────
-// EDIT (Phase 2 — org request staging, subphase 2.3): new service.
+// ─── Org request staging ───────────────────────────────────────────────────
+// Organizations are not created directly: a request is submitted here, a
+// site admin reviews it, and only on approval does an `organization` row
+// come into existence (via finalizeSetup(), once the requester completes
+// setup). This staging layer exists so every new organization is vetted
+// before it can register members or events, instead of being created the
+// instant someone asks for one.
 //
-// Today OrgService.registerOrg() creates an organization the instant someone
-// asks for one. This service is the staging layer that replaces that flow:
-// a request is submitted here, a site admin reviews it, and only on approval
-// (2.4) does an `organization` row come into existence.
-//
-// EDIT (subphase 2.4): approve() added.
-//
-// EDIT (subphase 2.5): reject() and requestInfo() added — this closes out
-// every decision a site admin can make on an open request (approve / reject
-// / ask for more information).
-//
-// EDIT (Phase 3 — admin portal core, subphase 3.1): list() and getDetail()
-// added — the read side Phase 2 didn't need (it was write-path-only) but
-// 3.1's admin controller does, for the review queue and request-detail
-// routes. The routes that call any of submit/approve/reject/requestInfo/
-// list/getDetail are 3.1 (admin side, this subphase) and 4.1 (requester
-// side, submit() only).
-//
-// EDIT (Phase 4 — cutover, subphase 4.1): POST /org/register was replaced by
-// POST /org/request (org.controller.ts), so submit() is now reachable — the
-// note above about it being test-only until 4.1 landed no longer applies.
+// list() and getDetail() back the admin review queue and request-detail
+// routes; submit() is the only method the requester-facing side calls.
 
 /** Statuses in which a request is still awaiting a decision. */
 export const OPEN_ORG_REQUEST_STATUSES = ['PENDING', 'NEEDS_INFO'] as const;
@@ -57,10 +44,10 @@ export const OPEN_ORG_REQUEST_STATUSES = ['PENDING', 'NEEDS_INFO'] as const;
 /**
  * Mirrors org_requests.chk_org_request_status in the master schema.
  *
- * EDIT (Phase 6 — post-approval org finalization, subphase 6.1/6.2): added
- * 'APPROVED_PENDING_SETUP' — reachable from approve() (6.2) once it stops
- * creating the organization itself; 'APPROVED' is now only reachable via
- * finalizeSetup() (6.3).
+ * 'APPROVED_PENDING_SETUP' is the state approve() puts a request into —
+ * the admin has approved it but the organization does not exist yet.
+ * 'APPROVED' is only reached once the requester completes setup via
+ * finalizeSetup(), which is what actually creates the organization.
  */
 export type OrgRequestStatus =
   | 'PENDING'
@@ -71,9 +58,9 @@ export type OrgRequestStatus =
 
 /**
  * Every status org_requests.status can hold — OPEN_ORG_REQUEST_STATUSES plus
- * the three terminal-or-pending-setup ones. Used by list() (subphase 3.1) to
- * validate a caller-supplied ?status= filter against the full set, not just
- * the open ones — an admin browsing history needs to filter to
+ * the three terminal-or-pending-setup ones. Used by list() to validate a
+ * caller-supplied ?status= filter against the full set, not just the open
+ * ones, since an admin browsing history needs to filter to
  * APPROVED_PENDING_SETUP/APPROVED/REJECTED too.
  */
 export const ALL_ORG_REQUEST_STATUSES = [
@@ -84,48 +71,35 @@ export const ALL_ORG_REQUEST_STATUSES = [
   'REJECTED',
 ] as const;
 
-// EDIT (Phase 4 — cutover, subphase 4.2): submit() now computes and stores
-// three verification signals (fuzzy name match, free-email-domain flag,
-// expected_member_count vs. account age) — see submit()'s own comments for
-// each, and dbschema.sql's org_requests columns for where they land. All
-// three are informational only: nothing here blocks or auto-rejects a
-// submission, they just give the reviewing admin more to go on than the
-// requester's own justification text.
+// submit() computes and stores three verification signals (fuzzy name
+// match, free-email-domain flag, expected_member_count vs. account age —
+// see submit()'s own comments for each, and dbschema.sql's org_requests
+// columns for where they land). All three are informational only: nothing
+// here blocks or auto-rejects a submission, they just give the reviewing
+// admin more to go on than the requester's own justification text.
 //
-// EDIT (Phase 4 — cutover, subphase 4.4): submit() now also enforces a
-// per-pid cooldown (SUBMIT_COOLDOWN_MS, below) before the row is created —
-// see that constant's own comment for how this differs from
-// unique_open_org_request's per-name guard. org.controller.ts's
-// POST /org/request route also picked up its first-ever per-IP
-// @Throttle() in this subphase (it had none before), and
-// auth.controller.ts's ADMIN_LOGIN_THROTTLE was tightened — see that
-// file's own comment for the new value and why.
+// submit() also enforces a per-pid cooldown (SUBMIT_COOLDOWN_MS, below)
+// before the row is created — see that constant's own comment for how this
+// differs from unique_open_org_request's per-name guard.
 //
-// EDIT (Phase 4 — cutover, subphase 4.5): submit()/approve()/reject()/
-// requestInfo() each now send the requester a transactional email once
-// their own action has already succeeded (row created / transaction
-// committed) — see org-request-email.service.ts's own header comment for
-// why that's a separate service, and each call site below for exactly
-// when in the method it fires and why.
+// submit()/approve()/reject()/requestInfo() each send the requester a
+// transactional email only after their own action has already succeeded
+// (row created / transaction committed) — see org-request-email.service.ts
+// for why that lives in a separate service, and each call site below for
+// exactly when in the method it fires and why.
 
-// ─── Owner uid (subphase 2.4, removed in 6.3) ─────────────────────────────────
-// This file used to generate a random OWNERxxxx uid on the requester's
-// behalf (generateInitialOwnerUid()) when approve() itself created the
-// organization. As of 6.2, approve() no longer creates any org_members row
-// at all, and as of 6.3, finalizeSetup() — the method that now does —
-// takes a requester-chosen `owner_uid` (FinalizeOrgRequestDto) instead of
-// a random one: the requester is present, authenticated, and finishing
-// setup themselves, so there's no reason to assign them an ID they didn't
-// pick, the way there was when an admin's click was what created the org.
-// No collision-retry loop is needed for it, unlike orgid generation: uid is
+// ─── Owner uid ──────────────────────────────────────────────────────────────
+// finalizeSetup() takes a requester-chosen `owner_uid` (FinalizeOrgRequestDto)
+// rather than generating a random one: the requester is present,
+// authenticated, and finishing setup themselves at this point, so there's
+// no reason to assign them an ID they didn't pick. No collision-retry loop
+// is needed for it, unlike orgid generation: uid is
 // only unique *within an org* (org_members' PK is (orgid, uid)), and the
 // org a chosen uid is being inserted into does not exist until the same
 // transaction creates it — see FinalizeOrgRequestDto.owner_uid's own
-// comment. generateInitialOwnerUid() itself is deleted rather than left
-// unreferenced, per its own former comment flagging exactly this removal
-// once 6.3 landed.
+// comment.
 
-// ─── Verification signal constants (subphase 4.2) ─────────────────────────────
+// ─── Verification signal constants  ─────────────────────────────
 // All three thresholds below are heuristics for what's worth showing a
 // reviewer, not fraud verdicts — see each signal's use in submit() for how
 // they're applied and why a value below them isn't stored as "0" or
@@ -147,9 +121,9 @@ const NAME_SIMILARITY_THRESHOLD = 0.3;
  * Common consumer email providers. An org_email on one of these domains
  * doesn't mean anything is wrong — plenty of legitimate small/informal orgs
  * register with a personal address — but it's weaker evidence of org
- * ownership than a custom domain would be, which is what 4.3's domain-
- * ownership OTP check (verifying control of org_email's domain) will
- * eventually lean on. Deliberately not exhaustive: this is a coarse signal,
+ * ownership than a custom domain would be, which is what the domain-
+ * ownership OTP check (verifying control of org_email's domain) leans on
+ * instead. Deliberately not exhaustive: this is a coarse signal,
  * not a blocklist, so it doesn't need every regional/niche provider to be
  * useful.
  */
@@ -186,15 +160,15 @@ const FREE_EMAIL_DOMAINS = new Set([
 const NEW_ACCOUNT_DAYS_THRESHOLD = 7;
 const MEMBER_COUNT_RISK_THRESHOLD = 50;
 
-// EDIT (Phase 4 — cutover, subphase 4.3): submit() now also requires proof
+// Submit() now also requires proof
 // of control over org_email before the row is created, when one was
 // supplied — see sendDomainOtp() and the 'ORG_DOMAIN_OWNERSHIP'-scoped
 // verifyOtp() call inside submit() itself, and otp_verification's own
 // schema comment for why a `purpose` column exists at all.
 
-// EDIT (Phase 4 — cutover, subphase 4.4): submission cooldown.
+// Submission cooldown.
 //
-// unique_open_org_request (2.1) already stops the same pid from having two
+// unique_open_org_request already stops the same pid from having two
 // *open* requests for the same *name* at once — but it says nothing about
 // submission rate. It does nothing to stop a burst of requests for
 // differently-named orgs, and nothing to stop an instant resubmission the
@@ -206,7 +180,7 @@ const MEMBER_COUNT_RISK_THRESHOLD = 50;
 // Same "look at the single most recent row" shape OtpService.sendOtp()'s
 // own cooldown check already uses (identifier -> pid here), and the same
 // HttpException(..., 429) shape it throws with — idx_org_requests_pid
-// (pid, created_at DESC), added back in 2.1, was already sized for exactly
+// (pid, created_at DESC) is sized for exactly
 // this lookup; see that index's own comment.
 //
 // 15 minutes, not the OTP flow's 30 seconds: an org request is a
@@ -214,7 +188,7 @@ const MEMBER_COUNT_RISK_THRESHOLD = 50;
 // ever), not a retry-heavy flow like OTP delivery — a cap tight enough to
 // stop automated bursts without getting in a genuine requester's way if
 // they realize right away they made a typo and want to fix-and-resubmit
-// (NEEDS_INFO's edit-and-resubmit path, 4.7, is the intended way to
+// (NEEDS_INFO's edit-and-resubmit path is the intended way to
 // correct an *open* request without waiting out this cooldown at all,
 // since editing doesn't call submit() again).
 const SUBMIT_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes
@@ -223,17 +197,17 @@ const SUBMIT_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes
 export class OrgRequestsService {
   constructor(
     private prisma: PrismaService,
-    // EDIT (Phase 4 — cutover, subphase 4.3): OtpModule was added to
+    // OtpModule was added to
     // org.module.ts's imports for this — see that file's own comment.
     private otpService: OtpService,
-    // EDIT (Phase 4 — cutover, subphase 4.5): registered as a provider
+    // Registered as a provider
     // alongside this service in org.module.ts — see that file's own
     // comment on why it's a separate class.
     private emailService: OrgRequestEmailService,
   ) {}
 
   // ─── Send the domain-ownership OTP for a prospective org_email ─────────────
-  // EDIT (Phase 4 — cutover, subphase 4.3): the send side of the check
+  // The send side of the check
   // submit() enforces below. Deliberately its own method/route rather than
   // folded into submit() itself — the requester needs the code delivered to
   // their inbox *before* they can fill in submit()'s org_email_otp field, so
@@ -245,7 +219,7 @@ export class OrgRequestsService {
   // request, or check anything about org_name — verifying an email address
   // is independent of what org it will end up attached to, and requiring
   // sequencing here would just mean re-verifying on every edit-and-resubmit
-  // cycle (4.7) if the requester changes org_name but keeps the same
+  // cycle if the requester changes org_name but keeps the same
   // org_email. It DOES require an authenticated session (this method's only
   // caller, OrgController.sendOrgDomainOtp(), sits behind the controller's
   // existing @UseGuards(JwtAuthGuard)) — an unauthenticated OTP-send endpoint
@@ -257,13 +231,13 @@ export class OrgRequestsService {
 
   // ─── Submit a new organization request ──────────────────────────────────────
   async submit(pid: bigint, dto: SubmitOrgRequestDto) {
-    // EDIT (Phase 4 — cutover, subphase 4.2): capture the account row —
+    // Capture the account row —
     // requireUnifiedAccount() already fetches it for the existence/
     // contactability check, and the account-age signal below needs
     // created_at off the same row.
     const requester = await this.requireUnifiedAccount(pid);
 
-    // ── Cooldown (subphase 4.4) ────────────────────────────────────────────
+    // ── Cooldown  ────────────────────────────────────────────
     // Checked before any normalisation/signal work below — it's a pure
     // per-pid rate gate, unrelated to what's actually in this submission,
     // so there's no reason to do the more expensive work (fuzzy name match,
@@ -271,7 +245,7 @@ export class OrgRequestsService {
     // SUBMIT_COOLDOWN_MS's own comment for why this exists on top of
     // unique_open_org_request.
     const mostRecent = await this.findMostRecentRequest(pid);
-    // FIX: `created_at` is typed nullable because the current Prisma
+    // `created_at` is typed nullable because the current Prisma
     // client predates the dbschema.sql/schema.prisma fix adding NOT NULL
     // to org_requests.created_at — it's always set by the column's own
     // DEFAULT at insert time and nothing ever writes it as NULL. The `!`
@@ -291,7 +265,7 @@ export class OrgRequestsService {
     // Normalise before anything else, so every check below (and the row we
     // write) sees the same value.
     //
-    // NOTE (flagged in 2.1's session notes): the DB's
+    // NOTE: the DB's
     // chk_org_request_name_not_blank and the unique_open_org_request index
     // both normalise with btrim()/lower() themselves, so an untrimmed name
     // wouldn't break any constraint — it would just sit padded in the admin
@@ -322,16 +296,16 @@ export class OrgRequestsService {
       );
     }
 
-    // ── Verification signals (subphase 4.2) ────────────────────────────────
+    // ── Verification signals  ────────────────────────────────
     // Three independent, informational-only checks — see each helper/
     // constant's own comment for what it means and why its threshold is
     // what it is. None of these can block or reject the submission; they
-    // exist purely so 3.5's request-detail page (a later subphase) has more
+    // exist purely so the request-detail page has more
     // for the reviewing admin to go on than the requester's own
     // justification text.
     const nameMatch = await this.findClosestOrgNameMatch(orgName);
     const orgEmailIsFreeDomain = this.isFreeEmailDomain(orgEmail);
-    // FIX: same nullable-Prisma-client-vs-fixed-schema gap as
+    // Same nullable-Prisma-client-vs-fixed-schema gap as
     // findMostRecentRequest()'s created_at above — see that comment.
     const accountAgeDays = Math.floor(
       (Date.now() - requester.created_at!.getTime()) / (1000 * 60 * 60 * 24),
@@ -341,7 +315,7 @@ export class OrgRequestsService {
       dto.expected_member_count > MEMBER_COUNT_RISK_THRESHOLD &&
       accountAgeDays < NEW_ACCOUNT_DAYS_THRESHOLD;
 
-    // ── Domain-ownership check (subphase 4.3) ──────────────────────────────
+    // ── Domain-ownership check  ──────────────────────────────
     // Only applies when org_email was supplied — with none, there's no
     // address to prove control of, and SubmitOrgRequestDto's own
     // @ValidateIf already guarantees org_email_otp is present whenever
@@ -388,7 +362,7 @@ export class OrgRequestsService {
         },
       });
 
-      // EDIT (Phase 4 — cutover, subphase 4.5): fire the "request received"
+      // Fire the "request received"
       // notification now that the row genuinely exists — after the create
       // succeeds, not inside the try's happy path speculatively, so a
       // caught-and-rethrown error above (the P2002 branch below) can never
@@ -424,28 +398,22 @@ export class OrgRequestsService {
   }
 
   // ─── Approve a pending request ───────────────────────────────────────────────
-  // EDIT (Phase 2 — subphase 2.4): originally created the `organization` row
-  // itself (runWithUniqueOrgId() + createOrganizationCore()), marked the
-  // request APPROVED, and wrote the admin_audit_log line, all in one
-  // transaction.
-  //
-  // EDIT (Phase 6 — post-approval org finalization, subphase 6.2): stops
-  // doing any of that. An admin approving a request is no longer the same
-  // moment an organization comes into existence — see this plan's own "Why
-  // this is a phase, not a patch" header for the reasoning. approve() now
-  // only records the admin's sign-off and the member cap they're setting
-  // (admin_set_member_limit), and moves the request to the new
-  // 'APPROVED_PENDING_SETUP' status. Creating the organization itself is
-  // finalizeSetup() (6.3)'s job — a requester-triggered action, not an
-  // admin one — which is why generateInitialOwnerUid(), runWithUniqueOrgId(),
-  // and createOrganizationCore() no longer appear below (they move to
-  // finalizeSetup() in 6.3 instead).
+  // Approving a request does NOT create the organization. An admin's
+  // approval is a sign-off, not the moment the org comes into existence:
+  // approve() only records that sign-off and the member cap the admin is
+  // setting (admin_set_member_limit), and moves the request to
+  // 'APPROVED_PENDING_SETUP'. Creating the organization is finalizeSetup()'s
+  // job — a requester-triggered action — because the requester must choose
+  // the orgid, confirm the org's contact email, and supply their own uid,
+  // none of which an admin can do on their behalf. That is why
+  // runWithUniqueOrgId() and createOrganizationCore() are used there rather
+  // than below.
   async approve(
     requestId: bigint,
     adminId: string,
     dto: ApproveOrgRequestDto,
   ) {
-    // Defense in depth, not a fix to the guard: SiteAdminGuard (1.3)
+    // Defense in depth, not a fix to the guard: SiteAdminGuard
     // confirms the caller's *session* is valid and SITEADMIN, but its
     // strategy only checks site_admins.is_active at login time (see
     // site-admin-jwt.strategy.ts) — a token issued before an admin was
@@ -453,7 +421,7 @@ export class OrgRequestsService {
     // Approving a request commits the platform to a member cap for an org
     // that will eventually exist; re-checking here costs one query and
     // closes that window for this specific adverse action, without trying
-    // to fix the guard itself (out of this subphase's scope).
+    // to fix the guard itself, which is a broader change out of scope here.
     await this.requireActiveSiteAdmin(adminId);
 
     // Pre-fetch purely for a fast, friendly error. This does NOT close the
@@ -476,7 +444,7 @@ export class OrgRequestsService {
     // The requester must still have a contact on file — same requirement
     // submit() enforced when the request was created, re-checked here
     // because approval can happen long after submission. They'll need this
-    // contact again at finalizeSetup() (6.3) time and for the email sent
+    // contact again at finalizeSetup() time and for the email sent
     // below. Mirrors IdentityService.requireUnifiedAccount().
     const requester = await this.requireUnifiedAccount(request.pid);
 
@@ -489,7 +457,7 @@ export class OrgRequestsService {
 
     const result = await this.prisma.$transaction(async (tx) => {
       // Same lock-then-write shape as reject()/requestInfo(), and the same
-      // reasoning approve() itself used to rely on before 6.2: SELECT ...
+      // reasoning the other status transitions in this file rely on: SELECT ...
       // FOR UPDATE locks the request row first, so a concurrent reviewer on
       // the same request_id blocks until this transaction commits or rolls
       // back, then re-reads a status that's no longer open. There's no
@@ -531,7 +499,7 @@ export class OrgRequestsService {
           reviewed_at: new Date(),
           // approved_orgid/setup_completed_at stay NULL —
           // chk_org_request_review_consistency requires exactly that for
-          // APPROVED_PENDING_SETUP; finalizeSetup() (6.3) sets both later.
+          // APPROVED_PENDING_SETUP; finalizeSetup() sets both later.
         },
         select: {
           request_id: true,
@@ -560,8 +528,8 @@ export class OrgRequestsService {
       return updated;
     });
 
-    // EDIT (Phase 6 — subphase 6.2): sendApproved() (orgid-bearing) moves to
-    // finalizeSetup() (6.3) — this is the new "approved, action needed"
+    // SendApproved() (orgid-bearing) moves to
+    // finalizeSetup() — this is the new "approved, action needed"
     // notification instead, sent once the transaction above has committed,
     // same "don't email for a decision that got rolled back" reasoning the
     // old approve() used for sendApproved().
@@ -585,15 +553,13 @@ export class OrgRequestsService {
   }
 
   // ─── Finalize setup: the requester actually creates the organization ────────
-  // EDIT (Phase 6 — post-approval org finalization, subphase 6.3): the other
-  // half of the split approve() (6.2) started. An admin's approve() only
+  // The second half of the two-step approval. An admin's approve() only
   // gets a request to 'APPROVED_PENDING_SETUP' — this is what the
   // requester calls afterward to actually bring the organization into
   // existence, choosing the orgid, confirming the org's contact email, and
   // supplying their own uid. Reuses runWithUniqueOrgId()/
-  // createOrganizationCore() exactly as registerOrg() does — see this
-  // file's own header comment on the plan for why those were left imported,
-  // unused, through 6.2.
+  // createOrganizationCore() exactly as registerOrg() does, so both
+  // creation paths share one orgid-allocation and insert implementation.
   async finalizeSetup(
     requestId: bigint,
     pid: bigint,
@@ -627,7 +593,7 @@ export class OrgRequestsService {
 
     // ── Org email: confirm, or re-verify if changed ────────────────────────
     // Required in this DTO even though org_requests.org_email may already
-    // be OTP-verified from submission (4.3) — real-world time may have
+    // be OTP-verified from submission — real-world time may have
     // passed since then. Only re-run the domain-ownership OTP flow when the
     // value actually changed; an unchanged, already-verified email doesn't
     // need proving twice.
@@ -670,7 +636,7 @@ export class OrgRequestsService {
       this.prisma,
       { orgName: request.org_name, preferredOrgId },
       async (tx, orgid) => {
-        // Same lock-then-write shape approve() used before 6.2, and the
+        // Same lock-then-write shape as the other status transitions in this file, and the
         // same race it's guarding against: a second finalize call (or the
         // request somehow re-entering review) firing between the pre-fetch
         // above and here must not double-create an organization for this
@@ -748,8 +714,8 @@ export class OrgRequestsService {
       },
     );
 
-    // EDIT (Phase 6 — subphase 6.3): sendApproved() (orgid-bearing) moves
-    // here from approve() (6.2) — there's now an orgid and an owner
+    // SendApproved() (orgid-bearing) moves
+    // here from approve() — there's now an orgid and an owner
     // membership to actually report. Sent after the transaction commits,
     // same "don't email for something that got rolled back" reasoning
     // every other notification in this file follows.
@@ -772,7 +738,7 @@ export class OrgRequestsService {
   }
 
   // ─── Reject a pending/needs-info request ─────────────────────────────────────
-  // EDIT (Phase 2 — subphase 2.5): terminal, adverse outcome. No organization
+  // Terminal, adverse outcome. No organization
   // is created and no orgid is allocated, so this doesn't need
   // runWithUniqueOrgId() the way approve() does — just a status flip. Reuses
   // approve()'s SELECT ... FOR UPDATE lock shape (see that method's notes on
@@ -863,7 +829,7 @@ export class OrgRequestsService {
       return updated;
     });
 
-    // EDIT (Phase 4 — cutover, subphase 4.5): sent after the transaction
+    // Sent after the transaction
     // commits, using `request.pid` from the pre-check above — pid is
     // immutable on an existing row (never written by update() anywhere in
     // this file), so there's no staleness risk in reading it from the
@@ -887,8 +853,8 @@ export class OrgRequestsService {
   }
 
   // ─── Send a request back for more information ────────────────────────────────
-  // EDIT (Phase 2 — subphase 2.5): non-terminal — the request stays open, and
-  // 4.7's "My requests" view is what will let the requester edit and
+  // Non-terminal — the request stays open, and
+  // the "My requests" view is what will let the requester edit and
   // resubmit it. Structurally identical to reject() (same lock, same shape
   // of write) except for the target status and the one extra DB-enforced
   // requirement: chk_org_request_needs_info_note means review_note cannot be
@@ -973,7 +939,7 @@ export class OrgRequestsService {
       return updated;
     });
 
-    // EDIT (Phase 4 — cutover, subphase 4.5): same reasoning as reject()'s
+    // Same reasoning as reject()'s
     // own copy of this — pid is immutable, so reading it off the unlocked
     // pre-check is safe, and this is the one message of the four whose
     // whole point is the review_note text the admin just wrote, not just
@@ -995,12 +961,11 @@ export class OrgRequestsService {
     };
   }
 
-  // ─── Revoke a stale approval (subphase 6.6) ────────────────────────────────
-  // EDIT (Phase 6 — post-approval org setup, subphase 6.6): the admin side
-  // of the "requester never finishes setup" gap 6.1's schema comment and
-  // idx_org_requests_pending_setup both anticipated. Per the plan's own
-  // "Open decisions" answer: a manual revoke action, no automated
-  // expiry/reversal — this is that manual action, not a cron job.
+  // ─── Revoke a stale approval ─────────────────────────────────────────────
+  // The admin side of the "requester never finishes setup" gap that the
+  // schema comment and idx_org_requests_pending_setup both anticipate.
+  // Deliberately a manual revoke action with no automated expiry/reversal —
+  // this is that manual action, not a cron job.
   //
   // Only reachable from APPROVED_PENDING_SETUP (not the OPEN_ORG_REQUEST_
   // STATUSES reject()/requestInfo()/approve() gate on) — a request that's
@@ -1010,7 +975,7 @@ export class OrgRequestsService {
   // organization never came to exist, so there is nothing to "un-approve"
   // beyond the request row itself, and REJECTED is what frees the org name
   // back up for a future submission (unique_open_org_request's WHERE clause
-  // does not include REJECTED — see 2.1). admin_set_member_limit is left as
+  // does not include REJECTED). admin_set_member_limit is left as
   // it was set at approval time rather than cleared: it's a historical
   // record of what was decided, not a live value anything still reads once
   // the row is REJECTED, and chk_org_request_review_consistency's REJECTED
@@ -1124,12 +1089,12 @@ export class OrgRequestsService {
     };
   }
 
-  // ─── Stuck-request admin view (subphase 6.6) ───────────────────────────────
+  // ─── Stuck-request admin view  ───────────────────────────────
   /**
    * Requests sitting in APPROVED_PENDING_SETUP for longer than `minHours`,
-   * oldest-approved-first — queries idx_org_requests_pending_setup (6.1)
+   * oldest-approved-first — queries idx_org_requests_pending_setup
    * directly, per that index's own comment ("don't add a second index for
-   * the same purpose"). Purely visibility, same as the plan's own framing:
+   * the same purpose"). Purely visibility:
    * nothing here reverses or expires a request automatically, it just
    * surfaces candidates for an admin to look at and, if they choose,
    * revoke via revokeApproval() above.
@@ -1159,18 +1124,17 @@ export class OrgRequestsService {
     return { requests, min_hours: hours, count: requests.length };
   }
 
-  // ─── Admin review queue + detail (subphase 3.1) ──────────────────────────────
-  // EDIT (Phase 3 — subphase 3.1): read-only. Phase 2 never needed these —
-  // submit()/approve()/reject()/requestInfo() are all write paths — but the
-  // admin controller landing in this subphase does: a queue to review and a
-  // detail view per request.
+  // ─── Admin review queue + detail ────────────────────────────────────────
+  // Read-only. submit()/approve()/reject()/requestInfo() are all write
+  // paths — these back the admin controller instead: a queue to review and
+  // a detail view per request.
 
   /**
    * The admin review queue. Defaults to open requests only (PENDING +
    * NEEDS_INFO) — an admin opening the queue wants work to do, not a full
    * history — ordered oldest-first *within* a status, matching
-   * idx_org_requests_status's (status, created_at) shape exactly (the plan's
-   * own description of what this index is for). Pass `status` to narrow to
+   * idx_org_requests_status's (status, created_at) shape exactly (which is what
+   * that index exists for). Pass `status` to narrow to
    * specific statuses instead, e.g. browsing closed (APPROVED/REJECTED)
    * requests for context on a similar new one.
    */
@@ -1219,7 +1183,7 @@ export class OrgRequestsService {
   }
 
   /**
-   * Request detail (3.5's detail page): the request row, the requester's
+   * Request detail (the detail page): the request row, the requester's
    * unified-account contact info, the reviewing admin if the request has
    * been reviewed, and the full admin_audit_log trail for this request —
    * every past approve/reject/request-info decision on it, so a NEEDS_INFO
@@ -1228,9 +1192,8 @@ export class OrgRequestsService {
    * Deliberately three separate queries rather than a Prisma `include` for
    * the pid -> uaccount and reviewed_by_admin_id -> site_admins relations:
    * the relation field names a real `prisma db pull` would generate for
-   * them aren't knowable in this sandbox (the regen has been an outstanding
-   * item since 1.1/2.1 — see PROGRESS.md), so guessing at one risks a name
-   * that doesn't match the real client. Mirrors approve()'s own choice
+   * them aren't knowable without an outstanding `prisma db pull` regen, so
+   * guessing at one risks a name that doesn't match the real client. Mirrors approve()'s own choice
    * (`tx.uaccount.findUniqueOrThrow({ where: { pid: claimed.pid } })` as its
    * own query rather than an include) for the same reason.
    */
@@ -1269,19 +1232,19 @@ export class OrgRequestsService {
     return { ...request, requester, reviewer, audit_trail: auditTrail };
   }
 
-  // ─── Requester's own requests + edit-and-resubmit (subphase 4.7) ──────────
-  // EDIT (Phase 4 — cutover, subphase 4.7): the requester-facing counterpart
-  // to 3.1's admin list()/getDetail() — listMine() is the "My requests"
+  // ─── Requester's own requests + edit-and-resubmit ───────────────────────
+  // The requester-facing counterpart
+  // to the admin list()/getDetail() — listMine() is the "My requests"
   // view's data source, and resubmit() is what a NEEDS_INFO round trip
   // actually does: edits the SAME row and flips it back to PENDING, rather
-  // than calling submit() again (see SUBMIT_COOLDOWN_MS's own comment,
-  // subphase 4.4, for why that distinction matters — a resubmit must not be
+  // than calling submit() again (see SUBMIT_COOLDOWN_MS's own comment
+  // for why that distinction matters — a resubmit must not be
   // blocked by the cooldown meant to slow down repeat *new* submissions).
 
   /**
    * All of this pid's own requests, newest first. Deliberately a narrower
-   * projection than list()/getDetail() (3.1, admin-facing): the four
-   * verification-signal columns from 4.2 (name_similarity_score/_match,
+   * projection than list()/getDetail() (admin-facing): the four
+   * verification-signal columns (name_similarity_score/_match,
    * org_email_is_free_domain, requester_account_age_days,
    * member_count_risk_flag) are reviewer-only context about the requester —
    * that schema comment says so explicitly — not something to show the
@@ -1303,14 +1266,12 @@ export class OrgRequestsService {
         review_note: true,
         reviewed_at: true,
         approved_orgid: true,
-        // EDIT (Phase 6 — post-approval org finalization, subphase 6.5):
-        // the finalize-setup wizard's review step shows this read-only
-        // (per the plan: "not editable here — see Phase 7 for how it
-        // changes later") — it's the one field an APPROVED_PENDING_SETUP
-        // row needs that wasn't already selected here. Still excluded:
-        // the 4.2 verification-signal columns (reviewer-only, per this
-        // method's own comment above) and setup_completed_at (not shown
-        // anywhere in the UI yet — nothing in 6.5 asks for it).
+        // The finalize-setup wizard's review step shows this read-only
+        // (it isn't editable here) — it's the one field an
+        // APPROVED_PENDING_SETUP row needs that wasn't already selected
+        // here. Still excluded: the verification-signal columns
+        // (reviewer-only, per this method's own comment above) and
+        // setup_completed_at (not shown anywhere in the UI yet).
         admin_set_member_limit: true,
         created_at: true,
         updated_at: true,
@@ -1321,10 +1282,10 @@ export class OrgRequestsService {
   /**
    * Edits a NEEDS_INFO request in place and sends it back to PENDING — the
    * "resubmit" half of a NEEDS_INFO round trip. Deliberately NOT a call to
-   * submit(): that would create a second row (2.1's audit trigger on
+   * submit(): that would create a second row (the audit trigger on
    * org_requests exists specifically so this UPDATE's diff is preserved
-   * instead — "the row alone doesn't preserve what was originally
-   * claimed", per that subphase's own note) and would be subject to
+   * instead — the row alone doesn't preserve what was originally
+   * claimed) and would be subject to
    * SUBMIT_COOLDOWN_MS, which exists to slow down repeat *new* submissions,
    * not to make a requester wait 15 minutes to answer a question about a
    * request they already have open.
@@ -1394,7 +1355,7 @@ export class OrgRequestsService {
     // edited content, even though it's the same row.
     const nameMatch = await this.findClosestOrgNameMatch(orgName);
     const orgEmailIsFreeDomain = this.isFreeEmailDomain(orgEmail);
-    // FIX: same nullable-Prisma-client-vs-fixed-schema gap noted in
+    // Same nullable-Prisma-client-vs-fixed-schema gap noted in
     // submit() above.
     const accountAgeDays = Math.floor(
       (Date.now() - requester.created_at!.getTime()) / (1000 * 60 * 60 * 24),
@@ -1469,11 +1430,11 @@ export class OrgRequestsService {
         });
       });
 
-      // EDIT (subphase 4.7): reuses the "request received" notification —
+      // Reuses the "request received" notification —
       // from the requester's perspective a resubmission is the same event
       // (their request is back in the queue awaiting review). No dedicated
       // "resubmitted" template exists; flagged as a possible future
-      // addition rather than invented here, out of this subphase's scope.
+      // addition rather than built here, since it's outside this method's scope.
       await this.emailService.sendRequestReceived(
         requester.email,
         result.reference_code,
@@ -1498,15 +1459,13 @@ export class OrgRequestsService {
 
   /**
    * An org request is an accountability record tied to a real account: it's
-   * how the reviewing admin knows who is asking, and how 4.5 emails them
+   * how the reviewing admin knows who is asking, and how the notification emails reach them
    * about the outcome. Mirrors IdentityService.requireUnifiedAccount().
    *
-   * EDIT (Phase 4 — cutover, subphase 4.2): now returns the fetched
-   * `uaccount` row instead of void — submit() needs `created_at` off it for
-   * the account-age signal, and refetching it a second time right after
-   * this call already fetched it would be wasteful. approve()'s call site
-   * (which only needed the existence/contactability check) is unaffected —
-   * it simply doesn't use the return value.
+   * Returns the fetched `uaccount` row: submit() needs `created_at` off it
+   * for the account-age signal, and refetching it would be a wasted query.
+   * Callers that only need the existence/contactability check (approve())
+   * ignore the return value.
    */
   private async requireUnifiedAccount(pid: bigint) {
     const user = await this.prisma.uaccount.findUnique({ where: { pid } });
@@ -1610,7 +1569,7 @@ export class OrgRequestsService {
   }
 
   /**
-   * submit()'s cooldown check (subphase 4.4) — the single most recent
+   * submit()'s cooldown check  — the single most recent
    * org_requests row for this pid, regardless of name or status. Matches
    * idx_org_requests_pid's (pid, created_at DESC) shape exactly, so this is
    * an index-only lookup, not a scan.
@@ -1624,7 +1583,7 @@ export class OrgRequestsService {
   }
 
   /**
-   * submit()'s fuzzy name-match signal (subphase 4.2). Raw SQL rather than
+   * submit()'s fuzzy name-match signal. Raw SQL rather than
    * a Prisma filter because there is no Prisma-level equivalent of
    * pg_trgm's similarity() — same reasoning as voting.service.ts's own
    * $queryRaw calls for get_scope_descendants()/get_scope_ancestors(),
@@ -1657,7 +1616,7 @@ export class OrgRequestsService {
   }
 
   /**
-   * submit()'s free-email-domain signal (subphase 4.2). Returns false for a
+   * submit()'s free-email-domain signal. Returns false for a
    * missing/malformed email — there's nothing to flag, and submit() already
    * validates org_email's shape via SubmitOrgRequestDto's @IsEmail() before
    * this is ever called.

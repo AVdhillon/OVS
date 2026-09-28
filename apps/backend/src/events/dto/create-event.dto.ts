@@ -76,8 +76,8 @@ export class CreateEventDto {
   /**
    * If true, event is visible ONLY to members assigned to the exact event scope.
    * No downward propagation.
-   * FIX: added — was in DB schema and project design ("Restrict visibility to
-   *      current scope only") but missing from the DTO entirely.
+   * Backed by the events.scope_only column ("restrict visibility to the
+   * current scope only").
    * Mutually exclusive with visible_upward.
    */
   @IsOptional()

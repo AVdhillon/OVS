@@ -2,12 +2,11 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { AnalyticsService } from './analytics.service';
 import { SiteAdminGuard } from '../auth/guards/site-admin.guard';
 
-// ─── Analytics routes (Phase 5 — platform maturity, subphase 5.2) ──────────
-// EDIT: new controller. Prefix 'admin/analytics' — a fourth sibling
-// alongside 3.1's 'admin/org-requests', 3.3's 'admin/organizations' and
-// 5.1's 'admin/audit', behind the same plain @UseGuards(SiteAdminGuard) for
-// the same reason all three give: ordinary site-admin work, not the tier
-// Phase 5.3 reserves @RequireSuperAdmin() for. Aggregate counts are, if
+// ─── Analytics routes ───────────────────────────────────────────────────────
+// Prefix 'admin/analytics' — a sibling of 'admin/org-requests',
+// 'admin/organizations' and 'admin/audit', behind the same plain
+// @UseGuards(SiteAdminGuard) for the same reason all three give: ordinary
+// site-admin work, not the tier @RequireSuperAdmin() reserves. Aggregate counts are, if
 // anything, the least sensitive thing any admin route here returns — no
 // individual row survives either query.
 //

@@ -68,16 +68,16 @@ export class EventsController {
   }
 
   // ── DELETE /events/:eventId ────────────────────────────────────────────────
-  // FIX (Phase 5 regression pass): this route only has :eventId — no orgid
+  // This route only has :eventId — no orgid
   // in the route or body — so RolesGuard's orgid resolution
   // (`user?.orgid ?? req.params?.orgid ?? req.body?.orgid`) could only ever
   // succeed for ORG sessions (whose JWT carries orgid). For UNIFIED
   // sessions user.orgid is undefined, so the guard threw "org context
   // required" and blocked every legitimate UNIFIED-organizer delete before
-  // the request ever reached the service — the same class of bug Phase 2b
+  // the request ever reached the service — the same class of bug already
   // fixed for getParticipants. The service's deleteEvent() already loads
   // the event and calls assertCallerOwnsEvent(), which does full
-  // org-identity resolution (Phase 2a) and a stricter creator-only check
+  // org-identity resolution and a stricter creator-only check
   // than this guard ever performed, so the guard is redundant here and
   // removed rather than patched to guess an orgid it can't know yet.
   @Delete(':eventId')
@@ -100,7 +100,7 @@ export class EventsController {
 
   // ── GET /events/:eventId/participants ──────────────────────────────────────
   // Organizer-only — only org organizers should see full participant + voted status.
-  // FIX (Phase 2b): this route has no orgid param (only :eventId), so
+  // This route has no orgid param (only :eventId), so
   // RolesGuard/@RequireOrganizer('orgid') could never resolve an orgid for
   // UNIFIED sessions (user.orgid is undefined on UNIFIED, and there's no
   // route/body orgid to fall back to) — it would 403 before the service

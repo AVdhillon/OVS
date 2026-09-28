@@ -15,7 +15,7 @@ import { normalizeEvent } from "../utils/normalizeEvent";
 
 // ── Response types ────────────────────────────────────────────────────────────
 
-// EDIT (Account tab, ORG sessions): shape of GET /org/self
+// Shape of GET /org/self
 // (org.controller.ts::getOrgSelfInfo) — the organizer-free counterpart to
 // OrgSummary, since a plain (non-organizer) ORG member's Account tab has no
 // use for the organizer-only fields (is_active, member_limit, etc.).
@@ -59,10 +59,9 @@ export interface CastVoteResponse {
   live_results?: EventResults["results"];
 }
 
-// EDIT (Phase 4 — cutover, subphase 4.6): replaces RegisterOrgResponse.
-// Submitting a request no longer creates an organization on the spot — it
-// creates an org_requests row that a site admin reviews (2.3/2.4/2.5), so
-// the response carries a tracking reference + status instead of an orgid.
+// Submitting a request does not create an organization on the spot — it
+// creates an org_requests row that a site admin reviews, so the response
+// carries a tracking reference + status instead of an orgid.
 // Field shapes mirror OrgRequestsService.submit()'s actual return object
 // (request_id/pid-style bigints are stringified by the backend's global
 // BigIntInterceptor, same as everywhere else in this file).
@@ -75,16 +74,16 @@ export interface OrgRequestSubmitResponse {
   message: string;
 }
 
-// EDIT (Phase 4 — cutover, subphase 4.7): the "My requests" view's list-item
+// The "My requests" view's list-item
 // shape — GET /org/request/mine's response. A narrower projection than the
-// admin-facing shapes elsewhere in this file (no 4.2 verification-signal
+// admin-facing shapes elsewhere in this file (no verification-signal
 // columns — those are reviewer-only context, per OrgRequestsService.listMine()'s
 // own comment) but not narrower than OrgRequestSubmitResponse: unlike a fresh
 // submission's response, a listed request may be REJECTED/NEEDS_INFO, so this
 // carries review_note/reviewed_at/approved_orgid too.
 //
-// EDIT (Phase 6 — post-approval org finalization, subphase 6.5): status
-// widened to include 'APPROVED_PENDING_SETUP' (6.1's schema change) and
+// Status
+// widened to include 'APPROVED_PENDING_SETUP' (the schema change) and
 // admin_set_member_limit added — listMine() (org-requests.service.ts) now
 // selects it too, needed for the finalize-setup wizard's read-only review
 // step. null for every status this side of an admin's approve() call.
@@ -109,7 +108,7 @@ export interface OrgRequestMine {
   updated_at: string;
 }
 
-// EDIT (Phase 6 — post-approval org finalization, subphase 6.5): input for
+// Input for
 // POST /org/request/:requestId/finalize — mirrors FinalizeOrgRequestDto
 // (finalize-org-request.dto.ts) field-for-field.
 export interface FinalizeOrgRequestBody {
@@ -137,9 +136,8 @@ export interface OrgIdAvailabilityResponse {
   available: boolean;
 }
 
-// ── Member limit increase requests (Phase 7 — Member Limit Increase
-// Requests, subphase 7.4) ───────────────────────────────────────────────────
-// Types mirror OrgLimitRequestsService's (7.2/7.3) plain-object return
+// ── Member limit increase requests  ───────────────────────────────────────────────────
+// Types mirror OrgLimitRequestsService's plain-object return
 // shapes. Deliberately their own interfaces rather than reusing
 // OrgRequestSubmitResponse/OrgRequestMine — org_member_limit_requests has no
 // reference_code/expected_member_count/approved_orgid, and carries
@@ -204,13 +202,13 @@ export interface MemberRole {
   is_organizer: boolean;
 }
 
-// FIX: OrgMember returned by getMembers always includes a `roles` array.
+// OrgMember returned by getMembers always includes a `roles` array.
 // The app-context OrgMember type predates the multi-scope roles design;
 // this intersection extends it without changing the context type globally.
 export type OrgMemberWithRoles = OrgMember & { roles: MemberRole[] };
 
 // ── CSRF helper ────────────────────────────────────────────────────────────────
-// FIX: was reading the ovp_csrf cookie via document.cookie. That only works
+// Was reading the ovp_csrf cookie via document.cookie. That only works
 // when frontend and backend share a registrable domain the cookie can be
 // scoped to. When they're deployed on unrelated hosts (e.g. two separate
 // *.azurewebsites.net apps, which is a public suffix — cookies can't be
@@ -551,18 +549,17 @@ export const api = {
 
   getMyOrgs: () => request<OrgSummary[]>("/org/mine"),
 
-  // EDIT (Account tab, ORG sessions): organizer-free — any ORG session can
-  // read its own org's name/contact + own uid. See GET /org/self.
+  // Organizer-free — any ORG session can read its own org's name/contact
+  // and its own uid. See GET /org/self.
   getOrgSelfInfo: () => request<OrgSelfInfo>("/org/self"),
 
-  // EDIT (Phase 4 — cutover, subphase 4.6): replaces registerOrg(), whose
-  // route (POST /org/register) was removed outright in 4.1 — this app had
-  // no working caller for org creation until this subphase.
+  // Org creation goes through the request/approve flow; the old direct
+  // POST /org/register route no longer exists.
   //
   // submitOrgRequest() takes no caller_uid/caller_identifier/participants —
-  // SubmitOrgRequestDto (backend, 2.3) has none of those, since submitting
+  // SubmitOrgRequestDto (backend) has none of those, since submitting
   // a request creates nothing yet for the caller to be a member of; that
-  // binding happens on approval (2.4), not here.
+  // binding happens on approval, not here.
   submitOrgRequest: (body: {
     org_name: string;
     org_email?: string;
@@ -586,7 +583,7 @@ export const api = {
       body: JSON.stringify({ org_email }),
     }),
 
-  // EDIT (Phase 4 — cutover, subphase 4.7): the "My requests" view's two
+  // The "My requests" view's two
   // calls — listing this account's own requests, and the edit-and-resubmit
   // action for one that's come back NEEDS_INFO. resubmitOrgRequest() takes
   // the same body shape as submitOrgRequest() (mirrors
@@ -608,14 +605,12 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  // EDIT (Phase 6 — post-approval org finalization, subphase 6.5): the
-  // finalize-setup wizard's two calls — a live, read-only "is this orgid
+  // The finalize-setup wizard's two calls — a live, read-only "is this orgid
   // free" check as the requester types their own choice (org.controller.ts's
-  // GET /org/orgid-available, itself a thin wrapper — see that route's own
-  // comment), and the actual finalize submission
-  // (OrgRequestsService.finalizeSetup(), 6.3). Both against the singular
-  // '/org/request/...' path convention — see 6.3's own note on why that's
-  // deliberate, not a typo, despite the plan's prose writing it plural.
+  // GET /org/orgid-available, a thin wrapper — see that route's comment),
+  // and the actual finalize submission (OrgRequestsService.finalizeSetup()).
+  // Both use the singular '/org/request/...' path convention; the singular
+  // form is deliberate, not a typo.
   checkOrgIdAvailable: (orgid: string) =>
     request<OrgIdAvailabilityResponse>(
       `/org/orgid-available?orgid=${encodeURIComponent(orgid)}`,
@@ -627,7 +622,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  // EDIT (Phase 7 — Member Limit Increase Requests, subphase 7.4): the org
+  // The org
   // admin dashboard's "Request increase" action and its own request
   // history. Both organizer-only server-side (org.controller.ts's
   // @RequireOrganizer('orgid')) — `uid` is passed as a query param, same
@@ -648,7 +643,7 @@ export const api = {
       `/org/${orgid}/member-limit-requests?uid=${encodeURIComponent(uid)}`,
     ),
 
-  // EDIT: edits and resends a request that's in NEEDS_INFO — backs the
+  // Edits and resends a request that's in NEEDS_INFO — backs the
   // "Edit & resend" action MemberLimitTab shows in place of a disabled
   // "Request increase" button once the open request needs more info.
   resubmitLimitRequest: (
@@ -666,7 +661,7 @@ export const api = {
 
   /**
    * Returns members. Each member has a `roles` array — one entry per scope assignment.
-   * FIX: return type now correctly reflects the `roles` field the backend always sends.
+   * Return type now correctly reflects the `roles` field the backend always sends.
    */
   getMembers: (
     orgid: string,
@@ -828,9 +823,8 @@ export const api = {
   getWallet: () => request<WalletIdentity[]>("/identity/getwallet"),
 
   addIdentity: (body: {
-    // EDIT (Phase 1 — auth model consolidation, subphase 1.5): narrowed to
-    // 'ORG' only, matching the backend's AddIdentityDto (subphase 1.4) and
-    // identity_wallet's chk_identity_type CHECK constraint (subphase 1.1).
+    // Narrowed to 'ORG' only, matching the backend's AddIdentityDto and
+    // identity_wallet's chk_identity_type CHECK constraint.
     identity_type: "ORG";
     identity_id: string;
     otp: string;

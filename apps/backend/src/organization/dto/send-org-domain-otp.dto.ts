@@ -1,7 +1,7 @@
 import { IsEmail, IsNotEmpty } from 'class-validator';
 
 // ─── Send Org Domain OTP DTO ──────────────────────────────────────────────────
-// EDIT (Phase 4 — cutover, subphase 4.3): input for
+// Input for
 // OrgRequestsService.sendDomainOtp() / POST /org/request/send-domain-otp.
 //
 // Deliberately its own DTO rather than reusing auth's SendOtpDto: that one

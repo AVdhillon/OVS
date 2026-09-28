@@ -29,17 +29,15 @@ import {
 import { toast } from "sonner";
 import { ArrowLeft, Check, X, HelpCircle } from "lucide-react";
 
-// ─── Member limit request detail/review page (Phase 7 — Member Limit
-// Increase Requests, subphase 7.4) ──────────────────────────────────────────
-// EDIT (subphase 7.4): new. The admin-facing counterpart to
-// AdminRequestDetailPage, for org_member_limit_requests specifically —
-// deliberately its own component rather than a mode flag on that one, per
-// the plan's own 7.4 text ("the two review screens themselves stay as
-// separate components (their approve actions take different inputs: a
-// member limit number vs. nothing)"). Reads
-// GET /admin/member-limit-requests/:requestId (7.3) and wires approve/
+// ─── Member limit request detail/review page ────────────────────────────────
+// The admin-facing counterpart to AdminRequestDetailPage, for
+// org_member_limit_requests specifically. It is deliberately its own
+// component rather than a mode flag on that one, because the two approve
+// actions take different inputs (a member limit number vs. nothing) and
+// sharing a component would mean branching on nearly every line. Reads
+// GET /admin/member-limit-requests/:requestId and wires approve/
 // reject/needs-info to MemberLimitRequestsAdminController's three POST
-// routes (also 7.3).
+// routes.
 //
 // Simpler than AdminRequestDetailPage in one specific way: approve() here
 // takes NO body — org_member_limit_requests already carries requested_limit
@@ -69,10 +67,8 @@ const STATUS_BADGE: Record<
   },
 };
 
-// Mirrors admin-request-detail-page.tsx's ACTION_LABEL, for this table's own
-// admin_audit_log.action values (7.2's dbschema.sql addition covers the
-// third one here — see that subphase's own comment on why it had to be
-// added).
+// Mirrors admin-request-detail-page.tsx's ACTION_LABEL for the
+// admin_audit_log.action values this page produces.
 const ACTION_LABEL: Record<string, string> = {
   MEMBER_LIMIT_INCREASE_APPROVED: "Approved",
   MEMBER_LIMIT_INCREASE_REJECTED: "Rejected",
@@ -369,7 +365,7 @@ export function AdminMemberLimitDetailPage() {
 
       {/* ── Reject / Needs-info (shared shape) ──────────────────────────── */}
       {/* No internal_note field here, unlike AdminRequestDetailPage's
-          equivalent dialog — ReviewLimitRequestDto (7.3) has only `reason`,
+          equivalent dialog — ReviewLimitRequestDto has only `reason`,
           see that DTO's own comment for why. */}
       <Dialog
         open={dialogMode === "reject" || dialogMode === "needs-info"}

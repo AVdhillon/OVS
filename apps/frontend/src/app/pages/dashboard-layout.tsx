@@ -50,7 +50,7 @@ interface NavItemConfig {
   label: string;
   icon: React.ElementType;
   sessionTypes: SessionType[];
-  // EDIT (Manage Events + Organizations gate, ORG sessions): true for an
+  // True for an
   // item that an ORG session should only see if the member holds an
   // organizer role somewhere in the org — resolved once via GET /org/mine
   // below (organizerChecked/orgs) and applied generically in
@@ -62,7 +62,7 @@ interface NavItemConfig {
 const NAV_ITEMS: NavItemConfig[] = [
   { path: '/dashboard/events',          label: 'Events',           icon: Vote,          sessionTypes: ['UNIFIED', 'ORG'] },
   { path: '/dashboard/manage-events',   label: 'Manage Events',    icon: Calendar,      sessionTypes: ['UNIFIED', 'ORG'], organizerOnly: true },
-  // EDIT: for an ORG session this tab is now organizer-gated rather than
+  // For an ORG session this tab is now organizer-gated rather than
   // dropped outright — an organizer still needs it to manage members/
   // scopes within their role scope (manage-organizations-view.tsx already
   // scopes everything it shows/does to the caller's own organizer scopes
@@ -71,8 +71,8 @@ const NAV_ITEMS: NavItemConfig[] = [
   // org identity lives in Account and events in the Events/Manage Events
   // tabs — so the tab stays hidden in that case, same as before.
   { path: '/dashboard/organizations',   label: 'Organizations',    icon: Building2,     sessionTypes: ['UNIFIED', 'ORG'], organizerOnly: true },
-  // EDIT (Phase 4 — cutover, subphase 4.7): tracking counterpart to the
-  // Organizations page's "Request Org" flow (4.6). my-org-requests-view.tsx
+  // Tracking counterpart to the
+  // Organizations page's "Request Org" flow. my-org-requests-view.tsx
   // shows a notice for any non-UNIFIED session, so this is UNIFIED-only —
   // mirrors Identity Wallet's own UNIFIED-only gate one row down.
   { path: '/dashboard/my-requests',     label: 'My Requests',      icon: ClipboardList, sessionTypes: ['UNIFIED'] },
@@ -118,7 +118,7 @@ function NavItem({
       <button
           onClick={onClick}
           title={collapsed ? item.label : undefined}
-          // FIX 3a: aria-current for screen readers to identify the active route
+          // 3a: aria-current for screen readers to identify the active route
           aria-current={isActive ? 'page' : undefined}
           className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors
         ${isActive
@@ -134,7 +134,7 @@ function NavItem({
 }
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
-// FIX 1: Extracted from a plain function call inside DashboardLayout into a
+// 1: Extracted from a plain function call inside DashboardLayout into a
 //         proper React component so reconciliation and hooks work correctly.
 
 interface SidebarProps {
@@ -180,10 +180,9 @@ function Sidebar({ collapsed, showToggle, onToggle, onNavigate, isActive, navIte
           ))}
         </div>
 
-        {/* FIX 7: Both states use the same ChevronRight icon — rotate-180 for
-                 expanded — so the toggle is visually consistent either way.
-          FIX 6 (mobile): showToggle=false on mobile prevents a useless
-                 w-16 collapsed drawer. */}
+        {/* Both states use the same ChevronRight icon (rotated 180° when
+             expanded) so the toggle looks consistent either way. The toggle
+             is hidden on mobile, where a collapsed w-16 drawer is useless. */}
         {showToggle && (
             <div className="p-2">
               <Button
@@ -211,7 +210,7 @@ export function DashboardLayout() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  // EDIT (Manage Events gate, ORG sessions): a plain ORG member (no
+  // A plain ORG member (no
   // organizer role in any scope of this org) has no use for Manage Events
   // — every action on that page requires being an organizer somewhere.
   // GET /org/mine already resolves exactly this for an ORG session
@@ -248,7 +247,7 @@ export function DashboardLayout() {
     };
   }, [session?.type, session?.orgid, session?.uid]);
 
-  // FIX 6: Memoize derived values that depend on stable inputs so they are
+  // 6: Memoize derived values that depend on stable inputs so they are
   //         not recomputed on every render caused by unrelated state changes.
   // NOTE: deliberately looked up against the *unfiltered* NAV_ITEMS — a
   // direct URL visit to a page that's been filtered out of the sidebar for
@@ -259,12 +258,12 @@ export function DashboardLayout() {
       [location.pathname],
   );
 
-  // EDIT (tenant portal intuitiveness, item 1): the sidebar's actual item
+  // The sidebar's actual item
   // list, filtered by session type. While the session hasn't resolved yet
   // (`!session?.type`, during initial load) show everything rather than
   // nothing, so there's no flash of an empty sidebar before it loads.
   //
-  // EDIT (Manage Events + Organizations gate, ORG sessions): a second,
+  // A second,
   // `organizerOnly`-driven filter layered on top of the session-type
   // filter — applies the same organizer check generically to every item
   // marked organizerOnly (Manage Events, Organizations) instead of
@@ -300,14 +299,14 @@ export function DashboardLayout() {
       [user?.first_name, user?.last_name],
   );
 
-  // FIX 5: Guard SESSION_BADGE lookup so an unexpected session.type from the
+  // 5: Guard SESSION_BADGE lookup so an unexpected session.type from the
   //         API never crashes with an undefined access.
   const sessionInfo =
       session?.type && session.type in SESSION_BADGE
           ? SESSION_BADGE[session.type as SessionType]
           : null;
 
-  // FIX 2: navigate('/') is now inside the try block so a failed logout keeps
+  // 2: navigate('/') is now inside the try block so a failed logout keeps
   //         the user on the current page instead of always redirecting.
   const handleLogout = async () => {
     try {
@@ -320,7 +319,7 @@ export function DashboardLayout() {
 
   const isActive = (path: string) => location.pathname === path;
 
-  // FIX 4: Reset sidebarCollapsed to false whenever the mobile drawer opens so
+  // 4: Reset sidebarCollapsed to false whenever the mobile drawer opens so
   //         the user never gets a barely-usable 64 px mobile panel.
   const handleMobileToggle = () => {
     setMobileOpen((open) => {
@@ -346,7 +345,7 @@ export function DashboardLayout() {
                 variant="ghost"
                 size="icon"
                 className="md:hidden flex-shrink-0"
-                // FIX 4: uses extracted handler that resets collapsed state
+                // 4: uses extracted handler that resets collapsed state
                 onClick={handleMobileToggle}
             >
               {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
@@ -360,7 +359,7 @@ export function DashboardLayout() {
             </div>
 
             {/* Session badge */}
-            {/* EDIT (tenant portal intuitiveness, item 3): dropped the inline
+            {/* Dropped the inline
                 UID — it was always visible in the sticky header on every page
                 for any ORG session, pure decoration for a plain voter. Moved
                 into the user-menu dropdown below (parallel to the existing
@@ -377,7 +376,7 @@ export function DashboardLayout() {
 
             {/* User menu */}
             <DropdownMenu>
-              {/* FIX 3b: aria-label so screen readers announce the button purpose */}
+              {/* 3b: aria-label so screen readers announce the button purpose */}
               <DropdownMenuTrigger asChild>
                 <Button
                     variant="ghost"
@@ -387,7 +386,7 @@ export function DashboardLayout() {
                 >
                   <Avatar className="h-8 w-8">
                     <AvatarFallback className="bg-primary text-primary-foreground text-xs font-semibold">
-                      {/* FIX 6: use memoized value instead of inline call */}
+                      {/* 6: use memoized value instead of inline call */}
                       {userInitials}
                     </AvatarFallback>
                   </Avatar>
@@ -397,7 +396,7 @@ export function DashboardLayout() {
                 <DropdownMenuLabel className="font-normal">
                   <div className="space-y-1">
                     <p className="text-sm font-semibold leading-none">
-                      {/* FIX 6: use memoized value instead of inline call */}
+                      {/* 6: use memoized value instead of inline call */}
                       {userDisplayName}
                     </p>
                     {user?.email && (
@@ -406,13 +405,13 @@ export function DashboardLayout() {
                     {user?.mobile && !user?.email && (
                         <p className="text-xs text-muted-foreground">{user.mobile}</p>
                     )}
-                    {/* EDIT: PID row removed — nothing in the app ever asks
+                    {/* PID row removed — nothing in the app ever asks
                         the user to know or quote back their PID (org
                         linking uses orgid+UID, org requests use
                         reference_code, and there's no support/contact flow
                         that references it), so it was pure internal-ID
                         clutter with no user-facing purpose. */}
-                    {/* EDIT (tenant portal intuitiveness, item 3): parallel
+                    {/* Parallel
                         row for ORG sessions — the UID this now replaces used
                         to live in the always-visible top-bar badge. */}
                     {session?.type === 'ORG' && session.uid && (
@@ -450,7 +449,7 @@ export function DashboardLayout() {
           {/* ── Mobile overlay sidebar ── */}
           {mobileOpen && (
               <div className="fixed inset-0 z-30 md:hidden">
-                {/* FIX 3c: changed from div to button so it is keyboard-accessible
+                {/* 3c: changed from div to button so it is keyboard-accessible
                         and screen readers know it closes the menu */}
                 <button
                     className="absolute inset-0 bg-black/40 cursor-default"
@@ -458,8 +457,7 @@ export function DashboardLayout() {
                     aria-label="Close menu"
                 />
                 <aside className={`absolute left-0 top-14 bottom-0 bg-background border-r shadow-lg flex flex-col transition-all duration-200 ${sidebarCollapsed ? 'w-16' : 'w-64'}`}>
-                  {/* FIX 1: real Sidebar component instead of sidebarContent()
-                  FIX 6 (mobile side): showToggle=false — no collapse on mobile */}
+                  {/* Same Sidebar component as desktop; no collapse toggle on mobile */}
                   <Sidebar
                       collapsed={sidebarCollapsed}
                       showToggle={false}
@@ -478,7 +476,7 @@ export function DashboardLayout() {
             sticky top-14 h-[calc(100vh-3.5rem)] overflow-y-auto transition-all duration-200
             ${sidebarCollapsed ? 'w-16' : 'w-56'}`}
           >
-            {/* FIX 1: real Sidebar component instead of sidebarContent() */}
+            {/* 1: real Sidebar component instead of sidebarContent() */}
             <Sidebar
                 collapsed={sidebarCollapsed}
                 showToggle={true}

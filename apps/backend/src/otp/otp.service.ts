@@ -23,11 +23,11 @@ export class OtpService {
    * Identifier must be a 10-digit mobile number or a valid email address.
    * A 30-second cooldown is enforced per (identifier, purpose).
    *
-   * EDIT (Phase 4 — cutover, subphase 4.3): added `purpose`, defaulting to
-   * 'LOGIN' — every call site that existed before this subphase (auth
-   * login/registration flows, IdentityService.addIdentity()) keeps calling
-   * this with one argument and gets byte-for-byte the same behavior as
-   * before. The only new caller passing 'ORG_DOMAIN_OWNERSHIP' explicitly is
+   * `purpose` defaults to
+   * 'LOGIN' — every call site for the auth login/registration flows and
+   * IdentityService.addIdentity() calls this with one argument and gets
+   * byte-for-byte the same behavior as before this parameter existed. The
+   * only caller passing 'ORG_DOMAIN_OWNERSHIP' explicitly is
    * OrgRequestsService's org_email verification. See OtpPurpose's own doc
    * comment (otp-delivery.service.ts) and the otp_verification table
    * comment in the master schema for why this exists.
@@ -67,13 +67,13 @@ export class OtpService {
     }
 
     // ── Generate OTP — plain value sent to user, hash stored in DB ──────────
-    // FIX #2: crypto.randomInt is cryptographically secure, unlike Math.random().
+    // Crypto.randomInt is cryptographically secure, unlike Math.random().
     const otp = crypto.randomInt(100_000, 1_000_000).toString();
     const hashedOtp = crypto.createHash('sha256').update(otp).digest('hex');
 
     // ── Atomically replace any stale unverified record for this
     // (identifier, purpose) pair ─────────────────────────────────────────────
-    // FIX #4: Wrapped in a transaction to prevent a race condition where two
+    // Wrapped in a transaction to prevent a race condition where two
     // concurrent requests for the same (identifier, purpose) could both pass
     // the cooldown check and then both insert, violating the partial unique
     // index.
@@ -115,9 +115,8 @@ export class OtpService {
    *
    * Returns true so callers can chain: `await this.otpService.verifyOtp(...)`.
    *
-   * EDIT (Phase 4 — cutover, subphase 4.3): added `purpose`, defaulting to
-   * 'LOGIN' for the same backward-compatibility reason as sendOtp() above —
-   * every pre-existing caller is unaffected. A verify() call scoped to
+   * `purpose` defaults to 'LOGIN', as in sendOtp() above, so existing
+   * callers are unaffected. A verify() call scoped to
    * 'ORG_DOMAIN_OWNERSHIP' will not match (and will correctly 404 against)
    * an OTP that was actually sent for 'LOGIN' to the same identifier, or
    * vice versa.
@@ -154,7 +153,7 @@ export class OtpService {
 
     const hashed = crypto.createHash('sha256').update(otp).digest('hex');
 
-    // FIX #1: Use constant-time comparison to prevent timing attacks.
+    // Use constant-time comparison to prevent timing attacks.
     // Direct string equality (`!==`) leaks timing information that an attacker
     // could use to progressively narrow down the correct hash.
     const isMatch = crypto.timingSafeEqual(

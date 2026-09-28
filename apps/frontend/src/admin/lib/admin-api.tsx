@@ -1,11 +1,10 @@
 import { toast } from "sonner";
 
-// EDIT (Phase 1 — auth model consolidation, subphase 1.10): standalone
-// admin-app API client. Deliberately its own small file rather than
-// extending src/lib/api.tsx — that file's request() helper, CSRF handling,
-// and 401 redirect all key off the ovp_token/ovp_csrf cookie pair (see its
-// own comments); the admin app uses the separate ovp_admin_token/
-// ovp_admin_csrf pair (subphase 1.3) and has a different set of routes
+// Standalone admin-app API client. Deliberately its own small file rather
+// than extending src/lib/api.tsx — that file's request() helper, CSRF
+// handling, and 401 redirect all key off the ovp_token/ovp_csrf cookie pair
+// (see its own comments); the admin app uses the separate ovp_admin_token/
+// ovp_admin_csrf pair and has a different set of routes
 // (send-admin-login-otp / admin-login / admin-csrf-token / admin-logout /
 // admin-profile — see auth.controller.ts's "Admin app routes" section).
 // Sharing one request() across both cookie pairs would mean every call
@@ -127,8 +126,8 @@ export interface AdminProfile {
   session_id: string;
 }
 
-// ── Org request types (Phase 3 — admin portal core, subphase 3.5) ──────────
-// Mirror org-requests.service.ts's (Phase 2/3.1) plain-object return shapes
+// ── Org request types ────────────────────────────────────────────────────────
+// Mirror org-requests.service.ts's plain-object return shapes
 // exactly — no Prisma types are shared across the app/backend boundary, so
 // these are hand-written to match. `request_id`/`pid`/`admin_log_id` all
 // come back as strings, not numbers: BigIntInterceptor (backend, applies
@@ -136,9 +135,8 @@ export interface AdminProfile {
 // org_requests.request_id/uaccount.pid/admin_audit_log.admin_log_id are all
 // BIGSERIAL/BIGINT in the schema.
 
-// EDIT (Phase 6 — post-approval org setup, subphase 6.6): added
-// 'APPROVED_PENDING_SETUP' — reachable from approve() (6.2) now that it no
-// longer creates the organization itself. Mirrors OrgRequestStatus in
+// 'APPROVED_PENDING_SETUP' is reachable once approve() no longer creates
+// the organization itself. Mirrors OrgRequestStatus in
 // org-requests.service.ts exactly.
 export type OrgRequestStatus =
   | "PENDING"
@@ -162,7 +160,7 @@ export interface OrgRequestListItem {
 
 /**
  * One row of GET /admin/org-requests/pending-setup/stuck —
- * OrgRequestsService.listStuckPendingSetup()'s select shape (6.6). Narrower
+ * OrgRequestsService.listStuckPendingSetup()'s select shape. Narrower
  * than OrgRequestListItem: every row here is APPROVED_PENDING_SETUP by
  * construction, so `status` isn't repeated, and `reviewed_at`/
  * `reviewed_by_admin_id` (not part of the plain list view) are what this
@@ -218,8 +216,8 @@ export interface OrgRequestDetail {
   reviewed_at: string | null;
   review_note: string | null;
   approved_orgid: string | null;
-  // EDIT (Phase 6 — post-approval org setup, subphase 6.6): the admin-set
-  // member cap (6.2) — shown on the detail page once a request has moved
+  // The admin-set
+  // member cap — shown on the detail page once a request has moved
   // past PENDING/NEEDS_INFO, and what the approve dialog pre-fills from
   // expected_member_count above.
   admin_set_member_limit: number | null;
@@ -244,9 +242,8 @@ export interface ReviewOrgRequestBody {
   internal_note?: string;
 }
 
-// ── Member limit increase requests (Phase 7 — Member Limit Increase
-// Requests, subphase 7.4) ───────────────────────────────────────────────────
-// Types mirror OrgLimitRequestsService's (7.2/7.3) plain-object return shapes,
+// ── Member limit increase requests  ───────────────────────────────────────────────────
+// Types mirror OrgLimitRequestsService's plain-object return shapes,
 // same hand-written-not-shared-Prisma-types convention as the org-request
 // types above. Deliberately their own interfaces rather than reusing
 // OrgRequestListItem/OrgRequestDetail — org_member_limit_requests has no
@@ -308,7 +305,7 @@ export interface MemberLimitRequestDetail {
 
 /**
  * Body for POST .../reject and .../needs-info. Unlike ReviewOrgRequestBody,
- * there is no separate `internal_note` — see ReviewLimitRequestDto's (7.3)
+ * there is no separate `internal_note` — see ReviewLimitRequestDto's
  * own header comment for why: this single `reason` lands as both the
  * organizer-facing review_note and the internal admin_audit_log.reason.
  */
@@ -316,13 +313,12 @@ export interface ReviewLimitRequestBody {
   reason: string;
 }
 
-// ── Unified admin review queue (Phase 7 — subphase 7.1b/7.4) ───────────────
+// ── Unified admin review queue  ───────────────
 // GET /admin/review-queue's row shape — the columns org_requests and
 // org_member_limit_requests actually share (AdminReviewQueueService's own
 // comment). `request_type` is what a queue-row click-through uses to decide
 // between getOrgRequestDetail()/getMemberLimitRequestDetail() — the two
-// review screens stay separate components, only this list is merged (7.1b's
-// own plan text).
+// review screens stay separate components, only this list is merged.
 
 export type AdminReviewQueueRequestType =
   | "ORG_CREATION"
@@ -345,8 +341,8 @@ export interface AdminReviewQueueResponse {
 }
 
 
-// ── Org directory / lifecycle types (Phase 3 — admin portal core, 3.6) ─────
-// Mirror OrgDirectoryService's (3.3) and OrgLifecycleService's (3.2) plain-
+// ── Org directory / lifecycle types  ─────
+// Mirror OrgDirectoryService's and OrgLifecycleService's plain-
 // object return shapes exactly, same hand-written-not-shared-Prisma-types
 // convention the org-request types above already follow. `organization.
 // orgid` is a VARCHAR PK (not BIGSERIAL), so unlike request_id/pid above it
@@ -409,7 +405,7 @@ export interface OrgLifecycleResult {
   message: string;
 }
 
-// ── Audit viewer types (Phase 5 — platform maturity, subphase 5.1) ─────────
+// ── Audit viewer types  ─────────
 // Mirror AuditService's plain-object return shapes, same hand-written-not-
 // shared-Prisma-types convention as everything above. `admin_log_id` and
 // `log_id` differ in kind: admin_audit_log.admin_log_id is BIGSERIAL and so
@@ -426,12 +422,11 @@ export type AdminAction =
   | "ORG_ARCHIVED"
   | "ADMIN_INVITED"
   | "ADMIN_DEACTIVATED"
-  // EDIT: chk_admin_audit_action (dbschema.sql, Phase 7.1/7.2) already
+  // chk_admin_audit_action (dbschema.sql) already
   // accepts these three — OrgLimitRequestsService's approve()/reject()/
-  // requestInfo() (7.2) have been writing them all along — but this type
-  // and the ACTION_LABEL/ACTION_CLASS maps below in
-  // admin-audit-log-page.tsx were never updated for Phase 7, so the audit
-  // feed fell back to raw enum text in a plain grey badge for these three.
+  // requestInfo() write these — this type and the ACTION_LABEL/ACTION_CLASS
+  // maps in admin-audit-log-page.tsx must list them too, otherwise the audit
+  // feed falls back to raw enum text in a plain grey badge.
   | "MEMBER_LIMIT_INCREASE_APPROVED"
   | "MEMBER_LIMIT_INCREASE_REJECTED"
   | "MEMBER_LIMIT_INCREASE_INFO_REQUESTED";
@@ -440,7 +435,7 @@ export type AdminTargetType =
   | "ORG_REQUEST"
   | "ORGANIZATION"
   | "SITE_ADMIN"
-  // EDIT: chk_admin_audit_target_type (dbschema.sql, Phase 7.1) already
+  // chk_admin_audit_target_type (dbschema.sql) already
   // accepts this — see the AdminAction edit above for the same "schema
   // supported it, the frontend type just never caught up" gap.
   | "MEMBER_LIMIT_REQUEST";
@@ -483,7 +478,7 @@ export interface OrgChangesResponse {
   available_tables: string[];
 }
 
-// ── Analytics types (Phase 5 — platform maturity, subphase 5.2) ────────────
+// ── Analytics types  ────────────
 // Mirror AnalyticsService's return shapes. Everything here is a count —
 // there is no row-shaped type in this block, which is the point (see that
 // service's header on what it may and may not aggregate).
@@ -535,7 +530,7 @@ export interface AnalyticsSeries {
   total: number;
 }
 
-// ── Admin account management types (Phase 5 — platform maturity, 5.3) ──────
+// ── Admin account management types  ──────
 // Mirror AdminAccountsService's plain-object return shapes, same hand-
 // written-not-shared-Prisma-types convention as everything above.
 // site_admins.admin_id is a VARCHAR PK (not BIGSERIAL), so — like
@@ -637,8 +632,8 @@ export const adminApi = {
   getAdminProfile: (opts?: { silent401?: boolean }) =>
     request<AdminProfile>("/auth/admin-profile", {}, opts),
 
-  // ── Org requests (Phase 3 — admin portal core, subphase 3.5) ─────────────
-  // Thin wrappers over OrgRequestsAdminController's five routes (3.1). Every
+  // ── Org requests  ─────────────
+  // Thin wrappers over OrgRequestsAdminController's five routes. Every
   // call here relies on the ovp_admin_token/ovp_admin_csrf cookie pair
   // already set by adminLogin() above, same as every other method in this
   // file — nothing new to authenticate.
@@ -669,7 +664,7 @@ export const adminApi = {
     ),
 
   /**
-   * GET /admin/org-requests/pending-setup/stuck (6.6). `minHours` mirrors
+   * GET /admin/org-requests/pending-setup/stuck. `minHours` mirrors
    * the backend's own default (24) when omitted — passed through as a
    * plain optional so this file doesn't have to re-decide that default.
    */
@@ -682,12 +677,10 @@ export const adminApi = {
     );
   },
 
-  // EDIT (Phase 6 — post-approval org setup, subphase 6.2/6.6): approve()
-  // now takes a required `member_limit` and no longer creates the
+  // approve() takes a required `member_limit` and does not create the
   // organization itself — it only moves the request to
   // APPROVED_PENDING_SETUP. See ApproveOrgRequestDto / OrgRequestsService.
-  // approve()'s own comments for why. This replaces the pre-6.2 no-body
-  // call and its orgid-bearing response shape.
+  // approve()'s own comments for why.
   approveOrgRequest: (requestId: string, body: { member_limit: number }) =>
     request<{
       request_id: string;
@@ -702,7 +695,7 @@ export const adminApi = {
     }),
 
   /**
-   * POST .../revoke-approval (6.6) — only valid on an
+   * POST .../revoke-approval — only valid on an
    * APPROVED_PENDING_SETUP request; see OrgRequestsService.revokeApproval().
    * Same ReviewOrgRequestBody shape as reject()/requestInfo() below.
    */
@@ -742,9 +735,9 @@ export const adminApi = {
       body: JSON.stringify(body),
     }),
 
-  // ── Member limit increase requests (Phase 7 — subphase 7.4) ──────────────
+  // ── Member limit increase requests  ──────────────
   // Thin wrappers over MemberLimitRequestsAdminController's five routes
-  // (7.3), same shape as the org-request wrappers just above.
+  //, same shape as the org-request wrappers just above.
 
   /**
    * GET /admin/member-limit-requests. `status` mirrors the controller's own
@@ -802,7 +795,7 @@ export const adminApi = {
   /**
    * POST .../needs-info — note the route segment differs from
    * requestInfoOnOrgRequest()'s 'request-info', matching
-   * MemberLimitRequestsAdminController's own literal route naming (7.3's own
+   * MemberLimitRequestsAdminController's own literal route naming (the own
    * comment flags this inconsistency rather than silently normalising it).
    */
   requestInfoOnMemberLimitRequest: (
@@ -819,11 +812,11 @@ export const adminApi = {
       { method: "POST", body: JSON.stringify(body) },
     ),
 
-  // ── Unified admin review queue (Phase 7 — subphase 7.1b/7.4) ─────────────
+  // ── Unified admin review queue  ─────────────
   /**
    * GET /admin/review-queue. Both `status` and `requestType` mirror the
    * controller's own comma-separated params — the admin-request-queue page
-   * (7.4) reads from this instead of listOrgRequests() alone, so both
+   * reads from this instead of listOrgRequests() alone, so both
    * request kinds show up in one list with a `request_type` badge.
    */
   listReviewQueue: (params?: {
@@ -844,8 +837,8 @@ export const adminApi = {
     );
   },
 
-  // ── Org directory / lifecycle (Phase 3 — admin portal core, subphase 3.6) ─
-  // Thin wrappers over OrgAdminController's five routes (3.3). Same
+  // ── Org directory / lifecycle  ─
+  // Thin wrappers over OrgAdminController's five routes. Same
   // already-authenticated-by-adminLogin() cookie pair as everything above.
 
   /**
@@ -895,7 +888,7 @@ export const adminApi = {
       { method: "POST", body: JSON.stringify(body) },
     ),
 
-  // ── Audit viewer (Phase 5 — platform maturity, subphase 5.1) ─────────────
+  // ── Audit viewer  ─────────────
   // Thin wrappers over AuditAdminController's three routes. Read-only —
   // nothing in that module writes, and admin_audit_log is append-only at
   // the DB level regardless.
@@ -956,7 +949,7 @@ export const adminApi = {
     );
   },
 
-  // ── Analytics (Phase 5 — platform maturity, subphase 5.2) ────────────────
+  // ── Analytics  ────────────────
   // Two GETs over AnalyticsAdminController. Read-only aggregates; no method
   // here takes an orgid or an event id, by design.
 
@@ -988,7 +981,7 @@ export const adminApi = {
     );
   },
 
-  // ── Admin account management (Phase 5 — platform maturity, subphase 5.3) ─
+  // ── Admin account management  ─
   // Thin wrappers over AdminAccountsController's four routes. Unlike every
   // other admin surface in this file, every route here is
   // @RequireSuperAdmin()-gated server-side, not just @UseGuards(SiteAdminGuard)
