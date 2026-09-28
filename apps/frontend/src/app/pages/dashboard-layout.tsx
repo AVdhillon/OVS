@@ -479,7 +479,7 @@ export function DashboardLayout() {
           {/* ── Desktop sidebar ── */}
           <aside
               className={`hidden md:flex flex-col flex-shrink-0 border-r bg-background
-            sticky top-14 h-[calc(100vh-3.5rem)] overflow-y-auto transition-all duration-200
+            sticky top-14 h-[calc(100dvh-3.5rem)] overflow-y-auto transition-all duration-200
             ${sidebarCollapsed ? 'w-16' : 'w-56'}`}
           >
             {/* 1: real Sidebar component instead of sidebarContent() */}

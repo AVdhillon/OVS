@@ -4,7 +4,11 @@
 
 /* ── Responsive baseline ───────────────────────────────────────────── */
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
-html, body { max-width: 100%; overflow-x: hidden; }
+/* `overflow-x: hidden` on html AND body turns body into a scroll container, which
+   silently breaks every `position: sticky` (top bar, sidebar) once the page
+   scrolls. `clip` stops horizontal overflow without creating a scroll container. */
+html, body { max-width: 100%; overflow-x: clip; }
+@supports not (overflow-x: clip) { html { overflow-x: hidden; } }
 img, svg, video, canvas { max-width: 100%; height: auto; }
 /* iOS Safari zooms into inputs with font-size < 16px – stop that on phones */
 @media (max-width: 767px) {
