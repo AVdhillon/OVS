@@ -183,6 +183,25 @@ export class OrgService {
       orgid: string;
       uid: string;
     }[];
+
+    // Root-scope organizers are the only ones who may see/request member
+    // limits (matches assertRootOrganizerAccess()). Surfaced to the
+    // frontend so it can hide the limit UI from everyone else.
+    const rootRoles = await this.prisma.member_roles.findMany({
+      where: {
+        is_organizer: true,
+        org_scope: { parent_scope_id: null },
+        OR: validLinks.map((l) => ({ orgid: l.orgid, uid: l.uid })),
+      },
+      select: { orgid: true, uid: true },
+    });
+    const rootOrgIds = new Set(
+      validLinks
+        .filter((l) =>
+          rootRoles.some((r) => r.orgid === l.orgid && r.uid === l.uid),
+        )
+        .map((l) => l.orgid),
+    );
     const orgIdToUid = Object.fromEntries(
       validLinks.map((l) => [l.orgid, l.uid]),
     );
@@ -225,6 +244,7 @@ export class OrgService {
       ...o,
       uid: orgIdToUid[o.orgid],
       member_count: memberCountByOrgid[o.orgid] ?? 0,
+      is_root_organizer: rootOrgIds.has(o.orgid),
     }));
   }
 
@@ -267,7 +287,17 @@ export class OrgService {
       where: { orgid, is_deleted: false },
     });
 
-    return [{ ...org, uid, member_count }];
+    const rootRole = await this.prisma.member_roles.findFirst({
+      where: {
+        orgid,
+        uid,
+        is_organizer: true,
+        org_scope: { parent_scope_id: null },
+      },
+      select: { uid: true },
+    });
+
+    return [{ ...org, uid, member_count, is_root_organizer: !!rootRole }];
   }
 
   // ─── Get self info for an ORG-session caller (Account tab) ──────────────────

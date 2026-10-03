@@ -386,7 +386,7 @@ function Sidebar({
 
       <div
         ref={listRef}
-        className={`flex-1 space-y-0.5 px-2 overflow-y-auto ${showBrand ? "pt-2" : "pt-3"}`}
+        className={`flex-1 space-y-0.5 px-2 overflow-y-auto overscroll-contain ${showBrand ? "pt-2" : "pt-3"}`}
       >
         {navItems.map((item) => (
           <NavItem
@@ -399,30 +399,33 @@ function Sidebar({
         ))}
       </div>
 
-      <div
-        className={`border-t transition-colors p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] space-y-1 ${edges.bottom ? "border-border" : "border-transparent"}`}
-      >
-        {renderUser?.(collapsed)}
-        {/* Phone drawer has no brand row, so it keeps a labelled toggle here. */}
-        {!showBrand && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-10 w-full gap-2 text-muted-foreground hover:text-foreground"
-            onClick={onToggle}
-            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          >
-            {collapsed ? (
-              <PanelLeftOpen className="h-4 w-4" />
-            ) : (
-              <PanelLeftClose className="h-4 w-4" />
-            )}
-            {!collapsed && (
-              <span className="text-xs font-medium">Collapse</span>
-            )}
-          </Button>
-        )}
-      </div>
+      {(renderUser || !showBrand) && (
+        <div
+          className={`border-t transition-colors p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] space-y-1 ${edges.bottom ? "border-border" : "border-transparent"}`}
+        >
+          {renderUser?.(collapsed)}
+          {/* Phone drawer has no brand row, so it keeps a labelled toggle here. */}
+          {!showBrand && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-10 w-full gap-2 text-muted-foreground hover:text-foreground"
+              onClick={onToggle}
+              title={collapsed ? "Expand menu" : "Collapse menu"}
+              aria-label={collapsed ? "Expand menu" : "Collapse menu"}
+            >
+              {collapsed ? (
+                <PanelLeftOpen className="h-4 w-4" />
+              ) : (
+                <PanelLeftClose className="h-4 w-4" />
+              )}
+              {!collapsed && (
+                <span className="text-xs font-medium">Collapse</span>
+              )}
+            </Button>
+          )}
+        </div>
+      )}
     </nav>
   );
 }
@@ -452,6 +455,25 @@ export function DashboardLayout() {
       /* storage unavailable */
     }
   }, [sidebarCollapsed]);
+  // The phone drawer remembers its own compact/expanded choice, separate from
+  // the desktop sidebar's, so collapsing one never changes the other.
+  const [mobileCollapsed, setMobileCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("sidebarCollapsedMobile") === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "sidebarCollapsedMobile",
+        mobileCollapsed ? "1" : "0",
+      );
+    } catch {
+      /* storage unavailable */
+    }
+  }, [mobileCollapsed]);
   const [mobileOpen, setMobileOpen] = useState(false);
 
   // Ctrl/Cmd+B toggles the desktop sidebar (ignored while typing in a field).
@@ -475,7 +497,10 @@ export function DashboardLayout() {
   }, []);
 
   // Drawer hygiene: close on route change, on Escape, and when the viewport
-  // grows past the md breakpoint; lock page scroll while it is open.
+  // grows past the md breakpoint. Page scroll is deliberately NOT locked via
+  // body overflow: with html/body on overflow-x: clip that turns <body> into a
+  // scroll container and detaches the sticky header (see index.css). The
+  // backdrop is touch-none and the drawer overscroll-contain instead.
   useEffect(() => {
     setMobileOpen(false);
   }, [location.pathname]);
@@ -489,12 +514,9 @@ export function DashboardLayout() {
     const onChange = () => {
       if (mql.matches) setMobileOpen(false);
     };
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
     window.addEventListener("keydown", onKey);
     mql.addEventListener("change", onChange);
     return () => {
-      document.body.style.overflow = prevOverflow;
       window.removeEventListener("keydown", onKey);
       mql.removeEventListener("change", onChange);
     };
@@ -623,7 +645,7 @@ export function DashboardLayout() {
   return (
     <div className="min-h-dvh bg-background md:flex">
       {/* ── Mobile header (hidden on md+) ── */}
-      <header className="md:hidden sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 pt-[env(safe-area-inset-top)]">
+      <header className="md:hidden sticky top-0 z-40 border-b bg-background pt-[env(safe-area-inset-top)]">
         <div className="flex items-center gap-2 px-3 h-14">
           <Button
             variant="ghost"
@@ -666,16 +688,16 @@ export function DashboardLayout() {
       {mobileOpen && (
         <div className="fixed inset-0 z-30 md:hidden">
           <button
-            className="absolute inset-0 bg-black/40 cursor-default"
+            className="absolute inset-0 bg-black/40 cursor-default touch-none"
             onClick={() => setMobileOpen(false)}
             aria-label="Close menu"
           />
           <aside
-            className={`absolute left-0 top-[calc(3.5rem+env(safe-area-inset-top))] bottom-0 max-w-[85vw] bg-background border-r shadow-lg flex flex-col transition-all duration-200 ${sidebarCollapsed ? "w-16" : "w-64"}`}
+            className={`absolute left-0 top-[calc(3.5rem+env(safe-area-inset-top))] bottom-0 max-w-[85vw] bg-background border-r shadow-lg flex flex-col overscroll-contain transition-all duration-200 ${mobileCollapsed ? "w-16" : "w-72"}`}
           >
             <Sidebar
-              collapsed={sidebarCollapsed}
-              onToggle={() => setSidebarCollapsed((c) => !c)}
+              collapsed={mobileCollapsed}
+              onToggle={() => setMobileCollapsed((c) => !c)}
               onNavigate={(path) => navigate(path)}
               isActive={isActive}
               navItems={visibleNavItems}

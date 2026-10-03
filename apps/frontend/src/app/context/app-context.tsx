@@ -66,6 +66,9 @@ export interface OrgSummary {
   // OrgService.getMyOrgs().
   member_limit: number;
   member_count: number;
+  // True only when the caller organizes the root scope; gates the
+  // member-limit UI.
+  is_root_organizer?: boolean;
 }
 
 export interface ScopeNode {

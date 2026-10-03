@@ -3974,7 +3974,7 @@ function ManageOrgPanel({
       : 0;
 
   const tabTriggerCls =
-    "flex-none h-auto gap-2 max-sm:[&>svg]:hidden rounded-none border-0 border-b-2 border-transparent px-3 py-2.5 -mb-px text-muted-foreground hover:text-foreground " +
+    "flex-none h-auto gap-2 max-sm:[&>svg]:hidden rounded-none border-0 border-b-2 border-transparent px-3 py-2.5 text-muted-foreground hover:text-foreground " +
     "data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:border-primary data-[state=active]:shadow-none " +
     "dark:data-[state=active]:bg-transparent dark:data-[state=active]:border-primary dark:text-muted-foreground";
 
@@ -4034,7 +4034,7 @@ function ManageOrgPanel({
               </div>
             </div>
           </div>
-          {org.member_limit > 0 && (
+          {org.is_root_organizer && org.member_limit > 0 && (
             <button
               type="button"
               onClick={() => setActiveTab("limits")}
@@ -4069,9 +4069,11 @@ function ManageOrgPanel({
           {/* Current limit + usage, "Request
               increase", and status of any open request — see
               MemberLimitTab's own header comment. */}
-          <TabsTrigger value="limits" className={tabTriggerCls}>
-            <Gauge /> Member Limit
-          </TabsTrigger>
+          {org.is_root_organizer && (
+            <TabsTrigger value="limits" className={tabTriggerCls}>
+              <Gauge /> Member Limit
+            </TabsTrigger>
+          )}
         </TabsList>
 
         {/* ── MEMBERS TAB ── */}
@@ -4633,9 +4635,11 @@ function ManageOrgPanel({
         </TabsContent>
 
         {/* ── MEMBER LIMIT TAB  ── */}
-        <TabsContent value="limits" className="mt-5">
-          <MemberLimitTab org={org} />
-        </TabsContent>
+        {org.is_root_organizer && (
+          <TabsContent value="limits" className="mt-5">
+            <MemberLimitTab org={org} />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );
@@ -4679,7 +4683,7 @@ function OrgPickerCard({
         </Badge>
       </div>
 
-      {org.member_limit > 0 && (
+      {org.is_root_organizer && org.member_limit > 0 && (
         <div>
           <div className="flex items-baseline justify-between text-xs">
             <span className="text-muted-foreground">Members</span>
