@@ -761,6 +761,8 @@ function EditEventSheet({
 
 // ─── My Events List ───────────────────────────────────────────────────────────
 
+const MANAGED_EVENTS_PAGE_SIZE = 10;
+
 function MyEventsList({
   orgs,
   onEdit,
@@ -774,6 +776,8 @@ function MyEventsList({
 
   const [deleteTarget, setDeleteTarget] = useState<VotingEvent | null>(null);
   const [deleting, setDeleting] = useState(false);
+  // An organizer's managed events only accumulate, so show them a page at a time.
+  const [visibleCount, setVisibleCount] = useState(MANAGED_EVENTS_PAGE_SIZE);
 
   //const managed = [...events.active_pending, ...events.completed]
   const managed = Object.values(events ?? {})
@@ -810,7 +814,7 @@ function MyEventsList({
   return (
     <>
       <div className="space-y-3">
-        {managed.map((event) => {
+        {managed.slice(0, visibleCount).map((event) => {
           const editable = canEditEvent(event);
           return (
             <Card
@@ -873,6 +877,22 @@ function MyEventsList({
             </Card>
           );
         })}
+        {managed.length > visibleCount && (
+          <div className="flex flex-col items-center gap-1 pt-1">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                setVisibleCount((n) => n + MANAGED_EVENTS_PAGE_SIZE)
+              }
+            >
+              Show more
+            </Button>
+            <p className="text-xs text-muted-foreground tabular-nums">
+              Showing {visibleCount} of {managed.length}
+            </p>
+          </div>
+        )}
       </div>
 
       <AlertDialog

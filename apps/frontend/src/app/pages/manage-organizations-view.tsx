@@ -2368,6 +2368,11 @@ type AddMemberRow = {
   scopeId: string;
 };
 
+// Rows per page on the "Review & assign scopes" step. Every row there carries
+// its own inputs, role select and scope picker, so rendering a few hundred at
+// once (large CSV imports) makes the dialog sluggish.
+const REVIEW_PAGE_SIZES = [25, 50, 100];
+
 function makeRow(
   uid = "",
   contact = "",
@@ -2502,9 +2507,12 @@ function AddMembersDialog({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkScopeId, setBulkScopeId] = useState<string>("");
   const [loading, setLoading] = useState(false);
+  const [reviewPage, setReviewPage] = useState(0);
+  const [reviewPageSize, setReviewPageSize] = useState(REVIEW_PAGE_SIZES[0]);
 
   useEffect(() => {
     if (open) {
+      setReviewPage(0);
       setStep("input");
       setInputTab("table");
       setCsvText("");
@@ -2521,6 +2529,11 @@ function AddMembersDialog({
   useEffect(() => {
     setSelectedIds(new Set());
   }, [reviewSearch, reviewRoleFilter]);
+
+  // Back to the first page whenever the visible set changes shape.
+  useEffect(() => {
+    setReviewPage(0);
+  }, [reviewSearch, reviewRoleFilter, reviewPageSize, step]);
 
   const updateRow = (
     id: string,
@@ -2591,9 +2604,22 @@ function AddMembersDialog({
     });
   }, [rows, reviewSearch, reviewRoleFilter]);
 
+  const reviewTotalPages = Math.max(
+    1,
+    Math.ceil(filteredRows.length / reviewPageSize),
+  );
+  const safeReviewPage = Math.min(reviewPage, reviewTotalPages - 1);
+  const reviewPageStart = safeReviewPage * reviewPageSize;
+  const pagedRows = useMemo(
+    () => filteredRows.slice(reviewPageStart, reviewPageStart + reviewPageSize),
+    [filteredRows, reviewPageStart, reviewPageSize],
+  );
+
+  // The header checkbox acts on the rows on the current page; the selection
+  // bar's "Select all N" still reaches every filtered row across pages.
   const allFilteredSelected =
-    filteredRows.length > 0 && filteredRows.every((r) => selectedIds.has(r.id));
-  const someFilteredSelected = filteredRows.some((r) => selectedIds.has(r.id));
+    pagedRows.length > 0 && pagedRows.every((r) => selectedIds.has(r.id));
+  const someFilteredSelected = pagedRows.some((r) => selectedIds.has(r.id));
   const toggleSelect = (id: string) =>
     setSelectedIds((prev) => {
       const n = new Set(prev);
@@ -2611,10 +2637,15 @@ function AddMembersDialog({
     if (allFilteredSelected)
       setSelectedIds((prev) => {
         const n = new Set(prev);
-        filteredRows.forEach((r) => n.delete(r.id));
+        pagedRows.forEach((r) => n.delete(r.id));
         return n;
       });
-    else selectAllFiltered();
+    else
+      setSelectedIds((prev) => {
+        const n = new Set(prev);
+        pagedRows.forEach((r) => n.add(r.id));
+        return n;
+      });
   };
 
   const applyBulkScope = () => {
@@ -2901,6 +2932,14 @@ function AddMembersDialog({
                   <span className="text-sm font-semibold text-primary">
                     {selectedIds.size} selected — set scope:
                   </span>
+                  {selectedIds.size < filteredRows.length && (
+                    <button
+                      className="text-xs font-medium text-primary hover:underline"
+                      onClick={selectAllFiltered}
+                    >
+                      Select all {filteredRows.length}
+                    </button>
+                  )}
                   <Popover>
                     <PopoverTrigger asChild>
                       <Button
@@ -2974,7 +3013,7 @@ function AddMembersDialog({
                                 someFilteredSelected && !allFilteredSelected;
                           }}
                           onCheckedChange={handleHeaderCheckbox}
-                          disabled={filteredRows.length === 0}
+                          disabled={pagedRows.length === 0}
                         />
                       </TableHead>
                       <TableHead className="w-28">UID</TableHead>
@@ -3000,7 +3039,7 @@ function AddMembersDialog({
                         </TableCell>
                       </TableRow>
                     ) : (
-                      filteredRows.map((row) => {
+                      pagedRows.map((row) => {
                         const isSelected = selectedIds.has(row.id);
                         return (
                           <TableRow
@@ -3095,6 +3134,78 @@ function AddMembersDialog({
                   </TableBody>
                 </Table>
               </div>
+
+              {filteredRows.length > REVIEW_PAGE_SIZES[0] && (
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <span>Rows per page</span>
+                    <Select
+                      value={String(reviewPageSize)}
+                      onValueChange={(v) => setReviewPageSize(Number(v))}
+                    >
+                      <SelectTrigger className="h-8 w-20">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {REVIEW_PAGE_SIZES.map((n) => (
+                          <SelectItem key={n} value={String(n)}>
+                            {n}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 sm:justify-end">
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      {reviewPageStart + 1}–{reviewPageStart + pagedRows.length}{" "}
+                      of {filteredRows.length} · Page {safeReviewPage + 1} of{" "}
+                      {reviewTotalPages}
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="size-8"
+                        onClick={() => setReviewPage(0)}
+                        disabled={safeReviewPage === 0}
+                        aria-label="First page"
+                      >
+                        <ChevronsLeft className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="size-8"
+                        onClick={() => setReviewPage(safeReviewPage - 1)}
+                        disabled={safeReviewPage === 0}
+                        aria-label="Previous page"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="size-8"
+                        onClick={() => setReviewPage(safeReviewPage + 1)}
+                        disabled={safeReviewPage >= reviewTotalPages - 1}
+                        aria-label="Next page"
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="size-8"
+                        onClick={() => setReviewPage(reviewTotalPages - 1)}
+                        disabled={safeReviewPage >= reviewTotalPages - 1}
+                        aria-label="Last page"
+                      >
+                        <ChevronsRight className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -3532,20 +3643,19 @@ function MemberStats({
     total: number;
     voters: number;
     organizers: number;
-    unassigned: number;
+    scopesCovered: number;
   };
   active: string;
-  onPick: (v: "all" | "voter" | "organizer" | "none") => void;
+  onPick: (v: "all" | "voter" | "organizer") => void;
 }) {
   const tiles: Array<{
-    key: "all" | "voter" | "organizer" | "none";
+    key: "all" | "voter" | "organizer";
     label: string;
     value: number;
   }> = [
     { key: "all", label: "All members", value: stats.total },
     { key: "voter", label: "Voters", value: stats.voters },
     { key: "organizer", label: "Organizers", value: stats.organizers },
-    { key: "none", label: "No assignments", value: stats.unassigned },
   ];
   return (
     <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
@@ -3572,6 +3682,15 @@ function MemberStats({
           </button>
         );
       })}
+      {/* Informational only — not a filter. */}
+      <div className="rounded-xl border bg-card px-4 py-3">
+        <p className="text-2xl font-bold tabular-nums leading-none">
+          {stats.scopesCovered}
+        </p>
+        <p className="mt-1.5 text-xs font-medium text-muted-foreground">
+          Scopes covered
+        </p>
+      </div>
     </div>
   );
 }
@@ -3593,7 +3712,7 @@ function ManageOrgPanel({
   const [membersLoading, setMembersLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<
-    "all" | "organizer" | "organizer-only" | "voter" | "voter-only" | "none"
+    "all" | "organizer" | "organizer-only" | "voter" | "voter-only"
   >("all");
   const [scopeFilter, setScopeFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState<SortKey>("uid-asc");
@@ -3700,8 +3819,12 @@ function ManageOrgPanel({
       total: members.length,
       voters: members.filter(hasVoter).length,
       organizers: members.filter(hasOrganizer).length,
-      unassigned: members.filter((m) => !hasVoter(m) && !hasOrganizer(m))
-        .length,
+      // Distinct scopes that at least one member is assigned to. (The
+      // members endpoint only returns members who hold a visible role, so
+      // "members with no assignments" is not a count it can ever produce.)
+      scopesCovered: new Set(
+        members.flatMap((m) => m.roles.map((r) => r.scope_id)),
+      ).size,
     }),
     [members],
   );
@@ -3718,8 +3841,6 @@ function ManageOrgPanel({
         return false;
       if (roleFilter === "voter" && !hasVoter(m)) return false;
       if (roleFilter === "voter-only" && (hasOrganizer(m) || !hasVoter(m)))
-        return false;
-      if (roleFilter === "none" && (hasVoter(m) || hasOrganizer(m)))
         return false;
       if (
         scopeFilter !== "all" &&
@@ -4001,7 +4122,6 @@ function ManageOrgPanel({
                     <SelectItem value="organizer-only">
                       Organizer only
                     </SelectItem>
-                    <SelectItem value="none">No roles</SelectItem>
                   </SelectContent>
                 </Select>
                 <ScopeTreeSelect
