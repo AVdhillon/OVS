@@ -693,7 +693,7 @@ export function DashboardLayout() {
             aria-label="Close menu"
           />
           <aside
-            className={`absolute left-0 top-[calc(3.5rem+env(safe-area-inset-top))] bottom-0 max-w-[85vw] bg-background border-r shadow-lg flex flex-col overscroll-contain transition-all duration-200 ${mobileCollapsed ? "w-16" : "w-72"}`}
+            className={`absolute left-0 top-[calc(3.5rem+env(safe-area-inset-top))] bottom-0 max-w-[70vw] bg-background border-r shadow-lg flex flex-col overscroll-contain transition-all duration-200 ${mobileCollapsed ? "w-16" : "w-max min-w-44"}`}
           >
             <Sidebar
               collapsed={mobileCollapsed}
