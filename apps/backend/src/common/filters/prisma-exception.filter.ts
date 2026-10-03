@@ -18,6 +18,33 @@ import type { Request, Response } from 'express';
 export class PrismaExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(PrismaExceptionFilter.name);
 
+  // Turns a P2002 `meta.target` into something safe to show a user. The raw
+  // target is a list of DB column names (e.g. "pid, identity_type,
+  // identity_id") that means nothing to a user and leaks schema details, so
+  // only columns with a user-meaningful name are mentioned; anything else
+  // (internal/composite keys) gets a generic message. Services that know the
+  // real cause should catch P2002 themselves and throw a specific
+  // ConflictException — this is only the safety net.
+  private describeUniqueViolation(target: unknown): string {
+    const friendly: Record<string, string> = {
+      email: 'email address',
+      mobile: 'mobile number',
+      org_email: 'organization email',
+      org_name: 'organization name',
+    };
+    const cols = Array.isArray(target)
+      ? (target as string[])
+      : typeof target === 'string'
+        ? [target]
+        : [];
+    const labels = cols
+      .map((c) => friendly[c])
+      .filter((l): l is string => Boolean(l));
+    return labels.length > 0
+      ? `A record with this ${labels.join(' / ')} already exists`
+      : 'This record already exists';
+  }
+
   catch(
     exception:
       | Prisma.PrismaClientKnownRequestError
@@ -37,9 +64,7 @@ export class PrismaExceptionFilter implements ExceptionFilter {
         // Unique constraint violation
         case 'P2002': {
           status = HttpStatus.CONFLICT;
-          const fields =
-            (exception.meta?.target as string[])?.join(', ') ?? 'field';
-          message = `Duplicate value on: ${fields}`;
+          message = this.describeUniqueViolation(exception.meta?.target);
           break;
         }
         // Record not found (findUniqueOrThrow / updateOrThrow)

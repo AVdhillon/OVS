@@ -58,6 +58,10 @@ interface NavItemConfig {
   // visibleNavItems, rather than re-deriving per item. No effect on
   // UNIFIED/SITEADMIN sessions.
   organizerOnly?: boolean;
+  // Hide the item until the user has at least one org request on record
+  // (resolved via GET /org/request/mine below). Only applies once the
+  // check has succeeded, so a transient failure never hides the tab.
+  requiresOrgRequests?: boolean;
 }
 
 const NAV_ITEMS: NavItemConfig[] = [
@@ -98,6 +102,7 @@ const NAV_ITEMS: NavItemConfig[] = [
     label: "My Requests",
     icon: ClipboardList,
     sessionTypes: ["UNIFIED"],
+    requiresOrgRequests: true,
   },
   {
     path: "/dashboard/identity-wallet",
@@ -546,6 +551,33 @@ export function DashboardLayout() {
     };
   }, [session?.type, session?.orgid, session?.uid]);
 
+  // Whether the user has ever submitted an org request. Drives the
+  // "My Requests" tab: with nothing submitted there is nothing to track.
+  // Refetched on the "org-requests-changed" event, which the Organizations
+  // page fires after a successful submission so the tab appears immediately.
+  const [requestCount, setRequestCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (session?.type !== "UNIFIED") return;
+    let cancelled = false;
+    const load = () => {
+      api
+        .listMyOrgRequests()
+        .then((data) => {
+          if (!cancelled) setRequestCount(data.length);
+        })
+        .catch(() => {
+          // leave requestCount as-is (null = unknown => tab stays visible)
+        });
+    };
+    load();
+    window.addEventListener("org-requests-changed", load);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("org-requests-changed", load);
+    };
+  }, [session?.type, session?.uid]);
+
   const visibleNavItems = useMemo(
     () =>
       NAV_ITEMS.filter((n) => {
@@ -563,9 +595,22 @@ export function DashboardLayout() {
         ) {
           return false;
         }
+        if (
+          n.requiresOrgRequests &&
+          requestCount === 0 &&
+          location.pathname !== n.path
+        ) {
+          return false;
+        }
         return true;
       }),
-    [session?.type, organizerChecked, orgs.length],
+    [
+      session?.type,
+      organizerChecked,
+      orgs.length,
+      requestCount,
+      location.pathname,
+    ],
   );
 
   const userInitials = useMemo(

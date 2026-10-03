@@ -4921,6 +4921,8 @@ export function ManageOrganizationsView() {
           onSuccess={() => {
             fetchOrgs();
             fetchMyRequests();
+            // Tell the dashboard sidebar so "My Requests" shows up now.
+            window.dispatchEvent(new Event("org-requests-changed"));
           }}
           myRequests={myRequests}
         />

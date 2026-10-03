@@ -111,6 +111,7 @@ model identity_wallet {
   uaccount      uaccount @relation(fields: [pid], references: [pid], onDelete: NoAction, onUpdate: NoAction)
 
   @@id([pid, identity_type, identity_id])
+  @@unique([identity_type, identity_id, uid], map: "uq_identity_wallet_member")
   @@index([pid], map: "idx_identity_wallet_pid")
 }
 
