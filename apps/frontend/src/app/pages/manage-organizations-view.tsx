@@ -12,6 +12,7 @@ import type { OrgRequestMine } from "../../lib/api";
 import { useAppContext } from "../context/app-context";
 import type { OrgSummary, ScopeNode } from "../context/app-context";
 import { toast } from "sonner";
+import { useSearchParams } from "react-router";
 
 import {
   Card,
@@ -88,6 +89,16 @@ import {
   UserPlus,
   ChevronDown,
   Loader2,
+  ArrowLeft,
+  Building2,
+  Copy,
+  Check,
+  ChevronLeft,
+  ChevronsLeft,
+  ChevronsRight,
+  ArrowUpDown,
+  Network,
+  Gauge,
 } from "lucide-react";
 import React from "react";
 // The request-submit flow's optional
@@ -660,8 +671,8 @@ function SubmitOrgRequestModal({
                     <span className="font-medium">
                       Ideally, an org email you can verify.
                     </span>{" "}
-                    Using your organization's own domain rather than a
-                    personal one usually moves review along faster.
+                    Using your organization's own domain rather than a personal
+                    one usually moves review along faster.
                   </span>
                 </li>
                 <li className="flex gap-2.5">
@@ -707,14 +718,13 @@ function SubmitOrgRequestModal({
                       only as a 409 after they submit. */}
                   {duplicateOpenRequest && (
                     <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5">
-                      You already have an open request for this name
-                      (reference {duplicateOpenRequest.reference_code},{" "}
+                      You already have an open request for this name (reference{" "}
+                      {duplicateOpenRequest.reference_code},{" "}
                       {duplicateOpenRequest.status === "PENDING"
                         ? "pending review"
                         : "needs info"}
-                      ). Check{" "}
-                      <span className="font-medium">My Requests</span> instead
-                      of submitting again.
+                      ). Check <span className="font-medium">My Requests</span>{" "}
+                      instead of submitting again.
                     </p>
                   )}
                 </div>
@@ -806,7 +816,9 @@ function SubmitOrgRequestModal({
                 {orgEmail.trim() ? (
                   <Button
                     onClick={handleSendOtp}
-                    disabled={sendingOtp || submitting || !!duplicateOpenRequest}
+                    disabled={
+                      sendingOtp || submitting || !!duplicateOpenRequest
+                    }
                   >
                     {sendingOtp && (
                       <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -3175,9 +3187,7 @@ function MemberLimitTab({ org }: { org: OrgSummary }) {
   // rather than starting a fresh request — set by openEditDialog(), cleared
   // by openDialog(). Drives both the dialog's copy and which api call
   // handleSubmit() makes.
-  const [editingRequestId, setEditingRequestId] = useState<string | null>(
-    null,
-  );
+  const [editingRequestId, setEditingRequestId] = useState<string | null>(null);
 
   const fetchHistory = useCallback(async () => {
     setLoading(true);
@@ -3204,9 +3214,10 @@ function MemberLimitTab({ org }: { org: OrgSummary }) {
     (r) => r.status === "PENDING" || r.status === "NEEDS_INFO",
   );
 
-  const usagePct = org.member_limit > 0
-    ? Math.min(100, Math.round((org.member_count / org.member_limit) * 100))
-    : 0;
+  const usagePct =
+    org.member_limit > 0
+      ? Math.min(100, Math.round((org.member_count / org.member_limit) * 100))
+      : 0;
 
   const openDialog = () => {
     setEditingRequestId(null);
@@ -3244,15 +3255,10 @@ function MemberLimitTab({ org }: { org: OrgSummary }) {
     setFormError(null);
     try {
       const res = editingRequestId
-        ? await api.resubmitLimitRequest(
-            org.orgid,
-            org.uid,
-            editingRequestId,
-            {
-              requested_limit: limit,
-              justification: justification.trim() || undefined,
-            },
-          )
+        ? await api.resubmitLimitRequest(org.orgid, org.uid, editingRequestId, {
+            requested_limit: limit,
+            justification: justification.trim() || undefined,
+          })
         : await api.submitLimitRequest(org.orgid, org.uid, {
             requested_limit: limit,
             justification: justification.trim() || undefined,
@@ -3343,7 +3349,9 @@ function MemberLimitTab({ org }: { org: OrgSummary }) {
                       {r.current_limit} → {r.requested_limit}
                     </span>
                     <Badge variant="outline">
-                      {r.status === "NEEDS_INFO" ? "Needs info" : r.status.charAt(0) + r.status.slice(1).toLowerCase()}
+                      {r.status === "NEEDS_INFO"
+                        ? "Needs info"
+                        : r.status.charAt(0) + r.status.slice(1).toLowerCase()}
                     </Badge>
                   </div>
                   <p className="text-xs text-muted-foreground">
@@ -3408,7 +3416,11 @@ function MemberLimitTab({ org }: { org: OrgSummary }) {
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={closeDialog} disabled={submitting}>
+            <Button
+              variant="outline"
+              onClick={closeDialog}
+              disabled={submitting}
+            >
               Cancel
             </Button>
             <Button onClick={handleSubmit} disabled={submitting}>
@@ -3425,7 +3437,157 @@ function MemberLimitTab({ org }: { org: OrgSummary }) {
   );
 }
 
-function ManageOrgPanel({ org }: { org: OrgSummary }) {
+// ─── Role presentation ───────────────────────────────────────────────────────
+// Full words instead of the old "V" / "O" / "V+O" shorthand, colour-coded so a
+// column of assignments can be scanned at a glance.
+type RoleKind = "both" | "voter" | "organizer" | "none";
+const roleKind = (r: MemberRole): RoleKind =>
+  r.is_voter && r.is_organizer
+    ? "both"
+    : r.is_voter
+      ? "voter"
+      : r.is_organizer
+        ? "organizer"
+        : "none";
+const ROLE_NAME: Record<RoleKind, string> = {
+  both: "Voter + Organizer",
+  voter: "Voter",
+  organizer: "Organizer",
+  none: "No role",
+};
+const ROLE_PILL: Record<RoleKind, string> = {
+  both: "bg-primary/10 text-primary",
+  voter: "bg-sky-500/10 text-sky-700 dark:text-sky-300",
+  organizer: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
+  none: "bg-muted text-muted-foreground",
+};
+
+// Every assignment a member holds, shown in full (scope name + role) rather
+// than truncated to two chips. Long lists collapse behind a per-row toggle.
+function AssignmentChips({
+  roles,
+  scopeNames,
+  scopePaths,
+  collapseAfter = 6,
+}: {
+  roles: MemberRole[];
+  scopeNames: Map<number, string>;
+  scopePaths: Map<number, string>;
+  collapseAfter?: number;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (!roles.length)
+    return (
+      <span className="text-xs text-muted-foreground italic">
+        No assignments
+      </span>
+    );
+  const shown = expanded ? roles : roles.slice(0, collapseAfter);
+  const hidden = roles.length - shown.length;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {shown.map((r) => {
+        const kind = roleKind(r);
+        const name = scopeNames.get(r.scope_id) ?? `Scope ${r.scope_id}`;
+        return (
+          <span
+            key={r.scope_id}
+            title={`${scopePaths.get(r.scope_id) ?? name} — ${ROLE_NAME[kind]}`}
+            className="inline-flex items-stretch overflow-hidden rounded-md border bg-card text-xs leading-none whitespace-nowrap"
+          >
+            <span className="px-2 py-1.5 font-medium">{name}</span>
+            <span
+              className={`border-l px-1.5 py-1.5 text-[11px] font-semibold ${ROLE_PILL[kind]}`}
+            >
+              {ROLE_NAME[kind]}
+            </span>
+          </span>
+        );
+      })}
+      {(hidden > 0 || (expanded && roles.length > collapseAfter)) && (
+        <button
+          type="button"
+          className="rounded-md px-1.5 py-1 text-xs font-medium text-primary hover:bg-primary/10"
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded((v) => !v);
+          }}
+        >
+          {expanded ? "Show less" : `+${hidden} more`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Clickable summary tiles above the member table. Each one doubles as a
+// quick role filter, so "how many organizers do we have?" and "show me
+// them" are one click.
+function MemberStats({
+  stats,
+  active,
+  onPick,
+}: {
+  stats: {
+    total: number;
+    voters: number;
+    organizers: number;
+    unassigned: number;
+  };
+  active: string;
+  onPick: (v: "all" | "voter" | "organizer" | "none") => void;
+}) {
+  const tiles: Array<{
+    key: "all" | "voter" | "organizer" | "none";
+    label: string;
+    value: number;
+  }> = [
+    { key: "all", label: "All members", value: stats.total },
+    { key: "voter", label: "Voters", value: stats.voters },
+    { key: "organizer", label: "Organizers", value: stats.organizers },
+    { key: "none", label: "No assignments", value: stats.unassigned },
+  ];
+  return (
+    <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
+      {tiles.map((t) => {
+        const isActive = active === t.key;
+        return (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => onPick(isActive && t.key !== "all" ? "all" : t.key)}
+            aria-pressed={isActive}
+            className={`rounded-xl border px-4 py-3 text-left transition-colors ${
+              isActive
+                ? "border-primary/50 bg-primary/5 ring-1 ring-primary/20"
+                : "bg-card hover:bg-accent/50"
+            }`}
+          >
+            <p className="text-2xl font-bold tabular-nums leading-none">
+              {t.value}
+            </p>
+            <p className="mt-1.5 text-xs font-medium text-muted-foreground">
+              {t.label}
+            </p>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const PAGE_SIZES = [10, 25, 50, 100];
+type SortKey = "uid-asc" | "uid-desc" | "scopes-desc" | "scopes-asc";
+
+function ManageOrgPanel({
+  org,
+  onBack,
+}: {
+  org: OrgSummary;
+  // Present for UNIFIED sessions (they arrived here from the org picker);
+  // omitted for ORG sessions, which only ever have the one org.
+  onBack?: () => void;
+}) {
   const [activeTab, setActiveTab] = useState("members");
   const [members, setMembers] = useState<OrgMember[]>([]);
   const [membersLoading, setMembersLoading] = useState(false);
@@ -3434,6 +3596,10 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
     "all" | "organizer" | "organizer-only" | "voter" | "voter-only" | "none"
   >("all");
   const [scopeFilter, setScopeFilter] = useState<string>("all");
+  const [sortBy, setSortBy] = useState<SortKey>("uid-asc");
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(25);
+  const [copied, setCopied] = useState(false);
   const [selectedUids, setSelectedUids] = useState<Set<string>>(new Set());
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [managingMember, setManagingMember] = useState<OrgMember | null>(null);
@@ -3499,11 +3665,52 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
     setSelectedUids(new Set());
   }, [searchQuery, roleFilter, scopeFilter]);
 
-  // ── Filtering ─────────────────────────────────────────────────────────────────
+  // Back to the first page whenever the result set or its ordering changes.
+  useEffect(() => {
+    setPage(0);
+  }, [searchQuery, roleFilter, scopeFilter, sortBy, pageSize]);
+
+  // ── Scope lookups (names + "Parent › Child" paths for chip tooltips) ─────────
+  const scopeNames = useMemo(
+    () => new Map(flatScopes.map((s) => [s.scope_id, s.scope_name])),
+    [flatScopes],
+  );
+  const scopePaths = useMemo(() => {
+    const byId = new Map(flatScopes.map((s) => [s.scope_id, s]));
+    const out = new Map<number, string>();
+    flatScopes.forEach((s) => {
+      const parts: string[] = [];
+      let cur: ScopeNode | undefined = s;
+      let guard = 0;
+      while (cur && guard++ < 25) {
+        parts.unshift(cur.scope_name);
+        cur =
+          cur.parent_scope_id != null
+            ? byId.get(cur.parent_scope_id)
+            : undefined;
+      }
+      out.set(s.scope_id, parts.join(" › "));
+    });
+    return out;
+  }, [flatScopes]);
+
+  // ── Stats ─────────────────────────────────────────────────────────────────────
+  const stats = useMemo(
+    () => ({
+      total: members.length,
+      voters: members.filter(hasVoter).length,
+      organizers: members.filter(hasOrganizer).length,
+      unassigned: members.filter((m) => !hasVoter(m) && !hasOrganizer(m))
+        .length,
+    }),
+    [members],
+  );
+
+  // ── Filtering + sorting ───────────────────────────────────────────────────────
   const filteredMembers = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return members.filter((m) => {
-      const contact = (m.email ?? m.mobile ?? "").toLowerCase();
+      const contact = `${m.email ?? ""} ${m.mobile ?? ""}`.toLowerCase();
       if (q && !m.uid.toLowerCase().includes(q) && !contact.includes(q))
         return false;
       if (roleFilter === "organizer" && !hasOrganizer(m)) return false;
@@ -3523,17 +3730,48 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
     });
   }, [members, searchQuery, roleFilter, scopeFilter]);
 
+  const sortedMembers = useMemo(() => {
+    const byUid = (a: OrgMember, b: OrgMember) =>
+      a.uid.localeCompare(b.uid, undefined, { numeric: true });
+    const arr = [...filteredMembers];
+    switch (sortBy) {
+      case "uid-desc":
+        arr.sort((a, b) => byUid(b, a));
+        break;
+      case "scopes-desc":
+        arr.sort((a, b) => b.roles.length - a.roles.length || byUid(a, b));
+        break;
+      case "scopes-asc":
+        arr.sort((a, b) => a.roles.length - b.roles.length || byUid(a, b));
+        break;
+      default:
+        arr.sort(byUid);
+    }
+    return arr;
+  }, [filteredMembers, sortBy]);
+
+  // ── Pagination ────────────────────────────────────────────────────────────────
+  const totalPages = Math.max(1, Math.ceil(sortedMembers.length / pageSize));
+  const safePage = Math.min(page, totalPages - 1);
+  const pageStart = safePage * pageSize;
+  const pagedMembers = sortedMembers.slice(pageStart, pageStart + pageSize);
+
   // ── Selection ─────────────────────────────────────────────────────────────────
+  // The header checkbox toggles the rows on the current page (like most
+  // mail/admin tools); BulkActionBar's "Select all N" still reaches every
+  // filtered row across pages.
   const selectableUids = filteredMembers
     .map((m) => m.uid)
     .filter((uid) => uid !== org.uid);
-  const allFilteredSelected =
-    selectableUids.length > 0 &&
-    selectableUids.every((uid) => selectedUids.has(uid));
-  const someSelected = selectableUids.some((uid) => selectedUids.has(uid));
-  const selectedInView = filteredMembers.filter((m) =>
-    selectedUids.has(m.uid),
-  ).length;
+  const pageSelectableUids = pagedMembers
+    .map((m) => m.uid)
+    .filter((uid) => uid !== org.uid);
+  const allPageSelected =
+    pageSelectableUids.length > 0 &&
+    pageSelectableUids.every((uid) => selectedUids.has(uid));
+  const somePageSelected = pageSelectableUids.some((uid) =>
+    selectedUids.has(uid),
+  );
 
   const toggleSelect = (uid: string) =>
     setSelectedUids((prev) => {
@@ -3543,15 +3781,13 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
     });
   const selectAllFiltered = () => setSelectedUids(new Set(selectableUids));
   const clearSelection = () => setSelectedUids(new Set());
-  const handleHeaderCheckbox = () => {
-    if (allFilteredSelected)
-      setSelectedUids((prev) => {
-        const n = new Set(prev);
-        selectableUids.forEach((uid) => n.delete(uid));
-        return n;
-      });
-    else selectAllFiltered();
-  };
+  const handleHeaderCheckbox = () =>
+    setSelectedUids((prev) => {
+      const n = new Set(prev);
+      if (allPageSelected) pageSelectableUids.forEach((uid) => n.delete(uid));
+      else pageSelectableUids.forEach((uid) => n.add(uid));
+      return n;
+    });
 
   // ── Remove ────────────────────────────────────────────────────────────────────
   const handleRemoveMember = async () => {
@@ -3591,270 +3827,365 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
   };
 
   const hasActiveFilters =
-    searchQuery.trim() || roleFilter !== "all" || scopeFilter !== "all";
-
-  // ── Roles summary cell ────────────────────────────────────────────────────────
-  const RolesSummary = ({ roles }: { roles: MemberRole[] }) => {
-    if (!roles.length)
-      return (
-        <span className="text-xs text-muted-foreground italic">
-          No assignments
-        </span>
-      );
-    const show = roles.slice(0, 2);
-    const rest = roles.length - 2;
-    return (
-      <div className="flex flex-wrap gap-1">
-        {show.map((r) => {
-          const name =
-            flatScopes.find((s) => s.scope_id === r.scope_id)?.scope_name ??
-            `S${r.scope_id}`;
-          const label = roleLabel(r);
-          return (
-            <span
-              key={r.scope_id}
-              className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-md
-                             bg-muted border border-border text-foreground leading-none whitespace-nowrap"
-            >
-              <span className="truncate max-w-[60px]">{name}</span>
-              <span className="text-muted-foreground">·</span>
-              <span
-                className={
-                  label === "V+O"
-                    ? "text-primary"
-                    : label === "O"
-                      ? "text-amber-600 dark:text-amber-400"
-                      : "text-muted-foreground"
-                }
-              >
-                {label}
-              </span>
-            </span>
-          );
-        })}
-        {rest > 0 && (
-          <span className="text-[11px] text-muted-foreground font-medium px-1 py-0.5">
-            +{rest} more
-          </span>
-        )}
-      </div>
-    );
+    !!searchQuery.trim() || roleFilter !== "all" || scopeFilter !== "all";
+  const clearFilters = () => {
+    setSearchQuery("");
+    setRoleFilter("all");
+    setScopeFilter("all");
   };
+
+  const copyOrgId = async () => {
+    try {
+      await navigator.clipboard.writeText(org.orgid);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast.error("Couldn't copy to clipboard");
+    }
+  };
+
+  // Capacity: prefer the live member list once loaded, else the figure that
+  // came back with the org list.
+  const usedCount = members.length > 0 ? members.length : org.member_count;
+  const capacityPct =
+    org.member_limit > 0
+      ? Math.min(100, Math.round((usedCount / org.member_limit) * 100))
+      : 0;
+
+  const tabTriggerCls =
+    "flex-none h-auto gap-2 max-sm:[&>svg]:hidden rounded-none border-0 border-b-2 border-transparent px-3 py-2.5 -mb-px text-muted-foreground hover:text-foreground " +
+    "data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:border-primary data-[state=active]:shadow-none " +
+    "dark:data-[state=active]:bg-transparent dark:data-[state=active]:border-primary dark:text-muted-foreground";
 
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-5">
-      <div className="flex items-start justify-between gap-3 sm:gap-4">
-        <div className="min-w-0">
-          <h2 className="text-lg font-semibold leading-tight break-words">
-            {org.org_name}
-          </h2>
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1">
-            <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded text-muted-foreground">
-              {org.orgid}
-            </span>
-            <span className="text-xs text-muted-foreground">·</span>
-            <span className="text-xs text-muted-foreground">
-              Your UID:{" "}
-              <span className="font-mono font-semibold text-foreground">
-                {org.uid}
-              </span>
-            </span>
-          </div>
-        </div>
-        <Badge
-          variant={org.is_active ? "default" : "secondary"}
-          className="flex-shrink-0 mt-0.5"
+      {onBack && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="-ml-2 gap-1.5 text-muted-foreground hover:text-foreground"
+          onClick={onBack}
         >
-          {org.is_active ? "Active" : "Inactive"}
-        </Badge>
+          <ArrowLeft className="w-4 h-4" /> All organizations
+        </Button>
+      )}
+
+      {/* ── Org header ── */}
+      <div className="rounded-xl border bg-card p-4 sm:p-5">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div className="flex min-w-0 items-start gap-3 sm:gap-4">
+            <div className="grid size-11 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary sm:size-12">
+              <Building2 className="size-5 sm:size-6" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-xl font-bold leading-tight tracking-tight break-words">
+                  {org.org_name}
+                </h2>
+                <Badge variant={org.is_active ? "default" : "secondary"}>
+                  {org.is_active ? "Active" : "Inactive"}
+                </Badge>
+              </div>
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-muted-foreground">
+                <button
+                  type="button"
+                  onClick={copyOrgId}
+                  title="Copy organization ID"
+                  className="inline-flex items-center gap-1.5 rounded bg-muted px-2 py-0.5 font-mono hover:bg-accent hover:text-foreground"
+                >
+                  {org.orgid}
+                  {copied ? (
+                    <Check className="w-3 h-3 text-green-600" />
+                  ) : (
+                    <Copy className="w-3 h-3" />
+                  )}
+                </button>
+                <span>
+                  Your UID:{" "}
+                  <span className="font-mono font-semibold text-foreground">
+                    {org.uid}
+                  </span>
+                </span>
+                {org.org_email && (
+                  <span className="truncate">{org.org_email}</span>
+                )}
+              </div>
+            </div>
+          </div>
+          {org.member_limit > 0 && (
+            <button
+              type="button"
+              onClick={() => setActiveTab("limits")}
+              title="View member limit"
+              className="w-full shrink-0 rounded-lg border bg-background px-4 py-2.5 text-left transition-colors hover:bg-accent/50 md:w-56"
+            >
+              <div className="flex items-baseline justify-between text-xs">
+                <span className="text-muted-foreground">Capacity</span>
+                <span className="font-semibold tabular-nums text-foreground">
+                  {usedCount} / {org.member_limit}
+                </span>
+              </div>
+              <Progress value={capacityPct} className="mt-2 h-1.5" />
+            </button>
+          )}
+        </div>
       </div>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList>
-          <TabsTrigger value="members">Members</TabsTrigger>
-          <TabsTrigger value="scope">Scope Tree</TabsTrigger>
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-0">
+        <TabsList className="h-auto w-full justify-start gap-1 rounded-none border-b bg-transparent p-0">
+          <TabsTrigger value="members" className={tabTriggerCls}>
+            <Users /> Members
+            {members.length > 0 && (
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[11px] font-semibold tabular-nums leading-none text-muted-foreground">
+                {members.length}
+              </span>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="scope" className={tabTriggerCls}>
+            <Network /> Scope Tree
+          </TabsTrigger>
           {/* Current limit + usage, "Request
               increase", and status of any open request — see
               MemberLimitTab's own header comment. */}
-          <TabsTrigger value="limits">Member Limit</TabsTrigger>
+          <TabsTrigger value="limits" className={tabTriggerCls}>
+            <Gauge /> Member Limit
+          </TabsTrigger>
         </TabsList>
 
         {/* ── MEMBERS TAB ── */}
-        <TabsContent value="members" className="space-y-3 mt-4">
-          <div className="space-y-2">
-            <div className="flex gap-2 flex-wrap items-center">
-              <div className="relative w-full sm:w-auto">
-                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+        <TabsContent value="members" className="mt-5 space-y-4">
+          {members.length > 0 && (
+            <MemberStats
+              stats={stats}
+              active={roleFilter}
+              onPick={(v) => setRoleFilter(v)}
+            />
+          )}
+
+          {/* Toolbar */}
+          <div className="rounded-xl border bg-card p-3 sm:p-4">
+            <div className="flex flex-col gap-2 xl:flex-row xl:items-center">
+              <div className="relative min-w-0 flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
-                  placeholder="Search UID, email or mobile…"
+                  placeholder="Search by UID, email or mobile…"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-8 pr-7 w-full sm:w-56"
+                  className="w-full pl-9 pr-8"
                 />
                 {searchQuery && (
                   <button
                     className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                     onClick={() => setSearchQuery("")}
                     title="Clear search"
+                    aria-label="Clear search"
                   >
-                    <X className="w-3.5 h-3.5" />
+                    <X className="w-4 h-4" />
                   </button>
                 )}
               </div>
-              <Select
-                value={roleFilter}
-                onValueChange={(v) => setRoleFilter(v as any)}
-              >
-                <SelectTrigger className="w-full sm:w-40">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All roles</SelectItem>
-                  <SelectItem value="voter">Has Voter</SelectItem>
-                  <SelectItem value="voter-only">Voter only</SelectItem>
-                  <SelectItem value="organizer">Has Organizer</SelectItem>
-                  <SelectItem value="organizer-only">Organizer only</SelectItem>
-                  <SelectItem value="none">No roles</SelectItem>
-                </SelectContent>
-              </Select>
-              <ScopeTreeSelect
-                scopeTree={scopeTree}
-                flatScopes={flatScopes}
-                value={scopeFilter}
-                onChange={setScopeFilter}
-                allowAll
-                placeholder="All scopes"
-                className="w-full sm:w-44"
-              />
-              {hasActiveFilters && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-xs text-muted-foreground h-9"
-                  onClick={() => {
-                    setSearchQuery("");
-                    setRoleFilter("all");
-                    setScopeFilter("all");
-                  }}
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:flex xl:items-center">
+                <Select
+                  value={roleFilter}
+                  onValueChange={(v) => setRoleFilter(v as any)}
                 >
-                  Clear filters
-                </Button>
-              )}
-              <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
+                  <SelectTrigger className="w-full xl:w-40">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All roles</SelectItem>
+                    <SelectItem value="voter">Has Voter</SelectItem>
+                    <SelectItem value="voter-only">Voter only</SelectItem>
+                    <SelectItem value="organizer">Has Organizer</SelectItem>
+                    <SelectItem value="organizer-only">
+                      Organizer only
+                    </SelectItem>
+                    <SelectItem value="none">No roles</SelectItem>
+                  </SelectContent>
+                </Select>
+                <ScopeTreeSelect
+                  scopeTree={scopeTree}
+                  flatScopes={flatScopes}
+                  value={scopeFilter}
+                  onChange={setScopeFilter}
+                  allowAll
+                  placeholder="All scopes"
+                  className="w-full xl:w-48"
+                />
+                <Select
+                  value={sortBy}
+                  onValueChange={(v) => setSortBy(v as SortKey)}
+                >
+                  <SelectTrigger className="col-span-2 w-full sm:col-span-1 xl:w-48">
+                    <ArrowUpDown className="w-3.5 h-3.5 text-muted-foreground" />
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="uid-asc">UID · A → Z</SelectItem>
+                    <SelectItem value="uid-desc">UID · Z → A</SelectItem>
+                    <SelectItem value="scopes-desc">
+                      Most assignments
+                    </SelectItem>
+                    <SelectItem value="scopes-asc">
+                      Fewest assignments
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center gap-2 xl:ml-auto">
                 <Button
                   variant="outline"
-                  size="sm"
-                  className="gap-1.5"
+                  size="icon"
                   onClick={fetchMembers}
+                  disabled={membersLoading}
+                  title="Refresh members"
+                  aria-label="Refresh members"
                 >
-                  <RefreshCw className="w-3.5 h-3.5" /> Refresh
+                  <RefreshCw
+                    className={`w-4 h-4 ${membersLoading ? "animate-spin" : ""}`}
+                  />
                 </Button>
                 <Button
-                  size="sm"
-                  className="gap-1.5"
+                  className="flex-1 gap-1.5 xl:flex-none"
                   onClick={() => setAddMemberOpen(true)}
                 >
-                  <UserPlus className="w-3.5 h-3.5" /> Add Members
+                  <UserPlus className="w-4 h-4" /> Add Members
                 </Button>
               </div>
             </div>
-            <div className="flex items-center gap-2 px-0.5">
-              <p className="text-xs text-muted-foreground">
-                {filteredMembers.length === members.length
-                  ? `${members.length} member${members.length !== 1 ? "s" : ""}`
-                  : `${filteredMembers.length} of ${members.length} members`}
-              </p>
-              {hasActiveFilters && (
-                <Badge variant="secondary" className="text-[10px] h-4 px-1.5">
-                  Filtered
-                </Badge>
-              )}
-            </div>
           </div>
 
-          {selectedUids.size > 0 && (
-            <BulkActionBar
-              selectedCount={selectedUids.size}
-              totalCount={selectableUids.length}
-              onSelectAll={selectAllFiltered}
-              onClearSelection={clearSelection}
-              onBulkEdit={() => {
-                setBulkEditInitialTab("update");
-                setBulkEditOpen(true);
-              }}
-              onBulkMove={() => {
-                setBulkEditInitialTab("move");
-                setBulkEditOpen(true);
-              }}
-              onBulkRemove={() => setBulkRemoveOpen(true)}
-            />
+          {/* Result summary */}
+          {members.length > 0 && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-0.5">
+              <p className="text-sm text-muted-foreground">
+                {sortedMembers.length === 0 ? (
+                  "No matching members"
+                ) : (
+                  <>
+                    Showing{" "}
+                    <span className="font-medium text-foreground tabular-nums">
+                      {pageStart + 1}–{pageStart + pagedMembers.length}
+                    </span>{" "}
+                    of{" "}
+                    <span className="font-medium text-foreground tabular-nums">
+                      {sortedMembers.length}
+                    </span>
+                    {sortedMembers.length !== members.length &&
+                      ` (filtered from ${members.length})`}{" "}
+                    member{sortedMembers.length !== 1 ? "s" : ""}
+                  </>
+                )}
+              </p>
+              {hasActiveFilters && (
+                <button
+                  className="text-sm font-medium text-primary hover:underline"
+                  onClick={clearFilters}
+                >
+                  Clear filters
+                </button>
+              )}
+            </div>
           )}
 
-          {membersLoading ? (
+          {selectedUids.size > 0 && (
+            <div className="md:sticky md:top-[4.5rem] md:z-30 md:shadow-sm md:rounded-lg">
+              <BulkActionBar
+                selectedCount={selectedUids.size}
+                totalCount={selectableUids.length}
+                onSelectAll={selectAllFiltered}
+                onClearSelection={clearSelection}
+                onBulkEdit={() => {
+                  setBulkEditInitialTab("update");
+                  setBulkEditOpen(true);
+                }}
+                onBulkMove={() => {
+                  setBulkEditInitialTab("move");
+                  setBulkEditOpen(true);
+                }}
+                onBulkRemove={() => setBulkRemoveOpen(true)}
+              />
+            </div>
+          )}
+
+          {membersLoading && members.length === 0 ? (
             <ListSkeleton rows={6} />
+          ) : members.length === 0 ? (
+            <div className="rounded-xl border border-dashed bg-card py-14 text-center">
+              <div className="mx-auto mb-3 grid size-12 place-items-center rounded-full bg-muted text-muted-foreground">
+                <Users className="size-6" />
+              </div>
+              <p className="font-medium">No members yet</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Add people to {org.org_name} to start assigning scopes and
+                roles.
+              </p>
+              <Button
+                className="mt-4 gap-1.5"
+                onClick={() => setAddMemberOpen(true)}
+              >
+                <UserPlus className="w-4 h-4" /> Add Members
+              </Button>
+            </div>
           ) : (
-            <div className="border rounded-md overflow-hidden max-md:border-0 max-md:rounded-none max-md:overflow-visible">
+            <div className="rounded-xl border bg-card max-md:border-0 max-md:bg-transparent">
               <Table>
                 <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-10 pr-0">
+                  <TableRow className="bg-muted/40 hover:bg-muted/40 [&_th]:text-xs [&_th]:font-semibold [&_th]:uppercase [&_th]:tracking-wide [&_th]:text-muted-foreground">
+                    <TableHead className="w-12 pl-4 pr-0">
                       <Checkbox
-                        checked={allFilteredSelected}
+                        checked={allPageSelected}
                         ref={(el) => {
                           if (el)
                             (el as any).indeterminate =
-                              someSelected && !allFilteredSelected;
+                              somePageSelected && !allPageSelected;
                         }}
                         onCheckedChange={handleHeaderCheckbox}
-                        disabled={selectableUids.length === 0}
+                        disabled={pageSelectableUids.length === 0}
+                        aria-label="Select all on this page"
                       />
                     </TableHead>
-                    <TableHead>UID</TableHead>
-                    <TableHead>Contact</TableHead>
+                    <TableHead className="w-44">UID</TableHead>
+                    <TableHead className="w-72">Contact</TableHead>
                     <TableHead>Scope Assignments</TableHead>
-                    <TableHead className="w-28 text-right">Actions</TableHead>
+                    <TableHead className="w-36 pr-4 text-right">
+                      Actions
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredMembers.length === 0 ? (
+                  {pagedMembers.length === 0 ? (
                     <TableRow>
                       <TableCell
                         colSpan={5}
-                        className="text-center text-muted-foreground py-10"
+                        className="py-12 text-center text-muted-foreground"
                       >
-                        {hasActiveFilters ? (
-                          <div className="space-y-1">
-                            <p>No members match your filters.</p>
-                            <button
-                              className="text-xs text-primary hover:underline"
-                              onClick={() => {
-                                setSearchQuery("");
-                                setRoleFilter("all");
-                                setScopeFilter("all");
-                              }}
-                            >
-                              Clear filters
-                            </button>
-                          </div>
-                        ) : (
-                          "No members found"
-                        )}
+                        <div className="space-y-1">
+                          <p>No members match your filters.</p>
+                          <button
+                            className="text-sm text-primary hover:underline"
+                            onClick={clearFilters}
+                          >
+                            Clear filters
+                          </button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ) : (
-                    filteredMembers.map((m) => {
+                    pagedMembers.map((m) => {
                       const isSelected = selectedUids.has(m.uid);
                       const isSelf = m.uid === org.uid;
                       return (
                         <TableRow
                           key={m.uid}
-                          className={`transition-colors ${isSelected ? "bg-primary/5" : ""} ${isSelf ? "opacity-75" : ""}`}
-                          onClick={() => !isSelf && toggleSelect(m.uid)}
-                          style={{ cursor: isSelf ? "default" : "pointer" }}
+                          className={`cursor-pointer align-top transition-colors ${
+                            isSelected ? "bg-primary/5 hover:bg-primary/10" : ""
+                          }`}
+                          onClick={() => setManagingMember(m)}
                         >
                           <TableCell
-                            className="pr-0"
+                            className="w-12 pl-4 pr-0 md:py-3"
                             onClick={(e) => e.stopPropagation()}
                           >
                             <Checkbox
@@ -3863,27 +4194,45 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
                                 !isSelf && toggleSelect(m.uid)
                               }
                               disabled={isSelf}
+                              aria-label={`Select ${m.uid}`}
                             />
                           </TableCell>
-                          <TableCell className="font-mono font-semibold text-sm">
+                          <TableCell className="font-mono text-sm font-semibold md:py-3">
                             {m.uid}
                             {isSelf && (
-                              <span className="ml-1.5 text-[10px] font-normal text-muted-foreground bg-muted px-1 rounded">
-                                you
+                              <span className="ml-2 rounded bg-primary/10 px-1.5 py-0.5 font-sans text-[10px] font-semibold text-primary">
+                                You
                               </span>
                             )}
                           </TableCell>
-                          <TableCell className="text-sm text-muted-foreground">
-                            {m.email ?? m.mobile ?? "—"}
+                          <TableCell className="text-sm text-muted-foreground md:py-3">
+                            {m.email || m.mobile ? (
+                              <div className="min-w-0">
+                                {m.email && (
+                                  <p className="truncate text-foreground/80">
+                                    {m.email}
+                                  </p>
+                                )}
+                                {m.mobile && (
+                                  <p className="truncate text-xs">{m.mobile}</p>
+                                )}
+                              </div>
+                            ) : (
+                              "—"
+                            )}
                           </TableCell>
-                          <TableCell>
-                            <RolesSummary roles={m.roles} />
+                          <TableCell className="md:min-w-[320px] md:whitespace-normal md:py-3">
+                            <AssignmentChips
+                              roles={m.roles}
+                              scopeNames={scopeNames}
+                              scopePaths={scopePaths}
+                            />
                           </TableCell>
                           <TableCell
-                            className="text-right"
+                            className="pr-4 text-right md:py-3"
                             onClick={(e) => e.stopPropagation()}
                           >
-                            <div className="flex justify-end items-center gap-0.5">
+                            <div className="flex items-center justify-end gap-0.5">
                               <QuickMoveButton
                                 member={m}
                                 org={org}
@@ -3895,21 +4244,27 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                                className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
                                 onClick={() => setManagingMember(m)}
                                 title="Manage assignments"
+                                aria-label={`Manage assignments for ${m.uid}`}
                               >
-                                <Pencil className="w-3.5 h-3.5" />
+                                <Pencil className="w-4 h-4" />
                               </Button>
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                                className="h-8 w-8 p-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                                 onClick={() => setRemovingUid(m.uid)}
                                 disabled={isSelf}
-                                title="Remove member"
+                                title={
+                                  isSelf
+                                    ? "You can't remove yourself"
+                                    : "Remove member"
+                                }
+                                aria-label={`Remove ${m.uid}`}
                               >
-                                <Trash2 className="w-3.5 h-3.5" />
+                                <Trash2 className="w-4 h-4" />
                               </Button>
                             </div>
                           </TableCell>
@@ -3919,16 +4274,78 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
                   )}
                 </TableBody>
               </Table>
-            </div>
-          )}
 
-          {selectedUids.size > 0 && filteredMembers.length > 0 && (
-            <p className="text-xs text-muted-foreground px-0.5">
-              {selectedInView} row{selectedInView !== 1 ? "s" : ""} selected in
-              current view
-              {selectedUids.size !== selectedInView &&
-                ` · ${selectedUids.size} total across all filters`}
-            </p>
+              {/* Pagination */}
+              {sortedMembers.length > 0 && (
+                <div className="flex flex-col gap-3 border-t bg-muted/20 px-4 py-3 sm:flex-row sm:items-center sm:justify-between max-md:mt-3 max-md:rounded-xl max-md:border max-md:bg-card">
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <span>Rows per page</span>
+                    <Select
+                      value={String(pageSize)}
+                      onValueChange={(v) => setPageSize(Number(v))}
+                    >
+                      <SelectTrigger className="h-8 w-20">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PAGE_SIZES.map((n) => (
+                          <SelectItem key={n} value={String(n)}>
+                            {n}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 sm:justify-end">
+                    <span className="text-sm text-muted-foreground tabular-nums">
+                      Page {safePage + 1} of {totalPages}
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="size-8"
+                        onClick={() => setPage(0)}
+                        disabled={safePage === 0}
+                        aria-label="First page"
+                      >
+                        <ChevronsLeft className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="size-8"
+                        onClick={() => setPage(safePage - 1)}
+                        disabled={safePage === 0}
+                        aria-label="Previous page"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="size-8"
+                        onClick={() => setPage(safePage + 1)}
+                        disabled={safePage >= totalPages - 1}
+                        aria-label="Next page"
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="size-8"
+                        onClick={() => setPage(totalPages - 1)}
+                        disabled={safePage >= totalPages - 1}
+                        aria-label="Last page"
+                      >
+                        <ChevronsRight className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
 
           <AddMembersDialog
@@ -4033,7 +4450,7 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
         </TabsContent>
 
         {/* ── SCOPE TAB ── */}
-        <TabsContent value="scope" className="mt-4">
+        <TabsContent value="scope" className="mt-5">
           {scopeLoading ? (
             <ListSkeleton rows={5} />
           ) : (
@@ -4096,11 +4513,76 @@ function ManageOrgPanel({ org }: { org: OrgSummary }) {
         </TabsContent>
 
         {/* ── MEMBER LIMIT TAB  ── */}
-        <TabsContent value="limits" className="mt-4">
+        <TabsContent value="limits" className="mt-5">
           <MemberLimitTab org={org} />
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+// ─── Org picker card ──────────────────────────────────────────────────────────
+function OrgPickerCard({
+  org,
+  onOpen,
+}: {
+  org: OrgSummary;
+  onOpen: () => void;
+}) {
+  const pct =
+    org.member_limit > 0
+      ? Math.min(100, Math.round((org.member_count / org.member_limit) * 100))
+      : 0;
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="group flex h-full flex-col gap-5 rounded-xl border bg-card p-4 text-left transition-all hover:border-primary/50 hover:shadow-md focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 sm:p-5"
+    >
+      <div className="flex items-start gap-3">
+        <div className="grid size-10 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+          <Building2 className="size-5" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="line-clamp-2 font-semibold leading-tight">
+            {org.org_name}
+          </p>
+          <p className="mt-1 font-mono text-xs text-muted-foreground">
+            {org.orgid}
+          </p>
+        </div>
+        <Badge
+          variant={org.is_active ? "default" : "secondary"}
+          className="shrink-0"
+        >
+          {org.is_active ? "Active" : "Inactive"}
+        </Badge>
+      </div>
+
+      {org.member_limit > 0 && (
+        <div>
+          <div className="flex items-baseline justify-between text-xs">
+            <span className="text-muted-foreground">Members</span>
+            <span className="font-semibold tabular-nums">
+              {org.member_count} / {org.member_limit}
+            </span>
+          </div>
+          <Progress value={pct} className="mt-1.5 h-1.5" />
+        </div>
+      )}
+
+      <div className="mt-auto flex items-center justify-between border-t pt-3 text-xs text-muted-foreground">
+        <span>
+          Your UID:{" "}
+          <span className="font-mono font-semibold text-foreground">
+            {org.uid}
+          </span>
+        </span>
+        <span className="inline-flex items-center gap-1 font-medium text-primary transition-all group-hover:gap-2">
+          Manage <ChevronRight className="w-3.5 h-3.5" />
+        </span>
+      </div>
+    </button>
   );
 }
 
@@ -4109,8 +4591,12 @@ export function ManageOrganizationsView() {
   const { session } = useAppContext();
   const [orgs, setOrgs] = useState<OrgSummary[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedOrg, setSelectedOrg] = useState<OrgSummary | null>(null);
+  const [orgQuery, setOrgQuery] = useState("");
   const [registerOpen, setRegisterOpen] = useState(false);
+  // The open organization lives in the URL (?org=ORGID) rather than local
+  // state, so the browser's Back button returns to the picker, a refresh
+  // keeps you where you were, and a specific org can be linked to.
+  const [searchParams, setSearchParams] = useSearchParams();
   // This requester's own org-request history — fetched only for
   // UNIFIED sessions (the only session type that can ever submit one), so
   // an ORG session doesn't pay for a fetch it has no use for. Drives the
@@ -4132,14 +4618,6 @@ export function ManageOrganizationsView() {
         ? data.filter((o) => o.orgid === session?.orgid)
         : data;
       setOrgs(filtered);
-      setSelectedOrg((prev) => {
-        if (isOrg) return filtered[0] ?? null;
-        if (prev)
-          return (
-            filtered.find((o) => o.orgid === prev.orgid) ?? filtered[0] ?? null
-          );
-        return filtered[0] ?? null;
-      });
     } catch (e: any) {
       toast.error(e.message ?? "Failed to load organizations");
     } finally {
@@ -4186,44 +4664,65 @@ export function ManageOrganizationsView() {
     ? `Available in ${formatCooldownRemaining(cooldownRemainingMs)}`
     : "Request Org";
 
+  // ORG sessions only ever have one org, so they skip the picker entirely.
+  const selectedOrgId = searchParams.get("org");
+  const selectedOrg: OrgSummary | null = isOrg
+    ? (orgs[0] ?? null)
+    : (orgs.find((o) => o.orgid === selectedOrgId) ?? null);
+  const showingDetail = !loading && selectedOrg !== null;
+
+  const openOrg = (orgid: string) => setSearchParams({ org: orgid });
+  const closeOrg = () => setSearchParams({});
+
+  const visibleOrgs = orgQuery.trim()
+    ? orgs.filter((o) =>
+        `${o.org_name} ${o.orgid}`
+          .toLowerCase()
+          .includes(orgQuery.trim().toLowerCase()),
+      )
+    : orgs;
+
   return (
-    <div className="max-w-5xl mx-auto">
-      <div className="mb-6 flex flex-col items-start justify-between gap-3 sm:flex-row sm:gap-4">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-bold tracking-tight mb-1">
-            Organizations
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {isUnified
-              ? "Organizations where you hold an Organizer role"
-              : `Managing ${selectedOrg?.org_name ?? "your organization"}`}
-          </p>
+    <div className="mx-auto w-full">
+      {/* Page header — only on the picker; the org view brings its own. */}
+      {!showingDetail && (
+        <div className="mb-6 flex flex-col items-start justify-between gap-3 sm:flex-row sm:gap-4">
+          <div>
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight mb-1">
+              Organizations
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              {isUnified
+                ? "Choose an organization to view and manage its members"
+                : "Managing your organization"}
+            </p>
+          </div>
+          {isUnified && (
+            // Demoted from a filled primary button to outline — this
+            // one is shown on every visit regardless of whether the user
+            // already organizes several orgs, so it shouldn't carry the same
+            // visual weight as a true empty-state CTA (see the "Request your
+            // first organization" button below, which stays primary because
+            // it only appears when there's genuinely nothing else to do on
+            // this page). Also disabled with a countdown label during the
+            // backend's own submission cooldown, instead of only failing
+            // after the user fills out the whole form.
+            <Button
+              variant="outline"
+              onClick={() => setRegisterOpen(true)}
+              disabled={isCoolingDown}
+              className="flex-shrink-0 gap-1.5"
+              title={
+                isCoolingDown
+                  ? "You can submit another organization request once the cooldown ends"
+                  : undefined
+              }
+            >
+              <Plus className="w-4 h-4" /> {requestOrgLabel}
+            </Button>
+          )}
         </div>
-        {isUnified && (
-          // Demoted from a filled primary button to outline — this
-          // one is shown on every visit regardless of whether the user
-          // already organizes several orgs, so it shouldn't carry the same
-          // visual weight as a true empty-state CTA (see the "Request your
-          // first organization" button below, which stays primary because
-          // it only appears when there's genuinely nothing else to do on
-          // this page). Also disabled with a countdown label during the
-          // backend's own submission cooldown, instead of only failing
-          // after the user fills out the whole form.
-          <Button
-            variant="outline"
-            onClick={() => setRegisterOpen(true)}
-            disabled={isCoolingDown}
-            className="flex-shrink-0 gap-1.5"
-            title={
-              isCoolingDown
-                ? "You can submit another organization request once the cooldown ends"
-                : undefined
-            }
-          >
-            <Plus className="w-4 h-4" /> {requestOrgLabel}
-          </Button>
-        )}
-      </div>
+      )}
 
       {loading ? (
         <ListSkeleton rows={4} />
@@ -4252,53 +4751,42 @@ export function ManageOrganizationsView() {
             )}
           </CardContent>
         </Card>
-      ) : isOrg ? (
-        <Card>
-          <CardContent className="pt-5 pb-6 px-5 sm:px-5">
-            {selectedOrg && (
-              <ManageOrgPanel key={selectedOrg.orgid} org={selectedOrg} />
-            )}
-          </CardContent>
-        </Card>
+      ) : selectedOrg ? (
+        // The whole content area belongs to the selected org — no picker
+        // beside it. UNIFIED users get a Back button; ORG sessions don't.
+        <ManageOrgPanel
+          key={selectedOrg.orgid}
+          org={selectedOrg}
+          onBack={isOrg ? undefined : closeOrg}
+        />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="md:col-span-1 space-y-1.5">
-            {orgs.map((org) => (
-              <button
-                key={org.orgid}
-                onClick={() => setSelectedOrg(org)}
-                className={`w-full text-left px-3 py-2.5 rounded-md border transition-colors
-                        ${selectedOrg?.orgid === org.orgid ? "bg-accent border-primary/40 font-semibold" : "border-border hover:bg-accent/50"}`}
-              >
-                <p className="text-sm font-semibold truncate leading-tight">
-                  {org.org_name}
-                </p>
-                <p className="text-xs text-muted-foreground font-mono mt-0.5">
-                  {org.orgid}
-                </p>
-                {!org.is_active && (
-                  <Badge variant="secondary" className="text-[10px] mt-1 h-4">
-                    Inactive
-                  </Badge>
-                )}
-              </button>
-            ))}
-          </div>
-          <div className="md:col-span-3">
-            {selectedOrg ? (
-              <Card>
-                <CardContent className="pt-5 pb-6 px-5 sm:px-5">
-                  <ManageOrgPanel key={selectedOrg.orgid} org={selectedOrg} />
-                </CardContent>
-              </Card>
-            ) : (
-              <Card>
-                <CardContent className="py-16 text-center text-sm text-muted-foreground">
-                  Select an organization to manage
-                </CardContent>
-              </Card>
-            )}
-          </div>
+        <div className="space-y-4">
+          {orgs.length > 6 && (
+            <div className="relative max-w-sm">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Search organizations…"
+                value={orgQuery}
+                onChange={(e) => setOrgQuery(e.target.value)}
+                className="pl-9"
+              />
+            </div>
+          )}
+          {visibleOrgs.length === 0 ? (
+            <p className="py-10 text-center text-sm text-muted-foreground">
+              No organizations match "{orgQuery}".
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {visibleOrgs.map((org) => (
+                <OrgPickerCard
+                  key={org.orgid}
+                  org={org}
+                  onOpen={() => openOrg(org.orgid)}
+                />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
