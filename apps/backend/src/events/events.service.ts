@@ -69,29 +69,34 @@ export class EventsService {
         WHERE e.orgid = ${orgid}
           AND e.is_deleted = FALSE
           AND (
-          -- Organizer can always see events within their scope downward (manages them)
+          -- Organizer can always see (manage) every event anchored in their
+          -- scope's subtree, including scope_only ones.
           (
             ${is_organizer}::boolean = TRUE
               AND e.scope_id IN (SELECT scope_id FROM get_scope_descendants(${scope_id}::int))
             )
             OR
-            -- Default downward visibility for voters
+            -- Default (downward) visibility: the event is anchored at the
+            -- viewer's scope or ABOVE it, i.e. the viewer sits in the
+            -- event scope's subtree. Same rule as
+            -- populate_event_participants() / get_visible_events().
           (
             e.scope_only = FALSE
-              AND e.scope_id IN (SELECT scope_id FROM get_scope_descendants(${scope_id}::int))
+              AND e.scope_id IN (SELECT scope_id FROM get_scope_ancestors(${scope_id}::int))
             )
             OR
-            -- scope_only: exact scope match for voters
+            -- scope_only: exact scope match
           (
             e.scope_only = TRUE
               AND e.scope_id = ${scope_id}::int
             )
             OR
-            -- Upward visibility if flag is set
+            -- Upward visibility (flag set): the event is anchored BELOW the
+            -- viewer, so members in ancestor scopes of the event see it too.
           (
             e.visibility_upward = TRUE
               AND e.scope_only = FALSE
-              AND e.scope_id IN (SELECT scope_id FROM get_scope_ancestors(${scope_id}::int))
+              AND e.scope_id IN (SELECT scope_id FROM get_scope_descendants(${scope_id}::int))
             )
           )
         ORDER BY e.start_time DESC

@@ -8,11 +8,11 @@ import {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 // Submit()'s
-// organizer check reuses OrgService.assertOrganizerAccess() rather than
-// reimplementing it — it's the exact same "does this uid hold an
-// is_organizer=true role_roles row in this org" check
-// trg_check_limit_request_organizer (dbschema.sql) already backstops at
-// the DB level. This is the friendly 4xx in front of that trigger's raw
+// organizer check reuses OrgService.assertRootOrganizerAccess() rather
+// than reimplementing it — a member-limit request must come from a
+// ROOT-scope organizer specifically (not an organizer of any sub-scope).
+// trg_check_limit_request_organizer (dbschema.sql) already backstops this
+// at the DB level. This is the friendly 4xx in front of that trigger's raw
 // exception, same "friendly guard in front of a DB-level backstop" pattern
 // used on the member-add paths.
 import { OrgService } from './org.service';
@@ -102,16 +102,16 @@ export class OrgLimitRequestsService {
   ) {
     // Friendly guard in front of trg_check_limit_request_organizer's raw
     // exception. Does not, by itself, prove `uid` is a *current, non-deleted*
-    // member — assertOrganizerAccess() only checks member_roles, same as
-    // every other caller of it in org.service.ts; tightening it here alone
-    // would make this route behave differently from the rest.
-    await this.orgService.assertOrganizerAccess(orgid, uid);
+    // member — assertRootOrganizerAccess() only checks member_roles, same
+    // as assertOrganizerAccess() in org.service.ts; tightening it here
+    // alone would make this route behave differently from the rest.
+    await this.orgService.assertRootOrganizerAccess(orgid, uid);
 
     const org = await this.prisma.organization.findUnique({
       where: { orgid },
       select: { org_name: true, member_limit: true, is_deleted: true },
     });
-    // Unreachable in practice — assertOrganizerAccess() above already
+    // Unreachable in practice — assertRootOrganizerAccess() above already
     // implies org_members/member_roles rows exist for this orgid, and
     // organization has no delete path that leaves those rows behind
     // (mirrors the "unexercised guard" notes throughout
@@ -234,7 +234,7 @@ export class OrgLimitRequestsService {
     requestedLimit: number,
     justification?: string | null,
   ) {
-    await this.orgService.assertOrganizerAccess(orgid, uid);
+    await this.orgService.assertRootOrganizerAccess(orgid, uid);
 
     const org = await this.prisma.organization.findUnique({
       where: { orgid },
@@ -279,11 +279,13 @@ export class OrgLimitRequestsService {
       `;
       const claimed = locked[0];
       if (!claimed || claimed.orgid !== orgid) {
-        throw new NotFoundException(`Member limit request ${requestId} not found`);
+        throw new NotFoundException(
+          `Member limit request ${requestId} not found`,
+        );
       }
       if (claimed.requested_by_uid !== uid) {
-        // Deliberately generic — assertOrganizerAccess() above already
-        // proved `uid` organizes this org, but this specific row was
+        // Deliberately generic — assertRootOrganizerAccess() above already
+        // proved `uid` root-organizes this org, but this specific row was
         // someone else's submission. Matches the "don't hand out row
         // ownership details" tone the rest of this file uses.
         throw new ForbiddenException(
@@ -362,7 +364,9 @@ export class OrgLimitRequestsService {
       where: { request_id: requestId },
     });
     if (!request) {
-      throw new NotFoundException(`Member limit request ${requestId} not found`);
+      throw new NotFoundException(
+        `Member limit request ${requestId} not found`,
+      );
     }
     if (!this.isOpenStatus(request.status)) {
       throw new ConflictException(
@@ -392,7 +396,9 @@ export class OrgLimitRequestsService {
       // this service (same unexercised-guard note as
       // org-requests.service.ts's own equivalents).
       if (!claimed) {
-        throw new NotFoundException(`Member limit request ${requestId} not found`);
+        throw new NotFoundException(
+          `Member limit request ${requestId} not found`,
+        );
       }
       if (!this.isOpenStatus(claimed.status)) {
         throw new ConflictException(
@@ -489,7 +495,9 @@ export class OrgLimitRequestsService {
       where: { request_id: requestId },
     });
     if (!request) {
-      throw new NotFoundException(`Member limit request ${requestId} not found`);
+      throw new NotFoundException(
+        `Member limit request ${requestId} not found`,
+      );
     }
     if (!this.isOpenStatus(request.status)) {
       throw new ConflictException(
@@ -516,7 +524,9 @@ export class OrgLimitRequestsService {
       `;
       const claimed = locked[0];
       if (!claimed) {
-        throw new NotFoundException(`Member limit request ${requestId} not found`);
+        throw new NotFoundException(
+          `Member limit request ${requestId} not found`,
+        );
       }
       if (!this.isOpenStatus(claimed.status)) {
         throw new ConflictException(
@@ -603,7 +613,9 @@ export class OrgLimitRequestsService {
       where: { request_id: requestId },
     });
     if (!request) {
-      throw new NotFoundException(`Member limit request ${requestId} not found`);
+      throw new NotFoundException(
+        `Member limit request ${requestId} not found`,
+      );
     }
     if (!this.isOpenStatus(request.status)) {
       throw new ConflictException(
@@ -630,7 +642,9 @@ export class OrgLimitRequestsService {
       `;
       const claimed = locked[0];
       if (!claimed) {
-        throw new NotFoundException(`Member limit request ${requestId} not found`);
+        throw new NotFoundException(
+          `Member limit request ${requestId} not found`,
+        );
       }
       if (!this.isOpenStatus(claimed.status)) {
         throw new ConflictException(
@@ -772,7 +786,9 @@ export class OrgLimitRequestsService {
       where: { request_id: requestId },
     });
     if (!request) {
-      throw new NotFoundException(`Member limit request ${requestId} not found`);
+      throw new NotFoundException(
+        `Member limit request ${requestId} not found`,
+      );
     }
 
     const [org, requester, reviewer, auditTrail] = await Promise.all([
@@ -807,7 +823,13 @@ export class OrgLimitRequestsService {
       }),
     ]);
 
-    return { ...request, organization: org, requester, reviewer, audit_trail: auditTrail };
+    return {
+      ...request,
+      organization: org,
+      requester,
+      reviewer,
+      audit_trail: auditTrail,
+    };
   }
 
   /**
@@ -851,9 +873,7 @@ export class OrgLimitRequestsService {
   private isOpenStatus(
     status: string,
   ): status is (typeof OPEN_LIMIT_REQUEST_STATUSES)[number] {
-    return (OPEN_LIMIT_REQUEST_STATUSES as readonly string[]).includes(
-      status,
-    );
+    return (OPEN_LIMIT_REQUEST_STATUSES as readonly string[]).includes(status);
   }
 
   /**

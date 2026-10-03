@@ -194,12 +194,23 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
     // Fire alongside the profile probe rather than after it — both share
     // the same "is there a valid session cookie" precondition, so there's
-    // no ordering dependency, and this way the CSRF token is ready before
-    // the user's first mutating action (e.g. editing their profile) rather
-    // than only being fetched lazily on first 403.
-    void api.hydrateCsrfToken();
+    // no ordering dependency. Both are awaited together below (Promise.all)
+    // rather than firing hydrateCsrfToken() with `void` and letting it race
+    // against setLoading(false): a fire-and-forget call let the UI go
+    // interactive as soon as getProfile() resolved, before the separate
+    // GET /auth/csrf-token round trip (only needed on a fresh tab/cleared
+    // sessionStorage — see hydrateCsrfToken()'s own comment) had finished.
+    // On a slow connection a user could reach Create Event and submit
+    // before csrfTokenMemory was populated, so the very first mutating
+    // request went out with no X-CSRF-Token header and CsrfGuard rejected
+    // it with "Invalid or missing CSRF token" — even though the session
+    // itself was perfectly valid.
+    const csrfReady = api.hydrateCsrfToken().catch(() => {
+      // No valid session to hydrate against — getProfile's own .catch()
+      // below handles that outcome; nothing further to do here.
+    });
 
-    (api.getProfile({ silent401: true }) as Promise<any>)
+    const profileReady = (api.getProfile({ silent401: true }) as Promise<any>)
       .then((raw) => {
         if (cancelled) return;
         const payload: Session = {
@@ -231,10 +242,11 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       })
       .catch(() => {
         if (!cancelled) setSession(null);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
       });
+
+    Promise.all([csrfReady, profileReady]).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
 
     return () => {
       cancelled = true;

@@ -89,6 +89,12 @@ export const ALL_TARGET_TYPES = [
   'ORG_REQUEST',
   'ORGANIZATION',
   'SITE_ADMIN',
+  // chk_admin_audit_target_type (dbschema.sql) accepts this, and
+  // OrgLimitRequestsService writes rows with it — this list just never
+  // caught up, which made ?target_type=MEMBER_LIMIT_REQUEST fail
+  // resolveTargetTypeFilter()'s validation with a false "invalid
+  // target_type" 400.
+  'MEMBER_LIMIT_REQUEST',
 ] as const;
 export type AdminTargetType = (typeof ALL_TARGET_TYPES)[number];
 

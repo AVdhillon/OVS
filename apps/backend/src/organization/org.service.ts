@@ -9,7 +9,11 @@ import { PrismaService } from '../prisma/prisma.service';
 // Orgid generation, the pre-check, and the collision-retry loop live in
 // one shared helper so OrgRequestsService.finalizeSetup() creates
 // organizations the same way registerOrg() does.
-import { runWithUniqueOrgId, ORG_ID_FORMAT, isOrgIdAvailable } from './orgid.utilities';
+import {
+  runWithUniqueOrgId,
+  ORG_ID_FORMAT,
+  isOrgIdAvailable,
+} from './orgid.utilities';
 // The six-step org-creation transaction body
 // itself now lives in org-creation.utilities.ts too, alongside orgid
 // allocation, so OrgRequestsService.approve() can run the same steps for a
@@ -158,7 +162,8 @@ export class OrgService {
   }
 
   // ─── Get orgs where user is organizer ──────────────────────────────────────
-  async getMyOrgs(pid: bigint) {    const links = await this.prisma.org_members.findMany({
+  async getMyOrgs(pid: bigint) {
+    const links = await this.prisma.org_members.findMany({
       where: { pid },
       select: { orgid: true, uid: true },
     });
@@ -374,11 +379,7 @@ export class OrgService {
   }
 
   // ─── Add members ────────────────────────────────────────────────────────────
-  async addMembers(
-    orgid: string,
-    callerUid: string,
-    dto: AddMembersDto,
-  ) {
+  async addMembers(orgid: string, callerUid: string, dto: AddMembersDto) {
     await this.assertOrganizerAccess(orgid, callerUid);
 
     const callerOrganizerScopes = await this.getCallerOrganizerScopes(
@@ -608,11 +609,7 @@ export class OrgService {
   }
 
   // ─── Soft-delete member ─────────────────────────────────────────────────────
-  async removeMember(
-    orgid: string,
-    callerUid: string,
-    targetUid: string,
-  ) {
+  async removeMember(orgid: string, callerUid: string, targetUid: string) {
     await this.assertOrganizerAccess(orgid, callerUid);
 
     const callerOrganizerScopes = await this.getCallerOrganizerScopes(
@@ -930,6 +927,30 @@ export class OrgService {
     });
     if (!role) {
       throw new ForbiddenException('Organizer access required');
+    }
+  }
+
+  /**
+   * Friendly guard in front of trg_check_limit_request_organizer's raw
+   * exception (dbschema.sql). A member-limit increase applies to the whole
+   * org, not to one scope within it, so — unlike assertOrganizerAccess()
+   * above, which accepts an organizer at any scope — this requires the
+   * caller to hold an is_organizer=true role specifically at the org's
+   * ROOT scope (org_scope row with parent_scope_id IS NULL). An organizer
+   * of a sub-scope is still "an organizer" for every other purpose, just
+   * not for this one.
+   */
+  async assertRootOrganizerAccess(orgid: string, callerUid: string) {
+    const role = await this.prisma.member_roles.findFirst({
+      where: {
+        orgid,
+        uid: callerUid,
+        is_organizer: true,
+        org_scope: { parent_scope_id: null },
+      },
+    });
+    if (!role) {
+      throw new ForbiddenException('Only a root-scope organizer may do this');
     }
   }
 
